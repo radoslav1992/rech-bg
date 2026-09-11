@@ -5,6 +5,7 @@ import { withDefaults } from "./config";
 import { avatarMap, failVideo, videoModels, type VideoMeta } from "./video";
 import type { VideoTier } from "../shared/video";
 import { providerFailure, VideoFailure, videoFailureMessage, type VideoStage } from "./video-errors";
+import { videoFetch } from "./video-http";
 
 type Ticket = { request_id: string; status_url: string; response_url: string; cancel_url?: string };
 export function queueUrl(value: string) {
@@ -20,13 +21,13 @@ export function outputUrl(value: string) {
   return url.href;
 }
 async function queueGet(env: Env, url: string, stage: VideoStage) {
-  const r = await fetch(queueUrl(url), { headers: { Authorization: `Key ${env.FAL_KEY?.trim()}` }, redirect: "error", signal: AbortSignal.timeout(45000) });
+  const r = await videoFetch(queueUrl(url), { headers: { Authorization: `Key ${env.FAL_KEY?.trim()}` }, signal: AbortSignal.timeout(45000) });
   if (!r.ok) throw await providerFailure(r, stage);
   return r.json() as Promise<any>;
 }
 // Multipart upload bounds memory and accepts CDN responses without Content-Length.
 export async function storeVideo(env: Env, key: string, url: string) {
-  const r = await fetch(outputUrl(url), { redirect: "error", signal: AbortSignal.timeout(240000) });
+  const r = await videoFetch(outputUrl(url), { signal: AbortSignal.timeout(240000) });
   if (!r.ok || !r.body) throw new VideoFailure("DOWNLOAD", "MEDIA", r.status);
   const limit = 100 * 1024 * 1024;
   if (Number(r.headers.get("Content-Length")) > limit) { await r.body.cancel(); throw new Error("Video too large"); }
@@ -88,9 +89,9 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> 
         // Never repeat an ambiguous external submission: it may already be billable.
         const claim = await this.env.DB.prepare("UPDATE jobs SET submitted_at=? WHERE id=? AND submitted_at IS NULL").bind(now(), id).run();
         if (!claim.meta.changes) throw new Error("Submission requires reconciliation");
-        const r = await fetch(`https://queue.fal.run/${videoModels[job.video_tier as VideoTier]}`, {
+        const r = await videoFetch(`https://queue.fal.run/${videoModels[job.video_tier as VideoTier]}`, {
           method: "POST", headers: { Authorization: `Key ${this.env.FAL_KEY.trim()}`, "Content-Type": "application/json" },
-          body: JSON.stringify(input), redirect: "error", signal: AbortSignal.timeout(60000),
+          body: JSON.stringify(input), signal: AbortSignal.timeout(60000),
         });
         if (!r.ok) throw await providerFailure(r, "SUBMIT");
         const t = await r.json() as Ticket;
@@ -138,7 +139,7 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> 
         await failVideo(this.env, id, failure.message);
       });
       if (ticket?.cancel_url) {
-        try { await fetch(queueUrl(ticket.cancel_url), { method: "PUT", headers: { Authorization: `Key ${this.env.FAL_KEY?.trim()}` }, redirect: "error", signal: AbortSignal.timeout(15000) }); } catch { /* Best effort cancellation; never resubmit. */ }
+        try { await videoFetch(queueUrl(ticket.cancel_url), { method: "PUT", headers: { Authorization: `Key ${this.env.FAL_KEY?.trim()}` }, signal: AbortSignal.timeout(15000) }); } catch { /* Best effort cancellation; never resubmit. */ }
       }
       throw new Error(failure.code);
     }

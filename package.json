@@ -29,6 +29,8 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5.1.0",
+    "esbuild": "0.28.2",
+    "miniflare": "5.20260910.0-alpha",
     "typescript": "^5.9.3",
     "vite": "^7.3.0",
     "vitest": "^3.2.4",
