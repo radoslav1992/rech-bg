@@ -77,7 +77,7 @@ auth.post("/register", async (c) => {
       acceptTerms: z.literal(true),
     })
     .parse(body);
-  if (!c.env.RESEND_API_KEY || !c.env.EMAIL_FROM)
+  if (!c.env.EMAIL || !c.env.EMAIL_FROM)
     throw new HTTPException(503, {
       message: "Регистрациите временно не са достъпни.",
     });

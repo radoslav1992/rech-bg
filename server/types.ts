@@ -10,7 +10,7 @@ export interface Env {
   APP_ENV?: string;
   REGISTRATION_ENABLED?: string;
   BILLING_ENABLED?: string;
-  RESEND_API_KEY?: string;
+  EMAIL?: SendEmail;
   EMAIL_FROM?: string;
   CONTACT_EMAIL?: string;
   CONTACT_PHONE?: string;

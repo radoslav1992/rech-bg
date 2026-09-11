@@ -76,23 +76,29 @@ export async function sendMail(
   subject: string,
   text: string,
 ) {
-  if (!env.RESEND_API_KEY || !env.EMAIL_FROM)
+  if (!env.EMAIL || !env.EMAIL_FROM)
     throw new HTTPException(503, {
       message: "Изпращането на имейли временно не е достъпно.",
     });
-  const r = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${env.RESEND_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ from: env.EMAIL_FROM, to: [to], subject, text }),
-    signal: AbortSignal.timeout(15000),
-  });
-  if (!r.ok)
+  // Accept the previous display-name format in existing Dashboard variables.
+  const sender = env.EMAIL_FROM.trim();
+  const named = sender.match(/^([^<>]*)<([^<>]+)>$/);
+  try {
+    await env.EMAIL.send({
+      from: {
+        email: named ? named[2].trim() : sender,
+        name: named?.[1].trim() || "Реч БГ",
+      },
+      to,
+      subject,
+      text,
+    });
+  } catch (cause) {
     throw new HTTPException(503, {
       message: "Писмото не беше изпратено. Опитайте отново след малко.",
+      cause,
     });
+  }
 }
 export function origin(env: Env, request: Request) {
   return env.SITE_URL?.replace(/\/$/, "") || new URL(request.url).origin;

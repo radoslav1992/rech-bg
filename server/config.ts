@@ -10,7 +10,8 @@ export function withDefaults(env: Env): Env {
     COMPANY_CITY: env.COMPANY_CITY ?? "София",
     CONTACT_EMAIL: env.CONTACT_EMAIL ?? "info@rechbg.com",
     CONTACT_PHONE: env.CONTACT_PHONE ?? "+35924920201",
+    EMAIL_FROM: env.EMAIL_FROM?.trim() || "info@rechbg.com",
     // No COMPANY_ID or full COMPANY_ADDRESS was present in notebook.
-    // No email-sending identity or admin privileges are inferred from contact details.
+    // Email Sending for rechbg.com was enabled by the owner; admin access is separate.
   };
 }

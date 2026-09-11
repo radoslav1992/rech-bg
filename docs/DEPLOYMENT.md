@@ -16,7 +16,7 @@
 
 Контактният имейл е зададен от собственика на `info@rechbg.com`. Останалите данни за доставчика са взети от `notebook`: `src/pages/privacy.astro`, `src/pages/contact.astro`, `src/pages/za-nas.astro` и `src/lib/email.ts`. Там не са посочени ЕИК и пълен бизнес адрес; `COMPANY_ID` и `COMPANY_ADDRESS` остават за попълване. София е град, а не заместител на пълен адрес.
 
-Публичните стойности са defaults в `server/config.ts`. Cloudflare Dashboard variables могат да ги заменят и остават запазени при deploy. Имейлът за контакт не задава автоматично подател на писма или администраторски права. Задайте отделно `EMAIL_FROM` и `ADMIN_EMAILS`.
+Публичните стойности са defaults в `server/config.ts`. Cloudflare Dashboard variables могат да ги заменят и остават запазени при deploy. Служебните писма се изпращат чрез Cloudflare Email Sending от `Реч БГ <info@rechbg.com>`. `EMAIL_FROM` има default `info@rechbg.com`; `ADMIN_EMAILS` се задава отделно.
 
 ## 2. Cloudflare ресурси
 
@@ -75,8 +75,7 @@ Cloudflare → Workers & Pages → Create → Import a repository → `radoslav1
 | `ADMIN_EMAILS` | Variable | Администраторски имейл; няколко се разделят със запетая |
 | `REGISTRATION_ENABLED` | Variable | `false` до финална проверка, след това `true` |
 | `BILLING_ENABLED` | Variable | `false` до тест на плащанията, след това `true` |
-| `EMAIL_FROM` | Variable | Например `Реч БГ <noreply@your-domain.bg>` от верифициран домейн |
-| `RESEND_API_KEY` | Secret | Resend ключ за служебни писма |
+| `EMAIL_FROM` | Variable | По подразбиране `info@rechbg.com`; приема и `Реч БГ <info@rechbg.com>` |
 | `TURNSTILE_SITE_KEY` | Variable | Публичен ключ на Turnstile widget за финалния домейн |
 | `TURNSTILE_SECRET_KEY` | Secret | Съответният таен ключ |
 | `STRIPE_SECRET_KEY` | Secret | Първо тестов Stripe ключ, после продукционен |
@@ -90,6 +89,12 @@ Cloudflare → Workers & Pages → Create → Import a repository → `radoslav1
 Turnstile е задължителен за продукционна регистрация. Само локалният `APP_ENV=development` допуска работа без него. Не използвайте development в продукция.
 
 Контактната форма записва съобщенията в D1. Администраторът ги вижда в **Настройки → Запитвания от сайта**. Не е включено автоматично изпращане на отговори.
+
+### Служебни имейли чрез Cloudflare
+
+`wrangler.jsonc` създава `send_email` binding с име `EMAIL` и разрешен подател `info@rechbg.com`. Използва се [Cloudflare Email Sending Workers API](https://developers.cloudflare.com/email-service/api/send-emails/workers-api/) за потвърждение на имейл, повторно изпращане и възстановяване на парола. Не е необходим API ключ за имейли. При смяна на подателя обновете и `allowed_sender_addresses` в конфигурацията.
+
+Домейнът `rechbg.com` трябва да е активен за Email Sending, за да се изпращат писма до регистриращи се потребители. Входящото препращане на `info@rechbg.com` остава в Email Routing. След deploy проверете регистрация, потвърждение и възстановяване на парола с ваш адрес; приемането на писмо от API не гарантира доставка до входящата поща. При локална разработка binding-ът се симулира от Wrangler.
 
 ## 5. Stripe
 
