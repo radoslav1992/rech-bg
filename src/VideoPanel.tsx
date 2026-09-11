@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { Film, Sparkles, ImagePlus } from "lucide-react";
 import { avatars, videoTiers, videoCredits, type VideoTier } from "../shared/video";
 import { api, Button, Notice, number, useAuth, type Job } from "./lib";
-export function VideoPanel({ jobs, disabled, onCreated }: { jobs: Job[]; disabled: boolean; onCreated: (job: Job) => void }) {
+export function VideoPanel({ jobs, currentJob, disabled, onCreated }: { jobs: Job[]; currentJob: Job | null; disabled: boolean; onCreated: (job: Job) => void }) {
   const { user, refresh } = useAuth();
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [tier, setTier] = useState<VideoTier>("standard");
@@ -47,6 +47,11 @@ export function VideoPanel({ jobs, disabled, onCreated }: { jobs: Job[]; disable
   return <section className="output-panel avatar-panel">
     <div className="sub-heading"><h2><Film size={22} /> Дайте лице на гласа</h2><span>ВИДЕО АВАТАР</span></div>
     <p>Превърнете готовия си аудиозапис в говорещо видео. Изберете водещ или оживете свой портрет.</p>
+    <div aria-live="polite">
+      {currentJob?.kind === "video" && currentJob.status === "failed" && <Notice>{currentJob.error} Номер на заявката: {currentJob.id}</Notice>}
+      {currentJob?.kind === "video" && ["queued", "running"].includes(currentJob.status) && <p>Видеото се създава. Това може да отнеме няколко минути.</p>}
+      {currentJob?.kind === "video" && currentJob.status === "completed" && <p>Видеото е готово. Можете да го гледате и изтеглите от „Вашият запис“ по-горе.</p>}
+    </div>
     {enabled === false && <Notice>Създаването на видео ще бъде достъпно скоро.</Notice>}
     {!sources.length ? <div className="output-empty"><Film size={30} /><p>Първо създайте аудио с един глас, с продължителност от 5 до 60 секунди.</p></div> : <>
       <fieldset disabled={busy || disabled || !enabled} className="avatar-fields">

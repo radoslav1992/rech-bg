@@ -4,6 +4,7 @@ import { now } from "./types";
 import { withDefaults } from "./config";
 import { avatarMap, failVideo, videoModels, type VideoMeta } from "./video";
 import type { VideoTier } from "../shared/video";
+import { providerFailure, VideoFailure, videoFailureMessage, type VideoStage } from "./video-errors";
 
 type Ticket = { request_id: string; status_url: string; response_url: string; cancel_url?: string };
 export function queueUrl(value: string) {
@@ -18,15 +19,15 @@ export function outputUrl(value: string) {
     throw new Error("Invalid video host");
   return url.href;
 }
-async function queueGet(env: Env, url: string) {
-  const r = await fetch(queueUrl(url), { headers: { Authorization: `Key ${env.FAL_KEY}` }, redirect: "error", signal: AbortSignal.timeout(45000) });
-  if (!r.ok) throw new Error("Video service unavailable");
+async function queueGet(env: Env, url: string, stage: VideoStage) {
+  const r = await fetch(queueUrl(url), { headers: { Authorization: `Key ${env.FAL_KEY?.trim()}` }, redirect: "error", signal: AbortSignal.timeout(45000) });
+  if (!r.ok) throw await providerFailure(r, stage);
   return r.json() as Promise<any>;
 }
 // Multipart upload bounds memory and accepts CDN responses without Content-Length.
 export async function storeVideo(env: Env, key: string, url: string) {
   const r = await fetch(outputUrl(url), { redirect: "error", signal: AbortSignal.timeout(240000) });
-  if (!r.ok || !r.body) throw new Error("Video download failed");
+  if (!r.ok || !r.body) throw new VideoFailure("DOWNLOAD", "MEDIA", r.status);
   const limit = 100 * 1024 * 1024;
   if (Number(r.headers.get("Content-Length")) > limit) { await r.body.cancel(); throw new Error("Video too large"); }
   const upload = await env.AUDIO.createMultipartUpload(key, { httpMetadata: { contentType: "video/mp4" } });
@@ -62,6 +63,7 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> 
   async run(event: WorkflowEvent<{ jobId: string }>, step: WorkflowStep) {
     const id = event.payload.jobId;
     let ticket: Ticket | undefined;
+    let stage: VideoStage = "LOAD";
     try {
       const job = await step.do("load-video", async () => {
         const row = await this.env.DB.prepare("SELECT * FROM jobs WHERE id=? AND kind='video'").bind(id).first<any>();
@@ -69,10 +71,11 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> 
         await this.env.DB.prepare("UPDATE jobs SET status='running',updated_at=? WHERE id=?").bind(now(), id).run();
         return row;
       });
+      stage = "SUBMIT";
       ticket = await step.do("submit-video-once", { retries: { limit: 0, delay: "1 second" }, timeout: "2 minutes" }, async () => {
         const row = await this.env.DB.prepare("SELECT provider_request,submitted_at FROM jobs WHERE id=?").bind(id).first<any>();
         if (row?.provider_request) return JSON.parse(row.provider_request) as Ticket;
-        if (!this.env.FAL_KEY) throw new Error("Missing video credentials");
+        if (!this.env.FAL_KEY?.trim()) throw new VideoFailure("SUBMIT", "AUTH");
         const meta: VideoMeta = JSON.parse(job.video_meta);
         const source = await this.env.DB.prepare("SELECT audio_key FROM jobs WHERE id=? AND user_id=? AND status='completed'").bind(job.source_job_id, job.user_id).first<any>();
         if (!source?.audio_key || !(await this.env.AUDIO.head(source.audio_key))) throw new Error("Missing audio");
@@ -86,10 +89,10 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> 
         const claim = await this.env.DB.prepare("UPDATE jobs SET submitted_at=? WHERE id=? AND submitted_at IS NULL").bind(now(), id).run();
         if (!claim.meta.changes) throw new Error("Submission requires reconciliation");
         const r = await fetch(`https://queue.fal.run/${videoModels[job.video_tier as VideoTier]}`, {
-          method: "POST", headers: { Authorization: `Key ${this.env.FAL_KEY}`, "Content-Type": "application/json" },
+          method: "POST", headers: { Authorization: `Key ${this.env.FAL_KEY.trim()}`, "Content-Type": "application/json" },
           body: JSON.stringify(input), redirect: "error", signal: AbortSignal.timeout(60000),
         });
-        if (!r.ok) throw new Error("Video submission failed");
+        if (!r.ok) throw await providerFailure(r, "SUBMIT");
         const t = await r.json() as Ticket;
         if (!t.request_id || typeof t.request_id !== "string") throw new Error("Missing request ID");
         queueUrl(t.status_url); queueUrl(t.response_url);
@@ -98,9 +101,10 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> 
         return t;
       });
       let completed = false;
+      stage = "STATUS";
       for (let i = 0; i < 180; i++) {
         const status = await step.do(`video-status-${i}`, { retries: { limit: 2, delay: "10 seconds" }, timeout: "2 minutes" }, async () => {
-          const s = await queueGet(this.env, ticket!.status_url);
+          const s = await queueGet(this.env, ticket!.status_url, "STATUS");
           await this.env.DB.prepare("UPDATE jobs SET updated_at=? WHERE id=?").bind(now(), id).run();
           if (!["IN_QUEUE", "IN_PROGRESS", "COMPLETED"].includes(s.status)) throw new Error("Unexpected video status");
           return s.status as string;
@@ -108,31 +112,35 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> 
         if (status === "COMPLETED") { completed = true; break; }
         await step.sleep(`video-wait-${i}`, "20 seconds");
       }
-      if (!completed) throw new Error("Video processing timed out");
+      if (!completed) throw new VideoFailure("STATUS", "TIMEOUT");
+      stage = "SAVE";
       await step.do("save-video", { retries: { limit: 2, delay: "15 seconds" }, timeout: "5 minutes" }, async () => {
         const key = `audio/${job.user_id}/${id}.mp4`;
         if (!(await this.env.AUDIO.head(key))) {
-          const result = await queueGet(this.env, ticket!.response_url);
-          if (result.moderation_flagged || result.moderation_error || !result.video?.url) throw new Error("No video returned");
+          const result = await queueGet(this.env, ticket!.response_url, "RESULT");
+          if (result.moderation_flagged) throw new VideoFailure("RESULT", "CONTENT");
+          if (result.moderation_error || !result.video?.url) throw new VideoFailure("RESULT", "PROVIDER");
           await storeVideo(this.env, key, result.video.url);
         }
         await this.env.DB.prepare("UPDATE jobs SET status='completed',video_key=?,updated_at=? WHERE id=? AND status IN ('queued','running')").bind(key, now(), id).run();
       });
+      stage = "CLEANUP";
       await step.do("clean-video-input", async () => {
         const meta: VideoMeta = JSON.parse(job.video_meta);
         if (meta.imageKey) await this.env.AUDIO.delete(meta.imageKey);
       });
     } catch (e) {
       // Do not expose provider payloads, input URLs, or credentials in user-visible errors.
-      console.error("Video workflow failed", { jobId: id });
+      const failure = videoFailureMessage(e, stage);
+      console.error("Video workflow failed", { jobId: id, stage, code: failure.code });
       await step.do("refund-video", async () => {
         await this.env.DB.prepare("INSERT OR IGNORE INTO cleanup_tasks(prefix,created_at) SELECT 'segments/'||user_id||'/'||id||'/',? FROM jobs WHERE id=?").bind(now(), id).run();
-        await failVideo(this.env, id);
+        await failVideo(this.env, id, failure.message);
       });
       if (ticket?.cancel_url) {
-        try { await fetch(queueUrl(ticket.cancel_url), { method: "PUT", headers: { Authorization: `Key ${this.env.FAL_KEY}` }, redirect: "error", signal: AbortSignal.timeout(15000) }); } catch { /* Best effort cancellation; never resubmit. */ }
+        try { await fetch(queueUrl(ticket.cancel_url), { method: "PUT", headers: { Authorization: `Key ${this.env.FAL_KEY?.trim()}` }, redirect: "error", signal: AbortSignal.timeout(15000) }); } catch { /* Best effort cancellation; never resubmit. */ }
       }
-      throw e;
+      throw new Error(failure.code);
     }
   }
 }

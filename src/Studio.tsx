@@ -584,7 +584,7 @@ export function Studio() {
               </details>
             )}
           </section>
-          <VideoPanel key={id || "new"} jobs={[...(job ? [job] : []), ...history.filter(j => j.id !== job?.id)]} disabled={busy || active} onCreated={j => { setJob(j); setHistory(h => [j, ...h.filter(x => x.id !== j.id)]); }} />
+          <VideoPanel key={id || "new"} currentJob={job} jobs={[...(job ? [job] : []), ...history.filter(j => j.id !== job?.id)]} disabled={busy || active} onCreated={j => { setJob(j); setHistory(h => [j, ...h.filter(x => x.id !== j.id)]); }} />
         </>
       )}
     </div>

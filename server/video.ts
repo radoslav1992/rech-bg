@@ -18,9 +18,9 @@ export const videoModels = {
   quality: "fal-ai/kling-video/ai-avatar/v2/pro",
 } as const;
 export type VideoMeta = { avatar: string; imageKey?: string; imageMime?: string; token: string; consent: boolean };
-export async function failVideo(env: Env, id: string) {
+export async function failVideo(env: Env, id: string, message = "Видеото не беше създадено. Кредитите за него са върнати. Аудиозаписът остава наличен.") {
   await env.DB.prepare("UPDATE jobs SET status='failed',error=?,updated_at=? WHERE id=? AND status IN ('queued','running')")
-    .bind("Видеото не беше създадено. Кредитите за него са върнати. Аудиозаписът остава наличен.", now(), id).run();
+    .bind(message, now(), id).run();
 }
 export const videos = new Hono<{ Bindings: Env; Variables: ContextVars }>();
 videos.get("/config", (c) => c.json({ enabled: !!(c.env.FAL_KEY && c.env.VIDEO_GENERATION), avatars, tiers: videoTiers }));

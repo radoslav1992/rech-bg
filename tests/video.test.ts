@@ -4,6 +4,7 @@ import { VideoGeneration, outputUrl, queueUrl, storeVideo } from "../server/vide
 import { sha } from "../server/security";
 import { now } from "../server/types";
 import { videoCredits } from "../shared/video";
+import { videoFailureMessage } from "../server/video-errors";
 import { database, bucket } from "./helpers";
 const ticket = { request_id: "remote-1", status_url: "https://queue.fal.run/argil/avatars/requests/remote-1/status", response_url: "https://queue.fal.run/argil/avatars/requests/remote-1", cancel_url: "https://queue.fal.run/argil/avatars/requests/remote-1/cancel" };
 const videoUrl = "https://v3.fal.media/files/test.mp4";
@@ -109,8 +110,39 @@ describe("Video credits and request validation", () => {
   });
 });
 describe("Video workflow and private assets", () => {
+  it.each([
+    [401, { detail: "Invalid key test-secret" }, "AUTH"],
+    [402, { detail: "Payment required" }, "BALANCE"],
+    [403, { detail: "User is locked. Reason: Exhausted balance. Top up your balance." }, "BALANCE"],
+    [403, { detail: "Access denied" }, "ACCESS"],
+    [422, { detail: [{ type: "string_type", loc: ["body", "audio_url"], input: "https://private.invalid/?token=test-secret" }] }, "INPUT"],
+    [429, { detail: "Too many requests" }, "CAPACITY"],
+  ])("reports submission HTTP %i safely and refunds once", async (status, body, category) => {
+    const id = await create();
+    const mock = vi.fn().mockImplementation(async () => Response.json(body, { status: status as number }));
+    vi.stubGlobal("fetch", mock);
+    const code = `VIDEO_SUBMIT_${category}_${status}`;
+    await expect(new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step)).rejects.toThrow(code);
+    const detail = await (await request(`/jobs/${id}`)).text();
+    expect(detail).toContain(code);
+    expect(detail).not.toMatch(/test-secret|private.invalid|User is locked/);
+    expect(used()).toBe(100); expect(mock).toHaveBeenCalledTimes(1);
+    expect(videoFailureMessage(new Error(`Workflow step failed: ${code}`), "LOAD").code).toBe(code);
+  });
+  it("distinguishes result validation failures from submission failures", async () => {
+    const id = await create();
+    const mock = mockProvider();
+    const original = mock.getMockImplementation()!;
+    mock.mockImplementation(async (url, init) => url === ticket.response_url
+      ? Response.json({ detail: [{ type: "content_policy_violation", input: "private script" }] }, { status: 422 })
+      : original(url, init));
+    await expect(new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step)).rejects.toThrow("VIDEO_RESULT_CONTENT_422");
+    expect(used()).toBe(100);
+    expect(mock.mock.calls.filter(c => c[1]?.method === "POST")).toHaveLength(1);
+  });
   it("completes Argil generation, stores MP4 privately and expires input access", async () => {
     delete env.SITE_URL;
+    env.FAL_KEY = " test-secret\n";
     const id = await create(); const mock = mockProvider();
     const meta = JSON.parse(sqlite.prepare("SELECT video_meta FROM jobs WHERE id=?").get(id)!.video_meta as string);
     expect((await request(`/video-inputs/${id}/audio?token=${meta.token}`, {}, false)).status).toBe(200);
@@ -120,6 +152,7 @@ describe("Video workflow and private assets", () => {
     await new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step);
     const submitted = mock.mock.calls.find(c => c[1]?.method === "POST")!;
     expect(submitted[0]).toBe("https://queue.fal.run/argil/avatars/audio-to-video");
+    expect((submitted[1]!.headers as any).Authorization).toBe("Key test-secret");
     const input = JSON.parse(submitted[1]!.body as string);
     expect(new URL(input.audio_url).origin).toBe("https://rechbg.com");
     expect(input.avatar).toBe("Mia outdoor (UGC)"); expect(typeof input.audio_url).toBe("string");
