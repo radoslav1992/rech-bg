@@ -7,7 +7,7 @@ import { AudioGeneration } from "../server/workflow";
 import type { Env } from "../server/types";
 import { now } from "../server/types";
 import { allowance } from "../server/billing";
-import { voiceList } from "../shared/catalog";
+import { voiceList, sampleSentence } from "../shared/catalog";
 function wav() {
   const bytes = new Uint8Array(244);
   bytes.set(wavHeader(200, 24000));
@@ -210,6 +210,54 @@ describe("Authenticated API and generation workflow", () => {
     expect(
       (await call("/billing/checkout", "POST", { plan: "creator" })).status,
     ).toBe(503);
+  });
+  it("generates an admin preview without publishing or using personal quota, then publishes it", async () => {
+    env.ADMIN_EMAILS = "u@test.invalid";
+    const r = await call("/admin/voices/mila/sample/generate", "POST");
+    expect(r.status).toBe(200);
+    expect(r.headers.get("Content-Type")).toBe("audio/wav");
+    expect(r.headers.get("Cache-Control")).toBe("no-store");
+    const audio = await r.blob();
+    expect(decodeAudio(Buffer.from(await audio.arrayBuffer()).toString("base64")).pcm.length).toBe(200);
+    expect(env.AI.run).toHaveBeenCalledWith(expect.any(String), { text: sampleSentence, voice: voiceMap.mila });
+    expect(sqlite.prepare("SELECT COUNT(*) AS n FROM voice_samples").get()?.n).toBe(0);
+    expect(sqlite.prepare("SELECT COUNT(*) AS n FROM jobs").get()?.n).toBe(0);
+    expect(sqlite.prepare("SELECT COUNT(*) AS n FROM usage_windows").get()?.n).toBe(0);
+    const form = new FormData();
+    form.set("file", audio, "mila.wav");
+    const published = await worker.fetch(new Request("https://test.invalid/api/admin/voices/mila/sample", {
+      method: "POST", headers: { Cookie: "rech_session=" + cookie, Origin: "https://test.invalid" }, body: form,
+    }), env, {} as any);
+    expect(published.status).toBe(200);
+    const sample = await call("/voices/mila/sample", "GET", undefined, false);
+    expect(sample.status).toBe(200);
+    expect(new Uint8Array(await sample.arrayBuffer())).toEqual(new Uint8Array(await audio.arrayBuffer()));
+    expect(env.AI.run).toHaveBeenCalledTimes(1);
+  });
+  it("restricts sample generation to verified admins and real voices, with a rate limit", async () => {
+    const path = "/admin/voices/mila/sample/generate";
+    expect((await call(path, "POST", undefined, false)).status).toBe(401);
+    expect((await call(path, "POST")).status).toBe(403);
+    env.ADMIN_EMAILS = "u@test.invalid";
+    sqlite.prepare("UPDATE users SET verified=0 WHERE id='u'").run();
+    expect((await call(path, "POST")).status).toBe(403);
+    sqlite.prepare("UPDATE users SET verified=1 WHERE id='u'").run();
+    expect((await call("/admin/voices/toString/sample/generate", "POST")).status).toBe(400);
+    const key = await sha("sample-generation:u:" + Math.floor(now() / 3600));
+    sqlite.prepare("INSERT INTO rate_limits VALUES(?,60,?)").run(key, now() + 3600);
+    expect((await call(path, "POST")).status).toBe(429);
+    expect(env.AI.run).not.toHaveBeenCalled();
+  });
+  it("keeps a published sample on generation failure and hides upstream errors", async () => {
+    env.ADMIN_EMAILS = "u@test.invalid";
+    sqlite.prepare("INSERT INTO voice_samples VALUES('mila','samples/old.wav','audio/wav',0)").run();
+    vi.mocked(env.AI.run).mockRejectedValueOnce(new Error("google provider secret"));
+    const r = await call("/admin/voices/mila/sample/generate", "POST");
+    expect(r.status).toBe(502);
+    expect(await r.text()).not.toMatch(/google|provider|secret/);
+    expect(sqlite.prepare("SELECT object_key FROM voice_samples").get()?.object_key).toBe("samples/old.wav");
+    vi.mocked(env.AI.run).mockResolvedValueOnce({ audio: "AAAAAA==" });
+    expect((await call("/admin/voices/mila/sample/generate", "POST")).status).toBe(502);
   });
   it("only allows verified users to generate and idempotently reserves credits", async () => {
     const project = crypto.randomUUID();

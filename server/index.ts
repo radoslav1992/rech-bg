@@ -3,13 +3,13 @@ import { getCookie } from "hono/cookie";
 import { HTTPException } from "hono/http-exception";
 import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
-import { voiceList } from "../shared/catalog";
+import { voiceList, sampleSentence } from "../shared/catalog";
 import type { Env, ContextVars, DbUser } from "./types";
 import { uid, now, ready } from "./types";
 import { sha, rate, checkPassword, hashPassword } from "./security";
 import { auth, isAdmin } from "./auth";
 import { billing, webhook, allowance, stripe } from "./billing";
-import { segments, voiceMap } from "./audio";
+import { segments, voiceMap, TTS_MODEL, decodeAudio, wavHeader } from "./audio";
 import { withDefaults } from "./config";
 export { AudioGeneration } from "./workflow";
 const app = new Hono<{ Bindings: Env; Variables: ContextVars }>();
@@ -528,6 +528,32 @@ app.get("/api/admin/messages", async (c) =>
     ).results,
   }),
 );
+app.post("/api/admin/voices/:id/sample/generate", async (c) => {
+  const id = c.req.param("id");
+  if (!Object.hasOwn(voiceMap, id))
+    throw new HTTPException(400, { message: "Невалиден глас." });
+  await rate(c, "sample-generation", 60, 3600, c.get("user").id);
+  try {
+    const result = (await c.env.AI.run(TTS_MODEL, {
+      text: sampleSentence,
+      voice: voiceMap[id],
+    })) as { audio?: string };
+    if (!result?.audio) throw new Error("Missing audio");
+    const { pcm, rate: sampleRate } = decodeAudio(result.audio);
+    if (pcm.length + 44 > 2 * 1024 * 1024)
+      throw new Error("Sample too large");
+    const wav = new Uint8Array(pcm.length + 44);
+    wav.set(wavHeader(pcm.length, sampleRate));
+    wav.set(pcm, 44);
+    return new Response(wav, {
+      headers: { "Content-Type": "audio/wav", "Cache-Control": "no-store" },
+    });
+  } catch {
+    throw new HTTPException(502, {
+      message: "Примерът не беше създаден. Опитайте отново след малко.",
+    });
+  }
+});
 app.post("/api/admin/voices/:id/sample", async (c) => {
   const id = c.req.param("id");
   if (!voiceMap[id])

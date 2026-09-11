@@ -5,6 +5,7 @@ import {
   Download,
   Mail,
   ShieldCheck,
+  Sparkles,
   Trash2,
   Upload,
   UserRound,
@@ -233,6 +234,43 @@ function AdminSettings() {
   const [selected, setSelected] = useState("mila");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
+  const [draft, setDraft] = useState<{ voice: string; audio: Blob } | null>(null);
+  const [previewUrl, setPreviewUrl] = useState("");
+  useEffect(() => {
+    if (!draft) { setPreviewUrl(""); return; }
+    const url = URL.createObjectURL(draft.audio);
+    setPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [draft]);
+  const generateSample = async () => {
+    setBusy(true);
+    setStatus("Създаваме примера. Това може да отнеме около минута.");
+    try {
+      const response = await fetch(`/api/admin/voices/${selected}/sample/generate`, { method: "POST" });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(data.error || "Примерът не беше създаден. Опитайте отново.");
+      }
+      setDraft({ voice: selected, audio: await response.blob() });
+      setStatus("Примерът е готов. Прослушайте го и го публикувайте, когато сте доволни.");
+    } catch (err) {
+      setStatus((err as Error).message);
+    } finally { setBusy(false); }
+  };
+  const publishSample = async () => {
+    if (!draft || draft.voice !== selected) return;
+    setBusy(true);
+    try {
+      const body = new FormData();
+      body.set("file", draft.audio, `${draft.voice}.wav`);
+      await api(`/admin/voices/${draft.voice}/sample`, { method: "POST", body });
+      setDraft(null);
+      setStatus("Аудио примерът е публикуван.");
+      load();
+    } catch (err) {
+      setStatus((err as Error).message);
+    } finally { setBusy(false); }
+  };
   const load = () => {
     api("/voices")
       .then((d) => setVoices(d.voices))
@@ -250,8 +288,9 @@ function AdminSettings() {
           Примери на гласовете
         </h2>
         <p>
-          Качете кратък WAV или MP3 пример до 2 MB за всеки глас. Примерът
-          веднага става достъпен в публичния каталог и студиото.
+          Изберете глас и създайте пример с текста по-долу. Прослушайте го,
+          след което го публикувайте в каталога и студиото. Създаването използва
+          платеното потребление на услугата, без да отнема символи от личния ви план.
         </p>
         <blockquote>{sampleSentence}</blockquote>
         {status && <Notice>{status}</Notice>}
@@ -266,6 +305,7 @@ function AdminSettings() {
                 body: new FormData(form),
               });
               setStatus("Аудио примерът е публикуван.");
+              setDraft(null);
               load();
               form.reset();
             } catch (err) {
@@ -279,7 +319,8 @@ function AdminSettings() {
             Глас
             <select
               value={selected}
-              onChange={(e) => setSelected(e.target.value)}
+              disabled={busy}
+              onChange={(e) => { setSelected(e.target.value); setDraft(null); setStatus(""); }}
             >
               {voices.map((v) => (
                 <option key={v.id} value={v.id}>
@@ -289,12 +330,26 @@ function AdminSettings() {
               ))}
             </select>
           </label>
+          <Button busy={busy} className="btn dark" type="button" onClick={generateSample}>
+            <Sparkles size={17} />
+            Създай пример
+          </Button>
+          {draft?.voice === selected && previewUrl && (
+            <div className="sample-admin-player">
+              <span>Нов пример — още не е публикуван</span>
+              <audio controls src={previewUrl} />
+              <Button busy={busy} className="btn dark" type="button" onClick={publishSample}>
+                {voices.find((v) => v.id === selected)?.sampleUrl ? "Замени публикувания пример" : "Публикувай примера"}
+              </Button>
+            </div>
+          )}
           <label>
-            Аудио файл
+            Или качете свой WAV / MP3 файл до 2 MB
             <input
               name="file"
               type="file"
               required
+              disabled={busy}
               accept="audio/wav,audio/mpeg,.wav,.mp3"
             />
           </label>
@@ -311,6 +366,7 @@ function AdminSettings() {
             />
             <button
               className="text-link"
+              disabled={busy}
               onClick={async () => {
                 if (!confirm("Да премахнем ли примера?")) return;
                 try {
