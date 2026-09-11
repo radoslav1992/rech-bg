@@ -1,0 +1,33 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "rech-bg",
+  "main": "server/index.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "keep_vars": true,
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true,
+  },
+  "ai": { "binding": "AI" },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "rech-bg",
+      "migrations_dir": "migrations",
+    },
+  ],
+  "r2_buckets": [{ "binding": "AUDIO", "bucket_name": "rech-bg-audio" }],
+  "workflows": [
+    {
+      "name": "rech-bg-generation",
+      "binding": "GENERATION",
+      "class_name": "AudioGeneration",
+    },
+  ],
+  "triggers": { "crons": ["17 * * * *"] },
+  "observability": { "enabled": true },
+  "limits": { "cpu_ms": 120000 },
+}

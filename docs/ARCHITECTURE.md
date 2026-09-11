@@ -1,0 +1,59 @@
+# Архитектура и ограничения
+
+## Стек
+
+React 19 + React Router + Vite, Hono Worker API, Cloudflare D1, R2, Workers AI и Workflows. Font файловете се хостват локално. Няма публични model/provider идентификатори в UI, Voice API или client bundle.
+
+`server/audio.ts` е единственото място с mapping към `google/gemini-3.1-flash-tts`. Извикването е `env.AI.run(model, { text, voice })`. Тази форма е съобразена с предоставената снимка и с проверения код на `radoslav1992/notebook`. Не се изпраща Google `contents/speechConfig` тяло към Cloudflare TTS endpoint.
+
+Моделът в този договор има един глас на заявка. Затова `shared/text.ts` разделя подкаст на реплики, а Workflow синтезира всяка поотделно и сглобява PCM в един WAV. Не се изпращат заглавия, етикети на водещи или инструкции, които могат да бъдат прочетени като текст.
+
+## Поток за генериране
+
+1. Собственикът запазва проект и изпраща request id.
+2. API изчислява действително озвучаваните символи чрез същия parser като UI.
+3. SQL trigger атомарно резервира квота с job insert. Уникален индекс допуска един активен job на потребител. Уникален idempotency key връща същата заявка при retry.
+4. Workflow получава само job ID. Чете неизменим snapshot от D1, а не текущия редактиран проект.
+5. Синтезира части до 1 800 символа, пази ги в R2 и връща само малки metadata обекти от стъпките.
+6. Нормализира WAV или изрично обозначен PCM data URL; непознати данни/MP3 не се приемат за PCM.
+7. Сглобява WAV чрез `FixedLengthStream` и R2. Не събира цял дълъг запис многократно в паметта.
+8. Записва успешно завършване. При провал trigger връща символите точно веднъж. Клиентът вижда безопасно съобщение без upstream детайли.
+
+При неясен резултат от създаване на Workflow не се възстановява преждевременно квота: instance може вече да работи. Hourly cron проверява състоянието и стартира пропуснати queued jobs със същия ID. При траен инфраструктурен проблем queued job може да изисква операторска намеса; следете Workflows/D1 и не обещавайте незабавно възстановяване в този случай.
+
+## Достъп и данни
+
+- Пароли: PBKDF2-SHA256, 100 000 итерации, случаен salt за всеки профил. Итерациите съобразяват Web Crypto лимитите на Workers; оценете разхода при бъдещ upgrade на runtime.
+- Сесии: 256-bit случайни токени; в D1 се пази SHA-256. Бисквитка HttpOnly, Secure при HTTPS, SameSite=Lax, до 30 дни.
+- CSRF: точен Origin за всички mutations освен signed Stripe webhook.
+- Регистрация: включваща проверка на имейл, per-IP rate limit, Turnstile в production. Не се начислява платена/пробна генерация без verified email.
+- R2 bucket остава частен. Аудиото се стриймва от маршрут с ownership check и Range support.
+- Изтриването на проект/профил е защитено от активни jobs на SQL ниво. Изтриването на файлове се записва като трайна задача и се повтаря от cron при проблем.
+- Trial е еднократен за съществуващ профил. Повторна регистрация след изтриване създава нов trial; Turnstile и rate limits ограничават злоупотреби, но това не е доказателство за уникален човек.
+- Контактни запитвания: D1, видими само на потвърден администратор. Служебни auth писма: Resend.
+- Няма marketing analytics, рекламни cookies или voice cloning.
+
+## Абонаменти
+
+Продуктовите цени и квоти са в `shared/catalog.ts`. Stripe price IDs са отделни Dashboard variables. Платеният usage window се определя от user + subscription + период; безплатният е постоянен user + trial. Провалено генериране връща символи към първоначалния период, а не към новия след renewal.
+
+При смяна към по-висок план в същия период квотата може да се увеличи, но spent символите остават. Неизползваната квота се запазва до края на периода при понижение. За launch препоръката е portal без незабавни промени на цената, докато тази конфигурация не е тествана с реалните продукти.
+
+Webhooks са подписани, deduplicated и обработени с D1 batch. Чете се текущото състояние от Stripe; събитие с по-стар `created` не заменя по-ново записано състояние. Събития с еднаква времева секунда могат да се обработят паралелно; за много голям обем добавете serial billing reconciliation. Това не е платформа за множество едновременни subscriptions на един профил.
+
+## Начално ценообразуване
+
+€9 / 30k, €19 / 100k, €39 / 250k символа са продуктово решение за launch. Не са изведени от потвърдена публична Cloudflare тарифа за този партньорски модел. Публичната страница за точния модел не беше достъпна при разработката. Валидният договор е предоставената от собственика схема и `notebook` интеграцията.
+
+За сравнителен ориентир, [публичната Google Cloud TTS тарифа](https://cloud.google.com/text-to-speech/pricing) при проверката е $1 / 1 млн. входни текстови токени и $20 / 1 млн. изходни аудио токени, при 25 аудио токена/секунда. Това дава около $0.03/минута аудио само за изхода и **не потвърждава цената през Cloudflare**. При ориентировъчните 850 символа/минута квотата от 250k е около 294 минути, или ~$8.82 само за този изход по Google тарифата, без retries, input, ДДС, Stripe, хостинг и разлика във валутите.
+
+Направете 10–20 реални български записа с различни дължини и гласове. Измерете Cloudflare фактурируемите input/output units, retries, WAV продължителност, Workers/Workflow/R2 разход, Stripe такси и ДДС. Сравнете разход при **пълно използвана квота**, а не само средно потребление. Ориентирът 850 символа/минута в UI е приблизителна продължителност, не единица за плащане.
+
+## Проверки
+
+- Unit/integration тестове за WAV/PCM, parser, passwords, D1 quota invariants, ownership, idempotency, workflow success/failure.
+- Signed Stripe webhook тестове за active + paid, duplicate event, renewal, unpaid invoice, canceled и out-of-order event.
+- Production frontend build и Wrangler dry-run bundle.
+- Нужни след конфигурация: реално българско TTS, имейли, Stripe test Checkout и live webhook, browser QA на desktop/mobile.
+
+Източници за интеграцията: [Cloudflare Workflows API](https://developers.cloudflare.com/workflows/build/workers-api/), [Wrangler configuration](https://developers.cloudflare.com/workers/wrangler/configuration/), [Stripe subscription webhooks](https://docs.stripe.com/billing/subscriptions/webhooks), [GDPR обща информация](https://europa.eu/youreurope/business/governance-and-sustainability/digital-and-data-compliance/data-protection-gdpr/index_en.htm). Операторът трябва да прегледа правните текстове спрямо реалната дейност и доставчици.
