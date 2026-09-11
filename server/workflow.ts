@@ -127,7 +127,7 @@ export class AudioGeneration extends WorkflowEntrypoint<
           "UPDATE jobs SET status='failed',error=?,updated_at=? WHERE id=? AND status IN ('queued','running')",
         )
           .bind(
-            "Записът не беше създаден. Символите са върнати. Опитайте отново.",
+            "Записът не беше създаден. Кредитите са върнати. Опитайте отново.",
             now(),
             id,
           )

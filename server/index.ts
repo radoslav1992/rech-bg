@@ -11,7 +11,9 @@ import { auth, isAdmin } from "./auth";
 import { billing, webhook, allowance, stripe } from "./billing";
 import { segments, voiceMap, TTS_MODEL, decodeAudio, wavHeader } from "./audio";
 import { withDefaults } from "./config";
+import { videos, videoInputs } from "./video";
 export { AudioGeneration } from "./workflow";
+export { VideoGeneration } from "./video-workflow";
 const app = new Hono<{ Bindings: Env; Variables: ContextVars }>();
 app.use("*", async (c, next) => {
   await next();
@@ -21,7 +23,7 @@ app.use("*", async (c, next) => {
   c.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
   c.header(
     "Content-Security-Policy",
-    "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; media-src 'self' blob:; connect-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; object-src 'none'; base-uri 'self'; form-action 'self'",
+    "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; media-src 'self' blob:; connect-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; object-src 'none'; base-uri 'self'; form-action 'self'",
   );
   if (new URL(c.req.url).protocol === "https:")
     c.header(
@@ -122,6 +124,7 @@ app.post("/api/contact", async (c) => {
     .run();
   return c.json({ ok: true });
 });
+app.route("/api/video-inputs", videoInputs);
 app.use("/api/*", async (c, next) => {
   const t = getCookie(c, "rech_session");
   if (t) {
@@ -145,6 +148,7 @@ app.use("/api/*", async (c, next) => {
   await next();
 });
 app.route("/api/billing", billing);
+app.route("/api/videos", videos);
 const projectSchema = z.object({
   title: z.string().trim().min(1).max(120),
   mode: z.enum(["tts", "podcast", "voiceover"]),
@@ -234,7 +238,7 @@ app.delete("/api/projects/:id", async (c) => {
         noActive,
     ).bind(now(), id, user.id, id),
     c.env.DB.prepare(
-      "INSERT OR IGNORE INTO cleanup_tasks(prefix,created_at) SELECT 'audio/'||user_id||'/'||id||'.wav',? FROM jobs WHERE project_id=? AND user_id=? AND " +
+      "INSERT OR IGNORE INTO cleanup_tasks(prefix,created_at) SELECT 'audio/'||user_id||'/'||id||'.',? FROM jobs WHERE project_id=? AND user_id=? AND " +
         noActive,
     ).bind(now(), id, user.id, id),
     c.env.DB.prepare(
@@ -310,7 +314,7 @@ app.post("/api/generate", async (c) => {
     if (msg.includes("QUOTA_EXCEEDED"))
       throw new HTTPException(402, {
         message:
-          "Недостатъчно символи. Изберете по-висок план или съкратете текста.",
+          "Недостатъчно кредити. Изберете по-висок план или съкратете текста.",
       });
     if (msg.includes("UNIQUE")) {
       const existing = await c.env.DB.prepare(
@@ -333,44 +337,53 @@ app.post("/api/generate", async (c) => {
   }
   return c.json({ id }, 202);
 });
+const publicJob = (j: any) => ({
+  id: j.id, project_id: j.project_id, title: j.title, status: j.status,
+  chars: j.chars, duration: j.duration, created_at: j.created_at, error: j.error,
+  kind: j.kind || "audio", video_tier: j.video_tier || null,
+  source_job_id: j.source_job_id || null, mode: j.mode,
+});
 app.get("/api/jobs", async (c) => {
   const jobs = (
     await c.env.DB.prepare(
-      "SELECT id,project_id,title,status,chars,duration,created_at,error FROM jobs WHERE user_id=? ORDER BY created_at DESC, rowid DESC LIMIT 100",
+      "SELECT * FROM jobs WHERE user_id=? ORDER BY created_at DESC, rowid DESC LIMIT 100",
     )
       .bind(c.get("user").id)
       .all()
   ).results;
-  return c.json({ jobs });
+  return c.json({ jobs: jobs.map(publicJob) });
 });
 app.get("/api/jobs/:id", async (c) => {
   const job = await c.env.DB.prepare(
-    "SELECT id,project_id,title,status,chars,duration,created_at,error FROM jobs WHERE id=? AND user_id=?",
+    "SELECT * FROM jobs WHERE id=? AND user_id=?",
   )
     .bind(c.req.param("id"), c.get("user").id)
     .first();
   if (!job) throw new HTTPException(404, { message: "Записът не е намерен." });
-  return c.json({ job });
+  return c.json({ job: publicJob(job) });
 });
-app.get("/api/jobs/:id/audio", async (c) => {
+app.get("/api/jobs/:id/:media", async (c) => {
+  const video = c.req.param("media") === "video";
+  if (!video && c.req.param("media") !== "audio") throw new HTTPException(404);
   const row = await c.env.DB.prepare(
-    "SELECT audio_key FROM jobs WHERE id=? AND user_id=? AND status='completed'",
+    "SELECT * FROM jobs WHERE id=? AND user_id=? AND status='completed'",
   )
     .bind(c.req.param("id"), c.get("user").id)
-    .first<{ audio_key: string }>();
-  if (!row) throw new HTTPException(404, { message: "Записът не е готов." });
+    .first<any>();
+  const key = video ? row?.video_key : row?.audio_key;
+  if (!key) throw new HTTPException(404, { message: "Записът не е готов." });
   const range = c.req.header("Range");
   const object = await c.env.AUDIO.get(
-    row.audio_key,
+    key,
     range ? { range: c.req.raw.headers } : undefined,
   );
   if (!object)
     throw new HTTPException(404, { message: "Записът не е наличен." });
   const h = new Headers({
-    "Content-Type": "audio/wav",
+    "Content-Type": video ? "video/mp4" : "audio/wav",
     "Cache-Control": "private,no-store",
     "Accept-Ranges": "bytes",
-    "Content-Disposition": `${c.req.query("download") ? "attachment" : "inline"}; filename="rech-${c.req.param("id")}.wav"`,
+    "Content-Disposition": `${c.req.query("download") ? "attachment" : "inline"}; filename="rech-${c.req.param("id")}.${video ? "mp4" : "wav"}"`,
   });
   let status = 200;
   if (object.range && "offset" in object.range && "length" in object.range) {
@@ -426,7 +439,7 @@ app.get("/api/settings/export", async (c) => {
   ).results;
   const jobs = (
     await c.env.DB.prepare(
-      "SELECT id,project_id,title,mode,script,voice,second_voice,chars,duration,status,created_at FROM jobs WHERE user_id=?",
+      "SELECT * FROM jobs WHERE user_id=?",
     )
       .bind(u.id)
       .all()
@@ -443,7 +456,7 @@ app.get("/api/settings/export", async (c) => {
       {
         profile: { name: u.name, email: u.email, created_at: u.created_at },
         projects,
-        jobs,
+        jobs: jobs.map((j: any) => ({ ...publicJob(j), script: j.script, voice: j.voice, second_voice: j.second_voice })),
         subscriptions,
       },
       null,
@@ -702,21 +715,23 @@ export async function maintenance(e: Env) {
   ]);
   const jobs = (
     await e.DB.prepare(
-      "SELECT id,user_id,status,created_at FROM jobs WHERE status IN ('queued','running') AND updated_at<? LIMIT 100",
+      "SELECT * FROM jobs WHERE status IN ('queued','running') AND updated_at<? LIMIT 100",
     )
       .bind(now() - 600)
       .all<any>()
   ).results;
   for (const j of jobs) {
+    const workflow = j.kind === "video" ? e.VIDEO_GENERATION : e.GENERATION;
+    if (!workflow) continue;
     try {
-      const instance = await e.GENERATION.get(j.id);
+      const instance = await workflow.get(j.id);
       const status = await instance.status();
       if (["errored", "terminated"].includes(status.status)) {
         await e.DB.prepare(
           "UPDATE jobs SET status='failed',error=?,updated_at=? WHERE id=? AND status IN ('queued','running')",
         )
           .bind(
-            "Генерацията беше прекъсната. Символите са върнати.",
+            "Генерацията беше прекъсната. Кредитите са върнати.",
             now(),
             j.id,
           )
@@ -725,7 +740,7 @@ export async function maintenance(e: Env) {
     } catch {
       if (j.status === "queued") {
         try {
-          await e.GENERATION.create({ id: j.id, params: { jobId: j.id } });
+          await workflow.create({ id: j.id, params: { jobId: j.id } });
         } catch {
           console.error("Workflow reconciliation pending", { jobId: j.id });
         }

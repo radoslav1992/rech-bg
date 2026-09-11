@@ -110,7 +110,7 @@ function Shell() {
           <div className="quota">
             <div>
               <strong>{number(Math.max(0, user.limit - user.used))}</strong>
-              <span>символа остават</span>
+              <span>кредита остават</span>
             </div>
             <progress max={user.limit} value={user.used} />
             <Link to="/app/billing">

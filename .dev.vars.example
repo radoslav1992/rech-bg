@@ -19,3 +19,6 @@ STRIPE_WEBHOOK_SECRET=
 STRIPE_PRICE_STARTER=
 STRIPE_PRICE_CREATOR=
 STRIPE_PRICE_STUDIO=
+
+# fal.ai API scope key for avatar videos. Never commit real credentials.
+FAL_KEY=

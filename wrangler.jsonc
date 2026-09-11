@@ -27,6 +27,11 @@
   "r2_buckets": [{ "binding": "AUDIO", "bucket_name": "rech-bg-audio" }],
   "workflows": [
     {
+      "name": "rech-bg-video",
+      "binding": "VIDEO_GENERATION",
+      "class_name": "VideoGeneration",
+    },
+    {
       "name": "rech-bg-generation",
       "binding": "GENERATION",
       "class_name": "AudioGeneration",

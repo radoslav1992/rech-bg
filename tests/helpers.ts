@@ -1,13 +1,10 @@
 import { DatabaseSync } from "node:sqlite";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 export function database() {
   const sqlite = new DatabaseSync(":memory:");
-  sqlite.exec(
-    readFileSync(
-      new URL("../migrations/0001_initial.sql", import.meta.url),
-      "utf8",
-    ),
-  );
+  const dir = new URL("../migrations/", import.meta.url);
+  for (const file of readdirSync(dir).filter(f => f.endsWith(".sql")).sort())
+    sqlite.exec(readFileSync(new URL(file, dir), "utf8"));
   const prepare = (sql: string, args: unknown[] = []): any => ({
     bind: (...v: unknown[]) => prepare(sql, v),
     first: async () => sqlite.prepare(sql).get(...(args as any[])) || null,
@@ -38,6 +35,23 @@ export function bucket() {
   const objects = new Map<string, { bytes: Uint8Array; metadata: any }>();
   return {
     objects,
+    createMultipartUpload: async (key: string, opts: any = {}) => {
+      const parts = new Map<number, Uint8Array>();
+      return {
+        uploadPart: async (partNumber: number, bytes: Uint8Array) => {
+          parts.set(partNumber, bytes.slice());
+          return { partNumber, etag: String(partNumber) };
+        },
+        complete: async (ordered: { partNumber: number }[]) => {
+          const size = ordered.reduce((n, p) => n + parts.get(p.partNumber)!.length, 0);
+          const bytes = new Uint8Array(size);
+          let offset = 0;
+          for (const p of ordered) { const data = parts.get(p.partNumber)!; bytes.set(data, offset); offset += data.length; }
+          objects.set(key, { bytes, metadata: opts.customMetadata });
+        },
+        abort: async () => { parts.clear(); },
+      };
+    },
     put: async (key: string, input: any, opts: any = {}) => {
       const bytes =
         input instanceof Uint8Array

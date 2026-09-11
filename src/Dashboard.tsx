@@ -70,7 +70,7 @@ export function Dashboard() {
             <br />
             вече има глас.
           </h2>
-          <p>Отворете студиото и създайте следващия си запис.</p>
+          <p>Създайте аудиозапис и го превърнете в говорещо видео.</p>
           <Link className="btn dark" to="/app/studio">
             Към студиото <ArrowUpRight size={18} />
           </Link>
@@ -84,7 +84,7 @@ export function Dashboard() {
         <div>
           <span>
             <AudioLines size={18} />
-            Налични символи
+            Налични кредити
           </span>
           <strong>
             {number(Math.max(0, (user?.limit || 0) - (user?.used || 0)))}
@@ -102,7 +102,7 @@ export function Dashboard() {
         <div>
           <span>
             <Clock3 size={18} />
-            Създадено аудио
+            Създадени аудио и видео
           </span>
           <strong>
             {Math.round(done.reduce((s, j) => s + j.duration, 0) / 60)}{" "}

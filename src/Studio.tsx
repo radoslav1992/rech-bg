@@ -19,6 +19,7 @@ import {
   Upload,
   Video,
 } from "lucide-react";
+import { VideoPanel } from "./VideoPanel";
 import { voiceList } from "../shared/catalog";
 import { segments } from "../shared/text";
 import {
@@ -391,7 +392,7 @@ export function Studio() {
                 <div>
                   <span className="generation-cost">
                     <AudioLines size={17} />
-                    {number(chars)} символа
+                    {number(chars)} кредита
                   </span>
                   <small>
                     Налични:{" "}
@@ -530,21 +531,21 @@ export function Studio() {
                   <span>
                     {Math.floor(job.duration / 60)}:
                     {String(Math.round(job.duration % 60)).padStart(2, "0")} ·
-                    WAV
+                    {job.kind === "video" ? "MP4" : "WAV"}
                   </span>
                 </div>
-                <audio
+                {job.kind === "video" ? <video className="avatar-result" key={job.id} controls preload="metadata" src={"/api/jobs/" + job.id + "/video"} /> : <audio
                   key={job.id}
                   controls
                   preload="metadata"
                   src={"/api/jobs/" + job.id + "/audio"}
-                />
+                />}
                 <a
                   className="btn dark"
-                  href={"/api/jobs/" + job.id + "/audio?download=1"}
+                  href={"/api/jobs/" + job.id + (job.kind === "video" ? "/video" : "/audio") + "?download=1"}
                 >
                   <Download size={17} />
-                  Изтеглете WAV
+                  {job.kind === "video" ? "Изтеглете MP4" : "Изтеглете WAV"}
                 </a>
               </div>
             ) : job.status === "failed" ? (
@@ -574,8 +575,8 @@ export function Studio() {
                           : "Създава се"}
                     </span>
                     {j.status === "completed" && (
-                      <button className="text-link" onClick={() => setJob(j)}>
-                        Преслушайте
+                      <button className="text-link" disabled={active} onClick={() => setJob(j)}>
+                        {j.kind === "video" ? "Гледайте видеото" : "Преслушайте"}
                       </button>
                     )}
                   </div>
@@ -583,6 +584,7 @@ export function Studio() {
               </details>
             )}
           </section>
+          <VideoPanel key={id || "new"} jobs={[...(job ? [job] : []), ...history.filter(j => j.id !== job?.id)]} disabled={busy || active} onCreated={j => { setJob(j); setHistory(h => [j, ...h.filter(x => x.id !== j.id)]); }} />
         </>
       )}
     </div>

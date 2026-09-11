@@ -35,6 +35,10 @@ export type Project = {
   duration?: number;
 };
 export type Job = {
+  kind?: "audio" | "video";
+  mode?: string;
+  video_tier?: "standard" | "quality";
+  source_job_id?: string;
   id: string;
   project_id: string;
   title: string;

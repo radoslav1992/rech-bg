@@ -5,6 +5,8 @@ export interface Env {
     run: (model: string, input: Record<string, unknown>) => Promise<unknown>;
   };
   GENERATION: Workflow<{ jobId: string }>;
+  VIDEO_GENERATION?: Workflow<{ jobId: string }>;
+  FAL_KEY?: string;
   ASSETS: Fetcher;
   SITE_URL?: string;
   APP_ENV?: string;
