@@ -110,6 +110,7 @@ describe("Video credits and request validation", () => {
 });
 describe("Video workflow and private assets", () => {
   it("completes Argil generation, stores MP4 privately and expires input access", async () => {
+    delete env.SITE_URL;
     const id = await create(); const mock = mockProvider();
     const meta = JSON.parse(sqlite.prepare("SELECT video_meta FROM jobs WHERE id=?").get(id)!.video_meta as string);
     expect((await request(`/video-inputs/${id}/audio?token=${meta.token}`, {}, false)).status).toBe(200);
@@ -120,6 +121,7 @@ describe("Video workflow and private assets", () => {
     const submitted = mock.mock.calls.find(c => c[1]?.method === "POST")!;
     expect(submitted[0]).toBe("https://queue.fal.run/argil/avatars/audio-to-video");
     const input = JSON.parse(submitted[1]!.body as string);
+    expect(new URL(input.audio_url).origin).toBe("https://rechbg.com");
     expect(input.avatar).toBe("Mia outdoor (UGC)"); expect(typeof input.audio_url).toBe("string");
     expect(input.remove_background).toBe(false);
     expect(sqlite.prepare("SELECT status FROM jobs WHERE id=?").get(id)!.status).toBe("completed");

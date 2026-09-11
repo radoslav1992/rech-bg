@@ -1,6 +1,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import type { Env } from "./types";
 import { now } from "./types";
+import { withDefaults } from "./config";
 import { avatarMap, failVideo, videoModels, type VideoMeta } from "./video";
 import type { VideoTier } from "../shared/video";
 
@@ -76,7 +77,7 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> 
         const source = await this.env.DB.prepare("SELECT audio_key FROM jobs WHERE id=? AND user_id=? AND status='completed'").bind(job.source_job_id, job.user_id).first<any>();
         if (!source?.audio_key || !(await this.env.AUDIO.head(source.audio_key))) throw new Error("Missing audio");
         if (job.video_tier === "quality" && (!meta.imageKey || !(await this.env.AUDIO.head(meta.imageKey)))) throw new Error("Missing portrait");
-        const base = `${this.env.SITE_URL!.replace(/\/$/, "")}/api/video-inputs/${id}`;
+        const base = `${withDefaults(this.env).SITE_URL!.replace(/\/$/, "")}/api/video-inputs/${id}`;
         const audio_url = `${base}/audio?token=${meta.token}`;
         const input = job.video_tier === "standard"
           ? { avatar: avatarMap[meta.avatar], audio_url, remove_background: false }
