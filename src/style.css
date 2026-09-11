@@ -4258,3 +4258,16 @@ label,
     font-size: 0.68rem;
   }
 }
+
+.contact-direct {
+  margin-top: 24px;
+  font-size: 1rem;
+}
+.contact-direct p + p {
+  margin-top: 8px;
+}
+.contact-direct a,
+.legal-operator a {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}

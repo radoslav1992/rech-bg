@@ -2,42 +2,44 @@
 
 Приложението е **Worker със статични assets**, а не Cloudflare Pages проект. Не е нужен отделен Node.js сървър или Supabase.
 
-## 1. Какво трябва да предоставите
+## 1. Потвърдена конфигурация
 
-1. D1 база с име `rech-bg` — нейният **database_id (UUID)**. Binding: `DB`.
-2. R2 bucket `rech-bg-audio`. Binding: `AUDIO`. Оставете bucket-а частен; не включвайте публичен достъп.
-3. Финален URL на сайта, например `https://rech.bg`, и точните данни на доставчика: фирмено име, ЕИК, адрес и публичен имейл.
-4. Имейл на администратора. Този адрес трябва да регистрира и потвърди профил.
+| Поле | Стойност |
+| --- | --- |
+| Домейн | `https://rechbg.com` |
+| D1 име / binding | `rech-bg` / `DB` |
+| D1 UUID | `4916f5c6-41cd-48a9-ba0e-25e2554701b4` |
+| Доставчик | Радослав Додников (Кова студио) |
+| Град | София |
+| Публичен имейл | `info@zapiski.bg` |
+| Телефон | `02 492 0201` |
 
-**Не изпращайте тайни в чат или в GitHub.** Поставете ключовете директно в Cloudflare Variables and Secrets.
+Данните за доставчика са взети от `notebook`: `src/pages/privacy.astro`, `src/pages/contact.astro`, `src/pages/za-nas.astro` и `src/lib/email.ts`. Там не са посочени ЕИК и пълен бизнес адрес; `COMPANY_ID` и `COMPANY_ADDRESS` остават за попълване. София е град, а не заместител на пълен адрес.
+
+Публичните стойности са defaults в `server/config.ts`. Cloudflare Dashboard variables могат да ги заменят и остават запазени при deploy. Имейлът за контакт не задава автоматично подател на писма или администраторски права. Задайте отделно `EMAIL_FROM` и `ADMIN_EMAILS`.
 
 ## 2. Cloudflare ресурси
 
-Необходим е платен Workers план за зададения CPU лимит и наличен достъп до избрания партньорски AI модел. Активирайте R2 за акаунта.
+D1 UUID вече е закрепен в `wrangler.jsonc`; не създавайте втора база. Необходим е достъп до акаунта, в който се намира тази база, платен Workers план за CPU лимита и наличен достъп до избрания партньорски AI модел.
+
+Създайте частния R2 bucket, ако още не съществува:
 
 ```sh
 npx wrangler login
-npx wrangler d1 create rech-bg
 npx wrangler r2 bucket create rech-bg-audio
 ```
 
-В `wrangler.jsonc`, към единствения елемент в `d1_databases`, добавете върнатия:
-
-```json
-"database_id": "ВАШИЯТ-РЕАЛЕН-UUID"
-```
-
-Конфигурацията умишлено не съдържа измислен UUID. Поддържаните версии на Wrangler могат да предоставят D1 ресурс при deploy, когато UUID липсва. За предвидима продукционна среда създайте базата предварително и закрепете реалния идентификатор.
-
-Приложете схемата **преди първи клиент**:
+Приложете миграцията върху съществуващата база:
 
 ```sh
 npx wrangler d1 migrations apply rech-bg --remote
 ```
 
-Алтернатива: изпълнете съдържанието на `migrations/0001_initial.sql` в D1 Console върху празната база. Предпочитайте миграционната команда, защото тя води миграционна история.
+Тази команда не е изпълнявана от асистента в Cloudflare акаунта. Самото предоставяне на UUID не създава таблиците.
 
-AI binding `AI` и Workflow binding `GENERATION` са декларирани в `wrangler.jsonc`. Не е нужен Google API ключ. Първият deploy създава Workflow класа `AudioGeneration`.
+Custom Domain `rechbg.com` е деклариран в `wrangler.jsonc`. Зоната `rechbg.com` трябва да е активна в същия Cloudflare акаунт; `wrangler deploy` прилага връзката с Worker. Декларацията в GitHub не потвърждава, че DNS или домейнът вече са активирани.
+
+AI binding `AI` и Workflow binding `GENERATION` също са декларирани. Не е нужен Google API ключ. R2 остава частен.
 
 ## 3. GitHub интеграция
 
@@ -62,12 +64,14 @@ Cloudflare → Workers & Pages → Create → Import a repository → `radoslav1
 
 | Име | Вид | Стойност / предназначение |
 | --- | --- | --- |
-| `SITE_URL` | Variable | Точният HTTPS адрес на продукционния сайт, без последна наклонена черта |
+| `SITE_URL` | Variable | По подразбиране `https://rechbg.com`; задайте само за override |
 | `APP_ENV` | Variable | `production` |
-| `COMPANY_NAME` | Variable | Юридическо име на доставчика |
+| `COMPANY_NAME` | Variable | По подразбиране `Радослав Додников (Кова студио)` |
 | `COMPANY_ID` | Variable | ЕИК / регистрационен номер |
-| `COMPANY_ADDRESS` | Variable | Пълен адрес на доставчика |
-| `CONTACT_EMAIL` | Variable | Публичен имейл за права, запитвания и рекламации |
+| `COMPANY_ADDRESS` | Variable | Пълен адрес на доставчика — предстои да бъде предоставен |
+| `COMPANY_CITY` | Variable | По подразбиране `София`; не замества пълния адрес |
+| `CONTACT_PHONE` | Variable | По подразбиране `+35924920201` |
+| `CONTACT_EMAIL` | Variable | По подразбиране `info@zapiski.bg` |
 | `ADMIN_EMAILS` | Variable | Администраторски имейл; няколко се разделят със запетая |
 | `REGISTRATION_ENABLED` | Variable | `false` до финална проверка, след това `true` |
 | `BILLING_ENABLED` | Variable | `false` до тест на плащанията, след това `true` |
@@ -109,7 +113,7 @@ Turnstile е задължителен за продукционна регист
 Регистрирайте webhook:
 
 ```
-https://YOUR_DOMAIN/api/billing/webhook
+https://rechbg.com/api/billing/webhook
 ```
 
 Събития:

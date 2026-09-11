@@ -13,6 +13,7 @@ export interface Env {
   RESEND_API_KEY?: string;
   EMAIL_FROM?: string;
   CONTACT_EMAIL?: string;
+  CONTACT_PHONE?: string;
   ADMIN_EMAILS?: string;
   TURNSTILE_SITE_KEY?: string;
   TURNSTILE_SECRET_KEY?: string;
@@ -24,6 +25,7 @@ export interface Env {
   COMPANY_NAME?: string;
   COMPANY_ID?: string;
   COMPANY_ADDRESS?: string;
+  COMPANY_CITY?: string;
 }
 export type DbUser = {
   id: string;

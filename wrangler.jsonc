@@ -5,6 +5,7 @@
   "compatibility_date": "2026-09-01",
   "compatibility_flags": ["nodejs_compat"],
   "keep_vars": true,
+  "routes": [{ "pattern": "rechbg.com", "custom_domain": true }],
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
@@ -16,6 +17,7 @@
     {
       "binding": "DB",
       "database_name": "rech-bg",
+      "database_id": "4916f5c6-41cd-48a9-ba0e-25e2554701b4",
       "migrations_dir": "migrations",
     },
   ],

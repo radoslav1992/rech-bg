@@ -699,6 +699,15 @@ export function About() {
         <span>речбг</span>
       </div>
       <div className="prose">
+        <h2>Създадено от Радослав Додников.</h2>
+        <p>
+          Реч БГ е проект на Радослав Додников, софтуерен и AI инженер от София
+          и основател на{" "}
+          <a href="https://kova.bg" rel="noopener">
+            Кова студио
+          </a>{" "}
+          — създателят на Записки БГ.
+        </p>
         <h2>Повече време за това, което искате да кажете.</h2>
         <p>
           Реч БГ е аудио студио за хора, които създават съдържание на български
@@ -729,6 +738,14 @@ export function About() {
   );
 }
 export function Contact() {
+  const [contact, setContact] = useState<{ email?: string; phone?: string }>(
+    {},
+  );
+  useEffect(() => {
+    api("/public/config")
+      .then((d) => setContact(d.company))
+      .catch(() => {});
+  }, []);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [good, setGood] = useState(false);
@@ -742,6 +759,23 @@ export function Contact() {
           <br />
           или нещо, което можем да направим по-добре?
         </p>
+        <div className="contact-direct">
+          {contact.email && (
+            <p>
+              <a href={"mailto:" + contact.email}>{contact.email}</a>
+            </p>
+          )}
+          {contact.phone && (
+            <p>
+              Телефон:{" "}
+              <a href={"tel:" + contact.phone}>
+                {contact.phone === "+35924920201"
+                  ? "02 492 0201"
+                  : contact.phone}
+              </a>
+            </p>
+          )}
+        </div>
         <div className="contact-note">
           <Mic2 size={30} />
           <h3>Слушаме внимателно.</h3>
@@ -934,6 +968,8 @@ export function Legal({ page }: { page: string }) {
   const [company, setCompany] = useState<{
     name?: string;
     address?: string;
+    city?: string;
+    phone?: string;
     id?: string;
     email?: string;
   }>({});
@@ -951,10 +987,27 @@ export function Legal({ page }: { page: string }) {
       {company.name ? (
         <div className="legal-operator">
           <strong>Доставчик: {company.name}</strong>
-          <p>
-            ЕИК: {company.id} · Адрес: {company.address}
-          </p>
-          <p>Контакт: {company.email}</p>
+          {company.id && <p>ЕИК: {company.id}</p>}
+          {company.address ? (
+            <p>Адрес: {company.address}</p>
+          ) : company.city ? (
+            <p>Град: {company.city}</p>
+          ) : null}
+          {company.email && (
+            <p>
+              Контакт: <a href={"mailto:" + company.email}>{company.email}</a>
+            </p>
+          )}
+          {company.phone && (
+            <p>
+              Телефон:{" "}
+              <a href={"tel:" + company.phone}>
+                {company.phone === "+35924920201"
+                  ? "02 492 0201"
+                  : company.phone}
+              </a>
+            </p>
+          )}
         </div>
       ) : (
         <Notice>

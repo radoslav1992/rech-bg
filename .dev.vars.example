@@ -4,10 +4,12 @@ SITE_URL=http://localhost:8787
 REGISTRATION_ENABLED=false
 BILLING_ENABLED=false
 # Public operator information must be accurate before opening registrations.
-COMPANY_NAME=
+COMPANY_NAME="Радослав Додников (Кова студио)"
 COMPANY_ID=
 COMPANY_ADDRESS=
-CONTACT_EMAIL=
+COMPANY_CITY=София
+CONTACT_EMAIL=info@zapiski.bg
+CONTACT_PHONE=+35924920201
 ADMIN_EMAILS=
 EMAIL_FROM=
 RESEND_API_KEY=

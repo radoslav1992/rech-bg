@@ -10,6 +10,7 @@ import { sha, rate, checkPassword, hashPassword } from "./security";
 import { auth, isAdmin } from "./auth";
 import { billing, webhook, allowance, stripe } from "./billing";
 import { segments, voiceMap } from "./audio";
+import { withDefaults } from "./config";
 export { AudioGeneration } from "./workflow";
 const app = new Hono<{ Bindings: Env; Variables: ContextVars }>();
 app.use("*", async (c, next) => {
@@ -60,6 +61,8 @@ app.get("/api/public/config", (c) =>
       name: c.env.COMPANY_NAME || null,
       id: c.env.COMPANY_ID || null,
       address: c.env.COMPANY_ADDRESS || null,
+      city: c.env.COMPANY_CITY || null,
+      phone: c.env.CONTACT_PHONE || null,
       email: c.env.CONTACT_EMAIL || null,
     },
   }),
@@ -713,7 +716,8 @@ export async function maintenance(e: Env) {
   for (const j of old) await deletePrefix(e, `segments/${j.user_id}/${j.id}/`);
 }
 export default {
-  fetch: app.fetch,
+  fetch: (request: Request, env: Env, ctx: ExecutionContext) =>
+    app.fetch(request, withDefaults(env), ctx),
   scheduled: (_event: ScheduledController, env: Env, ctx: ExecutionContext) =>
-    ctx.waitUntil(maintenance(env)),
+    ctx.waitUntil(maintenance(withDefaults(env))),
 };
