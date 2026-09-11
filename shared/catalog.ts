@@ -86,7 +86,7 @@ export const voiceList = [
   ["maria", "Мария", "Женски", "Топъл и приветлив", "Жълт"],
 ].map(([id, name, gender, tone, color]) => ({ id, name, gender, tone, color }));
 export const sampleSentence =
-  "Здравейте! Понякога е нужен само един глас, за да оживее една история — нека днес разкажем вашата.";
+  "Понякога е нужен само един глас, за да оживее една история — нека днес разкажем вашата.";
 export const modes = [
   {
     id: "tts",
