@@ -11,10 +11,10 @@
 | D1 UUID | `4916f5c6-41cd-48a9-ba0e-25e2554701b4` |
 | Доставчик | Радослав Додников (Кова студио) |
 | Град | София |
-| Публичен имейл | `info@zapiski.bg` |
+| Публичен имейл | `info@rechbg.com` |
 | Телефон | `02 492 0201` |
 
-Данните за доставчика са взети от `notebook`: `src/pages/privacy.astro`, `src/pages/contact.astro`, `src/pages/za-nas.astro` и `src/lib/email.ts`. Там не са посочени ЕИК и пълен бизнес адрес; `COMPANY_ID` и `COMPANY_ADDRESS` остават за попълване. София е град, а не заместител на пълен адрес.
+Контактният имейл е зададен от собственика на `info@rechbg.com`. Останалите данни за доставчика са взети от `notebook`: `src/pages/privacy.astro`, `src/pages/contact.astro`, `src/pages/za-nas.astro` и `src/lib/email.ts`. Там не са посочени ЕИК и пълен бизнес адрес; `COMPANY_ID` и `COMPANY_ADDRESS` остават за попълване. София е град, а не заместител на пълен адрес.
 
 Публичните стойности са defaults в `server/config.ts`. Cloudflare Dashboard variables могат да ги заменят и остават запазени при deploy. Имейлът за контакт не задава автоматично подател на писма или администраторски права. Задайте отделно `EMAIL_FROM` и `ADMIN_EMAILS`.
 
@@ -71,7 +71,7 @@ Cloudflare → Workers & Pages → Create → Import a repository → `radoslav1
 | `COMPANY_ADDRESS` | Variable | Пълен адрес на доставчика — предстои да бъде предоставен |
 | `COMPANY_CITY` | Variable | По подразбиране `София`; не замества пълния адрес |
 | `CONTACT_PHONE` | Variable | По подразбиране `+35924920201` |
-| `CONTACT_EMAIL` | Variable | По подразбиране `info@zapiski.bg` |
+| `CONTACT_EMAIL` | Variable | По подразбиране `info@rechbg.com` |
 | `ADMIN_EMAILS` | Variable | Администраторски имейл; няколко се разделят със запетая |
 | `REGISTRATION_ENABLED` | Variable | `false` до финална проверка, след това `true` |
 | `BILLING_ENABLED` | Variable | `false` до тест на плащанията, след това `true` |

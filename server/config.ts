@@ -1,6 +1,6 @@
 import type { Env } from "./types";
 
-// Approved by the owner. Operator details match notebook's privacy/contact pages.
+// Approved by the owner. Operator details come from notebook; contact email uses rechbg.com.
 // These are code defaults, not Wrangler vars: Dashboard overrides survive deploys.
 export function withDefaults(env: Env): Env {
   return {
@@ -8,7 +8,7 @@ export function withDefaults(env: Env): Env {
     SITE_URL: env.SITE_URL ?? "https://rechbg.com",
     COMPANY_NAME: env.COMPANY_NAME ?? "Радослав Додников (Кова студио)",
     COMPANY_CITY: env.COMPANY_CITY ?? "София",
-    CONTACT_EMAIL: env.CONTACT_EMAIL ?? "info@zapiski.bg",
+    CONTACT_EMAIL: env.CONTACT_EMAIL ?? "info@rechbg.com",
     CONTACT_PHONE: env.CONTACT_PHONE ?? "+35924920201",
     // No COMPANY_ID or full COMPANY_ADDRESS was present in notebook.
     // No email-sending identity or admin privileges are inferred from contact details.
