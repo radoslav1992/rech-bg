@@ -44,6 +44,7 @@ import { AuthPage } from "./Auth";
 import { Dashboard, Projects } from "./Dashboard";
 import { Studio } from "./Studio";
 import { SettingsPage } from "./Settings";
+import { JobActivity } from "./JobActivity";
 function Scroll() {
   const { pathname } = useLocation();
   useEffect(() => {
@@ -144,7 +145,7 @@ function Shell() {
             <Link to="/app/settings">Изпрати ново писмо</Link>
           </div>
         )}
-        <Outlet />
+        <JobActivity key={user.id}><Outlet /></JobActivity>
       </main>
     </div>
   );

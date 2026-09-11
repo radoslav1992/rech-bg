@@ -12,6 +12,7 @@ import { billing, webhook, allowance, stripe } from "./billing";
 import { segments, voiceMap, TTS_MODEL, decodeAudio, wavHeader } from "./audio";
 import { withDefaults } from "./config";
 import { videos, videoInputs } from "./video";
+import { notifyVideo } from "./video-notifications";
 export { AudioGeneration } from "./workflow";
 export { VideoGeneration } from "./video-workflow";
 const app = new Hono<{ Bindings: Env; Variables: ContextVars }>();
@@ -337,12 +338,18 @@ app.post("/api/generate", async (c) => {
   }
   return c.json({ id }, 202);
 });
-const publicJob = (j: any) => ({
+const publicJob = (j: any) => {
+  const meta = j.kind === "video" ? JSON.parse(j.video_meta || "{}") : {};
+  return ({
   id: j.id, project_id: j.project_id, title: j.title, status: j.status,
   chars: j.chars, duration: j.duration, created_at: j.created_at, error: j.error,
   kind: j.kind || "audio", video_tier: j.video_tier || null,
   source_job_id: j.source_job_id || null, mode: j.mode,
+  video_phase: ["queued", "processing", "saving"].includes(meta.phase) ? meta.phase : null,
+  notify_email: meta.notifyEmail === true,
+  email_status: ["sending", "sent", "failed"].includes(meta.emailStatus) ? meta.emailStatus : null,
 });
+};
 app.get("/api/jobs", async (c) => {
   const jobs = (
     await c.env.DB.prepare(
@@ -755,6 +762,12 @@ export async function maintenance(e: Env) {
       .all<any>()
   ).results;
   for (const j of old) await deletePrefix(e, `segments/${j.user_id}/${j.id}/`);
+  // Read only matching metadata, keeping this compatible with audio-only rows.
+  const notifications = (await e.DB.prepare("SELECT id FROM jobs WHERE kind='video' AND status IN ('completed','failed') AND json_extract(video_meta,'$.notifyEmail')=1 AND json_extract(video_meta,'$.emailStatus') IS NULL ORDER BY created_at DESC LIMIT 50").all<{ id: string }>()).results;
+  for (const j of notifications) {
+    try { await notifyVideo(e, j.id); }
+    catch { console.error("Video notification reconciliation failed", { jobId: j.id }); }
+  }
 }
 export default {
   fetch: (request: Request, env: Env, ctx: ExecutionContext) =>

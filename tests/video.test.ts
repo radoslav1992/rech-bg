@@ -5,6 +5,7 @@ import { sha } from "../server/security";
 import { now } from "../server/types";
 import { videoCredits } from "../shared/video";
 import { videoFailureMessage } from "../server/video-errors";
+import { notifyVideo } from "../server/video-notifications";
 import { database, bucket } from "./helpers";
 const ticket = { request_id: "remote-1", status_url: "https://queue.fal.run/argil/avatars/requests/remote-1/status", response_url: "https://queue.fal.run/argil/avatars/requests/remote-1", cancel_url: "https://queue.fal.run/argil/avatars/requests/remote-1/cancel" };
 const videoUrl = "https://v3.fal.media/files/test.mp4";
@@ -110,6 +111,46 @@ describe("Video credits and request validation", () => {
   });
 });
 describe("Video workflow and private assets", () => {
+  it("notifies the verified owner once after completion with a link to the exact video", async () => {
+    const send = vi.fn().mockResolvedValue({ messageId: "mail-1" });
+    env.EMAIL = { send };
+    const id = await create(form("standard", { notifyEmail: "true" }));
+    mockProvider();
+    await new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step);
+    await notifyVideo(env, id);
+    await maintenance(env);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0]).toMatchObject({ to: "u@example.com", subject: "Видеото ви е готово — Реч БГ" });
+    expect(send.mock.calls[0][0].text).toContain(`/app/studio/${projectId}?job=${id}`);
+    const job = (await (await request(`/jobs/${id}`)).json() as any).job;
+    expect(job).toMatchObject({ status: "completed", notify_email: true, email_status: "sent", video_phase: "saving" });
+    expect(JSON.stringify(job)).not.toMatch(/video_meta|token|test-secret/);
+  });
+  it("keeps completed media and charged quota if email delivery fails", async () => {
+    const send = vi.fn().mockRejectedValue(new Error("Email unavailable")); env.EMAIL = { send };
+    const id = await create(form("standard", { notifyEmail: "true" }));
+    mockProvider();
+    await new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step);
+    await notifyVideo(env, id);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(used()).toBe(9100);
+    expect((await (await request(`/jobs/${id}`)).json() as any).job).toMatchObject({ status: "completed", email_status: "failed" });
+    expect((await request(`/jobs/${id}/video`)).status).toBe(200);
+  });
+  it("does not send notification emails without opt-in", async () => {
+    const send = vi.fn(); env.EMAIL = { send };
+    const id = await create(); mockProvider();
+    await new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step);
+    expect(send).not.toHaveBeenCalled();
+  });
+  it("notifies of failure only after refunding video credits", async () => {
+    const send = vi.fn(async () => { expect(used()).toBe(100); return { messageId: "failed-mail" }; }); env.EMAIL = { send };
+    const id = await create(form("standard", { notifyEmail: "true" }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ detail: "Payment required" }, { status: 402 })));
+    await expect(new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step)).rejects.toThrow();
+    expect(send).toHaveBeenCalledTimes(1);
+    expect((send.mock.calls[0] as any)[0].subject).toBe("Видеото не беше създадено — Реч БГ");
+  });
   it.each([
     [401, { detail: "Invalid key test-secret" }, "AUTH"],
     [402, { detail: "Payment required" }, "BALANCE"],

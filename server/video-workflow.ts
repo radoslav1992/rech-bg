@@ -6,6 +6,7 @@ import { avatarMap, failVideo, videoModels, type VideoMeta } from "./video";
 import type { VideoTier } from "../shared/video";
 import { providerFailure, VideoFailure, videoFailureMessage, type VideoStage } from "./video-errors";
 import { videoFetch } from "./video-http";
+import { notifyVideo } from "./video-notifications";
 
 type Ticket = { request_id: string; status_url: string; response_url: string; cancel_url?: string };
 export function queueUrl(value: string) {
@@ -108,6 +109,8 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> 
           const s = await queueGet(this.env, ticket!.status_url, "STATUS");
           await this.env.DB.prepare("UPDATE jobs SET updated_at=? WHERE id=?").bind(now(), id).run();
           if (!["IN_QUEUE", "IN_PROGRESS", "COMPLETED"].includes(s.status)) throw new Error("Unexpected video status");
+          await this.env.DB.prepare("UPDATE jobs SET video_meta=json_set(video_meta,'$.phase',?) WHERE id=?")
+            .bind(s.status === "IN_QUEUE" ? "queued" : s.status === "IN_PROGRESS" ? "processing" : "saving", id).run();
           return s.status as string;
         });
         if (status === "COMPLETED") { completed = true; break; }
@@ -142,6 +145,10 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> 
         try { await videoFetch(queueUrl(ticket.cancel_url), { method: "PUT", headers: { Authorization: `Key ${this.env.FAL_KEY?.trim()}` }, signal: AbortSignal.timeout(15000) }); } catch { /* Best effort cancellation; never resubmit. */ }
       }
       throw new Error(failure.code);
+    } finally {
+      try {
+        await step.do("notify-video", { retries: { limit: 2, delay: "1 minute" }, timeout: "1 minute" }, () => notifyVideo(this.env, id));
+      } catch { console.error("Video notification requires reconciliation", { jobId: id }); }
     }
   }
 }

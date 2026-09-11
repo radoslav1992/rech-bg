@@ -14,6 +14,7 @@ import {
   Video,
 } from "lucide-react";
 import { api, number, Notice, useAuth, type Project, type Job } from "./lib";
+import { useJobs, jobLink, jobStatus } from "./JobActivity";
 const icons = { tts: FileText, podcast: Podcast, voiceover: Video };
 const statusNames: Record<string, string> = {
   completed: "Готов",
@@ -24,13 +25,12 @@ const statusNames: Record<string, string> = {
 export function Dashboard() {
   const { user, refresh } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
-  const [jobs, setJobs] = useState<Job[]>([]);
+  const { jobs, error: jobsError } = useJobs();
   const [error, setError] = useState("");
   useEffect(() => {
-    Promise.all([api("/projects"), api("/jobs")])
-      .then(([p, j]) => {
+    api("/projects")
+      .then((p) => {
         setProjects(p.projects);
-        setJobs(j.jobs);
       })
       .catch((e) => setError(e.message));
     void refresh();
@@ -62,6 +62,18 @@ export function Dashboard() {
         </Link>
       </div>
       {error && <Notice>{error}</Notice>}
+      <section id="activity" className="background-recordings">
+        <div className="sub-heading"><h2>Вашите записи</h2><span>Обновяват се автоматично</span></div>
+        <p>Не е нужно да чакате тук. Записите се създават и когато затворите приложението.</p>
+        {jobsError && <Notice>{jobsError}</Notice>}
+        {jobs.length ? [...jobs.filter(j => ["queued", "running"].includes(j.status)), ...jobs.filter(j => !["queued", "running"].includes(j.status)).slice(0, 5)].map(j => <article className="background-recording" key={j.id}>
+          <div><strong>{j.title}</strong><small>{j.kind === "video" ? "Видео" : "Аудио"} · {new Date(j.created_at * 1000).toLocaleString("bg-BG")}</small></div>
+          <span className={"status " + j.status}>{jobStatus(j)}</span>
+          <div className="recording-actions"><Link className="btn outline small-btn" to={jobLink(j)}>{j.status === "completed" ? "Отворете" : "Подробности"}</Link>
+            {j.status === "completed" && <a className="btn dark small-btn" href={`/api/jobs/${j.id}/${j.kind === "video" ? "video" : "audio"}?download=1`}>Изтеглете {j.kind === "video" ? "MP4" : "WAV"}</a>}</div>
+          {j.notify_email && <small className="recording-email">{j.email_status === "sent" ? "Изпратено е известие по имейл." : j.email_status === "failed" ? "Имейлът не беше потвърден. Резултатът остава достъпен тук." : j.email_status === "sending" ? "Известието по имейл се обработва." : "Ще ви уведомим по имейл, когато обработката приключи."}</small>}
+        </article>) : <p className="small-note">Тук ще намирате готовите записи и тези, които се създават.</p>}
+      </section>
       <div className="dashboard-banner">
         <div>
           <span className="eyebrow">ОТ ДУМИ КЪМ ЗВУК</span>
@@ -142,7 +154,10 @@ export function Dashboard() {
           Вижте всички <ArrowUpRight size={16} />
         </Link>
       </div>
-      <ProjectList projects={projects.slice(0, 4)} />
+      <ProjectList projects={projects.slice(0, 4).map(p => {
+        const latest = jobs.find(j => j.project_id === p.id);
+        return latest ? { ...p, status: latest.status, latest_job: latest.id } : p;
+      })} />
     </div>
   );
 }

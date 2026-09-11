@@ -17,13 +17,13 @@ export const videoModels = {
   standard: "argil/avatars/audio-to-video",
   quality: "fal-ai/kling-video/ai-avatar/v2/pro",
 } as const;
-export type VideoMeta = { avatar: string; imageKey?: string; imageMime?: string; token: string; consent: boolean };
+export type VideoMeta = { avatar: string; imageKey?: string; imageMime?: string; token: string; consent: boolean; notifyEmail?: boolean };
 export async function failVideo(env: Env, id: string, message = "Видеото не беше създадено. Кредитите за него са върнати. Аудиозаписът остава наличен.") {
   await env.DB.prepare("UPDATE jobs SET status='failed',error=?,updated_at=? WHERE id=? AND status IN ('queued','running')")
     .bind(message, now(), id).run();
 }
 export const videos = new Hono<{ Bindings: Env; Variables: ContextVars }>();
-videos.get("/config", (c) => c.json({ enabled: !!(c.env.FAL_KEY && c.env.VIDEO_GENERATION), avatars, tiers: videoTiers }));
+videos.get("/config", (c) => c.json({ enabled: !!(c.env.FAL_KEY && c.env.VIDEO_GENERATION), emailNotifications: !!c.env.EMAIL, avatars, tiers: videoTiers }));
 videos.post("/", async (c) => {
   const user = c.get("user");
   if (!user.verified) throw new HTTPException(403, { message: "Потвърдете имейла си, за да създадете видео." });
@@ -46,7 +46,7 @@ videos.post("/", async (c) => {
   if (credits !== d.credits) throw new HTTPException(409, { message: "Цената е променена. Обновете страницата и потвърдете отново." });
   if (!(await c.env.AUDIO.head(source.audio_key))) throw new HTTPException(404, { message: "Аудиозаписът вече не е наличен." });
   const id = uid();
-  const meta: VideoMeta = { avatar: String(form.get("avatar") || ""), token: token(), consent: form.get("consent") === "true" };
+  const meta: VideoMeta = { avatar: String(form.get("avatar") || ""), token: token(), consent: form.get("consent") === "true", notifyEmail: !!c.env.EMAIL && form.get("notifyEmail") === "true" };
   let image: Uint8Array | undefined;
   if (d.tier === "standard") {
     if (!Object.hasOwn(avatarMap, meta.avatar)) throw new HTTPException(400, { message: "Изберете аватар." });

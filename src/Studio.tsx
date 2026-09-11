@@ -20,6 +20,7 @@ import {
   Video,
 } from "lucide-react";
 import { VideoPanel } from "./VideoPanel";
+import { jobsChanged, jobStatus } from "./JobActivity";
 import { voiceList } from "../shared/catalog";
 import { segments } from "../shared/text";
 import {
@@ -98,7 +99,13 @@ export function Studio() {
         .then((d) => {
           const list = d.jobs.filter((j: Job) => j.project_id === id);
           setHistory(list);
-          setJob(list[0] || null);
+          setJob(list.find((j: Job) => j.id === params.get("job")) || list[0] || null);
+          const selectedId = params.get("job");
+          if (selectedId && !list.some((j: Job) => j.id === selectedId)) {
+            api("/jobs/" + encodeURIComponent(selectedId)).then(({ job: selected }) => {
+              if (selected.project_id === projectId.current) setJob(selected);
+            }).catch(() => {});
+          }
         })
         .catch(() => {});
     } else {
@@ -120,14 +127,17 @@ export function Studio() {
   }, [id, params.toString()]);
   useEffect(() => {
     if (!job || !["queued", "running"].includes(job.status)) return;
+    let stopped = false;
     const timer = setInterval(
       () =>
         api("/jobs/" + job.id)
           .then(({ job: j }) => {
+            if (stopped) return;
             setJob(j);
             if (["completed", "failed"].includes(j.status)) {
               requestKey.current = crypto.randomUUID();
               void refresh();
+              jobsChanged();
               api("/jobs")
                 .then((d) =>
                   setHistory(
@@ -142,7 +152,7 @@ export function Studio() {
           .catch((e) => setError(e.message)),
       3500,
     );
-    return () => clearInterval(timer);
+    return () => { stopped = true; clearInterval(timer); };
   }, [job?.id, job?.status]);
   useEffect(() => {
     if (!dirty) return;
@@ -210,6 +220,7 @@ export function Studio() {
       });
       const d = await api("/jobs/" + r.id);
       setJob(d.job);
+      jobsChanged();
       await refresh();
     } catch (e) {
       setError((e as Error).message);
@@ -554,8 +565,7 @@ export function Studio() {
               <div className="output-empty">
                 <AudioLines className="pulse" size={32} />
                 <p>
-                  Създаваме вашия запис. Можете да продължите работа — ще го
-                  намерите в проекта.
+                  {jobStatus(job)}. Можете да затворите страницата — записът ще ви очаква тук.
                 </p>
               </div>
             )}
@@ -584,7 +594,7 @@ export function Studio() {
               </details>
             )}
           </section>
-          <VideoPanel key={id || "new"} currentJob={job} jobs={[...(job ? [job] : []), ...history.filter(j => j.id !== job?.id)]} disabled={busy || active} onCreated={j => { setJob(j); setHistory(h => [j, ...h.filter(x => x.id !== j.id)]); }} />
+          <VideoPanel key={id || "new"} currentJob={job} jobs={[...(job ? [job] : []), ...history.filter(j => j.id !== job?.id)]} disabled={busy || active} onCreated={j => { setJob(j); setHistory(h => [j, ...h.filter(x => x.id !== j.id)]); jobsChanged(); }} />
         </>
       )}
     </div>

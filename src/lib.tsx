@@ -35,6 +35,9 @@ export type Project = {
   duration?: number;
 };
 export type Job = {
+  video_phase?: "queued" | "processing" | "saving" | null;
+  notify_email?: boolean;
+  email_status?: "sending" | "sent" | "failed" | null;
   kind?: "audio" | "video";
   mode?: string;
   video_tier?: "standard" | "quality";

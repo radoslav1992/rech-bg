@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { Film, Sparkles, ImagePlus } from "lucide-react";
 import { avatars, videoTiers, videoCredits, type VideoTier } from "../shared/video";
 import { api, Button, Notice, number, useAuth, type Job } from "./lib";
+import { jobStatus } from "./JobActivity";
 export function VideoPanel({ jobs, currentJob, disabled, onCreated }: { jobs: Job[]; currentJob: Job | null; disabled: boolean; onCreated: (job: Job) => void }) {
   const { user, refresh } = useAuth();
   const [enabled, setEnabled] = useState<boolean | null>(null);
@@ -12,6 +13,8 @@ export function VideoPanel({ jobs, currentJob, disabled, onCreated }: { jobs: Jo
   const [image, setImage] = useState<File | null>(null);
   const [imageUrl, setImageUrl] = useState("");
   const [consent, setConsent] = useState(false);
+  const [emailAvailable, setEmailAvailable] = useState(false);
+  const [notifyEmail, setNotifyEmail] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const key = useRef(crypto.randomUUID());
@@ -22,7 +25,7 @@ export function VideoPanel({ jobs, currentJob, disabled, onCreated }: { jobs: Jo
     try { cost = videoCredits(source.duration, tier); } catch (e) { durationError = (e as Error).message; }
   }
   const remaining = Math.max(0, (user?.limit || 0) - (user?.used || 0));
-  useEffect(() => { api("/videos/config").then(d => setEnabled(d.enabled)).catch(() => setEnabled(false)); }, []);
+  useEffect(() => { api("/videos/config").then(d => { setEnabled(d.enabled); setEmailAvailable(d.emailNotifications); }).catch(() => setEnabled(false)); }, []);
   useEffect(() => {
     if (!image) { setImageUrl(""); return; }
     const url = URL.createObjectURL(image); setImageUrl(url);
@@ -37,6 +40,7 @@ export function VideoPanel({ jobs, currentJob, disabled, onCreated }: { jobs: Jo
       body.set("sourceId", source.id); body.set("tier", tier);
       body.set("idempotencyKey", key.current); body.set("credits", String(cost));
       body.set("avatar", avatar); body.set("consent", String(consent));
+      body.set("notifyEmail", String(emailAvailable && notifyEmail));
       if (tier === "quality" && image) body.set("image", image);
       const result = await api("/videos", { method: "POST", body });
       const { job } = await api("/jobs/" + result.id);
@@ -49,7 +53,7 @@ export function VideoPanel({ jobs, currentJob, disabled, onCreated }: { jobs: Jo
     <p>Превърнете готовия си аудиозапис в говорещо видео. Изберете водещ или оживете свой портрет.</p>
     <div aria-live="polite">
       {currentJob?.kind === "video" && currentJob.status === "failed" && <Notice>{currentJob.error} Номер на заявката: {currentJob.id}</Notice>}
-      {currentJob?.kind === "video" && ["queued", "running"].includes(currentJob.status) && <p>Видеото се създава. Това може да отнеме няколко минути.</p>}
+      {currentJob?.kind === "video" && ["queued", "running"].includes(currentJob.status) && <div className="video-background-confirmation"><h3>Заявката е приета. Ние поемаме оттук.</h3><p>{jobStatus(currentJob)}. Можете да затворите приложението или да продължите с проектите си. {currentJob.notify_email && "Ще ви изпратим имейл, когато обработката приключи."}</p><Link className="btn dark" to="/app#activity">Към моите записи</Link></div>}
       {currentJob?.kind === "video" && currentJob.status === "completed" && <p>Видеото е готово. Можете да го гледате и изтеглите от „Вашият запис“ по-горе.</p>}
     </div>
     {enabled === false && <Notice>Създаването на видео ще бъде достъпно скоро.</Notice>}
@@ -76,6 +80,7 @@ export function VideoPanel({ jobs, currentJob, disabled, onCreated }: { jobs: Jo
           {imageUrl && <img src={imageUrl} alt="Вашият портрет за видеото" />}
           <label className="checkbox-label"><input type="checkbox" checked={consent} onChange={e => edit(() => setConsent(e.target.checked))} /> Имам право да използвам изображението и съгласието на изобразения човек.</label>
         </div>}
+        {emailAvailable && <label className="checkbox-label"><input type="checkbox" checked={notifyEmail} onChange={e => edit(() => setNotifyEmail(e.target.checked))} /> Уведоми ме по имейл, когато видеото е готово или ако възникне грешка.</label>}
       </fieldset>
       {durationError && <Notice>{durationError}</Notice>}
       {error && <Notice>{error}</Notice>}
