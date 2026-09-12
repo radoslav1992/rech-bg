@@ -7,7 +7,7 @@ import { videoCredits } from "../shared/video";
 import { videoFailureMessage } from "../server/video-errors";
 import { notifyVideo } from "../server/video-notifications";
 import { database, bucket } from "./helpers";
-const ticket = { request_id: "remote-1", status_url: "https://queue.fal.run/argil/avatars/requests/remote-1/status", response_url: "https://queue.fal.run/argil/avatars/requests/remote-1", cancel_url: "https://queue.fal.run/argil/avatars/requests/remote-1/cancel" };
+const ticket = { request_id: "remote-1", status_url: "https://queue.fal.run/fal-ai/kling-video/requests/remote-1/status", response_url: "https://queue.fal.run/fal-ai/kling-video/requests/remote-1", cancel_url: "https://queue.fal.run/fal-ai/kling-video/requests/remote-1/cancel" };
 const videoUrl = "https://v3.fal.media/files/test.mp4";
 const mp4 = new Uint8Array([0,0,0,24,102,116,121,112,105,115,111,109,0,0,0,0,105,115,111,109,109,112,52,50]);
 const png = new Uint8Array([137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82,0,0,1,44,0,0,1,44]);
@@ -19,9 +19,10 @@ function request(path: string, init: RequestInit = {}, cookie = true) {
     ...init, headers: { Origin: "https://rechbg.com", ...(cookie ? { Cookie: "rech_session=test-session" } : {}), ...init.headers },
   }), env, { waitUntil: () => {} } as any);
 }
-function form(tier = "standard", changes: Record<string, string> = {}) {
+function form(tier = "medium", changes: Record<string, string> = {}) {
   const body = new FormData();
-  for (const [key, value] of Object.entries({ sourceId, tier, idempotencyKey: crypto.randomUUID(), credits: tier === "standard" ? "9000" : "36000", avatar: "mia", ...changes })) body.set(key, value);
+  for (const [key, value] of Object.entries({ sourceId, tier, idempotencyKey: crypto.randomUUID(), credits: tier === "high" ? "36000" : tier === "low" ? "6000" : "18000", consent: "true", ...changes })) body.set(key, value);
+  body.set("image", new Blob([png]), "portrait.png");
   return body;
 }
 async function create(body = form()) {
@@ -57,19 +58,21 @@ beforeEach(async () => {
 afterEach(() => { vi.unstubAllGlobals(); sqlite.close(); });
 describe("Video credits and request validation", () => {
   it("prices real duration, rounding up, and bounds supported clips", () => {
-    expect(videoCredits(30, "standard")).toBe(9000);
-    expect(videoCredits(30.1, "quality")).toBe(37200);
-    expect(() => videoCredits(4.9, "standard")).toThrow();
-    expect(() => videoCredits(60.1, "standard")).toThrow();
-    expect(() => videoCredits(NaN, "quality")).toThrow();
+    expect(videoCredits(30, "medium")).toBe(18000);
+    expect(videoCredits(30, "low")).toBe(6000);
+    expect(videoCredits(30.1, "low")).toBe(6200);
+    expect(videoCredits(30.1, "high")).toBe(37200);
+    expect(() => videoCredits(4.9, "medium")).toThrow();
+    expect(() => videoCredits(60.1, "medium")).toThrow();
+    expect(() => videoCredits(NaN, "high")).toThrow();
   });
   it("reserves credits once for retries and enforces a single active job", async () => {
     const body = form(); const id = await create(body);
     const retry = await request("/videos", { method: "POST", body });
     expect((await retry.json() as any).id).toBe(id);
-    expect(used()).toBe(9100); expect(env.VIDEO_GENERATION.create).toHaveBeenCalledTimes(1);
+    expect(used()).toBe(18100); expect(env.VIDEO_GENERATION.create).toHaveBeenCalledTimes(1);
     expect((await request("/videos", { method: "POST", body: form() })).status).toBe(409);
-    expect(used()).toBe(9100);
+    expect(used()).toBe(18100);
   });
   it("rejects missing auth, unverified users, cross-origin requests and missing configuration", async () => {
     expect((await request("/videos", { method: "POST", body: form() }, false)).status).toBe(401);
@@ -80,10 +83,10 @@ describe("Video credits and request validation", () => {
     expect((await request("/videos", { method: "POST", body: form() })).status).toBe(503);
     expect(used()).toBe(100);
   });
-  it("rejects forged costs, unknown avatars, missing source and insufficient credits", async () => {
-    expect((await request("/videos", { method: "POST", body: form("standard", { credits: "1" }) })).status).toBe(409);
-    expect((await request("/videos", { method: "POST", body: form("standard", { avatar: "toString" }) })).status).toBe(400);
-    expect((await request("/videos", { method: "POST", body: form("standard", { sourceId: crypto.randomUUID() }) })).status).toBe(404);
+  it("rejects forged costs, missing consent, missing source and insufficient credits", async () => {
+    expect((await request("/videos", { method: "POST", body: form("medium", { credits: "1" }) })).status).toBe(409);
+    expect((await request("/videos", { method: "POST", body: form("medium", { consent: "false" }) })).status).toBe(400);
+    expect((await request("/videos", { method: "POST", body: form("medium", { sourceId: crypto.randomUUID() }) })).status).toBe(404);
     sqlite.prepare("UPDATE jobs SET user_id='other' WHERE id=?").run(sourceId);
     expect((await request("/videos", { method: "POST", body: form() })).status).toBe(404);
     sqlite.prepare("UPDATE jobs SET user_id='u',mode='podcast' WHERE id=?").run(sourceId);
@@ -94,15 +97,15 @@ describe("Video credits and request validation", () => {
     expect(used()).toBe(100); expect(env.VIDEO_GENERATION.create).not.toHaveBeenCalled();
   });
   it("requires a real image and consent for high quality", async () => {
-    expect((await request("/videos", { method: "POST", body: form("quality") })).status).toBe(400);
-    const bad = form("quality", { consent: "true" }); bad.set("image", new Blob(["x".repeat(100)]), "portrait.png");
+    expect((await request("/videos", { method: "POST", body: form("high", { consent: "false" }) })).status).toBe(400);
+    const bad = form("high", { consent: "true" }); bad.set("image", new Blob(["x".repeat(100)]), "portrait.png");
     expect((await request("/videos", { method: "POST", body: bad })).status).toBe(400);
-    const body = form("quality", { consent: "true" }); body.set("image", new Blob([png]), "portrait.png");
+    const body = form("high", { consent: "true" }); body.set("image", new Blob([png]), "portrait.png");
     await create(body); expect(used()).toBe(36100);
   });
   it("keeps a reservation on ambiguous dispatch and cron selects the video workflow", async () => {
     env.VIDEO_GENERATION.create.mockRejectedValueOnce(new Error("timeout"));
-    const id = await create(); expect(used()).toBe(9100);
+    const id = await create(); expect(used()).toBe(18100);
     sqlite.prepare("UPDATE jobs SET updated_at=? WHERE id=?").run(now()-1000, id);
     env.VIDEO_GENERATION.get.mockRejectedValue(new Error("not found"));
     await maintenance(env);
@@ -110,11 +113,108 @@ describe("Video credits and request validation", () => {
     expect(env.GENERATION.get).not.toHaveBeenCalled();
   });
 });
+describe("Three-tier provider routing", () => {
+  it("enables each tier independently and rejects unavailable tiers before reserving credits", async () => {
+    let config = await (await request("/videos/config")).json() as any;
+    expect(config.tiers.low.enabled).toBe(false);
+    expect(config.tiers.medium.enabled).toBe(true);
+    expect(config.tiers.high.enabled).toBe(true);
+    expect((await request("/videos", { method: "POST", body: form("low") })).status).toBe(503);
+    expect(used()).toBe(100);
+    env.WAVESPEED_API_KEY = "wave-secret"; delete env.FAL_KEY;
+    config = await (await request("/videos/config")).json() as any;
+    expect(config.enabled).toBe(true);
+    expect(config.tiers.low.enabled).toBe(true);
+    expect(config.tiers.medium.enabled).toBe(false);
+    expect(config.tiers.high.enabled).toBe(false);
+    expect((await request("/videos", { method: "POST", body: form("high") })).status).toBe(503);
+    expect((await request("/videos", { method: "POST", body: form("low", { consent: "false" }) })).status).toBe(400);
+    const noImage = form("low"); noImage.delete("image");
+    expect((await request("/videos", { method: "POST", body: noImage })).status).toBe(400);
+    expect(used()).toBe(100);
+  });
+  it("completes low-quality video through WaveSpeed with private inputs and no fal credential", async () => {
+    env.WAVESPEED_API_KEY = " wave-secret\n"; delete env.FAL_KEY;
+    const id = await create(form("low"));
+    const output = "https://cdn.wavespeed.ai/outputs/clip.mp4";
+    const statusUrl = "https://api.wavespeed.ai/api/v3/predictions/wave-1/result";
+    let checks = 0;
+    const mock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === output) { expect(init?.headers).toBeUndefined(); return new Response(mp4); }
+      expect((init?.headers as any).Authorization).toBe("Bearer wave-secret");
+      if (init?.method === "POST") {
+        expect(url).toBe("https://api.wavespeed.ai/api/v3/wavespeed-ai/infinitetalk-fast");
+        const input = JSON.parse(init.body as string);
+        expect(Object.keys(input).sort()).toEqual(["audio", "image"]);
+        for (const asset of ["audio", "image"]) {
+          const u = new URL(input[asset]);
+          expect(u.pathname).toBe(`/api/video-inputs/${id}/${asset}`);
+          expect((await request(u.pathname.replace("/api", "") + u.search, {}, false)).status).toBe(200);
+        }
+        return Response.json({ code: 200, data: { id: "wave-1", status: "created", urls: { get: "https://evil.test/status" } } });
+      }
+      expect(url).toBe(statusUrl);
+      return Response.json({ code: 200, data: { id: "wave-1", status: ++checks === 1 ? "created" : checks === 2 ? "processing" : "completed", outputs: checks >= 3 ? [output] : [] } });
+    }); vi.stubGlobal("fetch", mock);
+    await new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step);
+    const row = sqlite.prepare("SELECT * FROM jobs WHERE id=?").get(id)!;
+    expect(row.status).toBe("completed"); expect(used()).toBe(6100);
+    expect(JSON.parse(row.provider_request as string)).toMatchObject({ provider: "wavespeed", request_id: "wave-1", status_url: statusUrl });
+    expect(env.AUDIO.objects.has(JSON.parse(row.video_meta as string).imageKey)).toBe(false);
+    expect((await (await request(`/jobs/${id}`)).json() as any).job.video_tier).toBe("low");
+    expect(new Uint8Array(await (await request(`/jobs/${id}/video`)).arrayBuffer())).toEqual(mp4);
+    expect(mock.mock.calls.filter(c => c[1]?.method === "POST")).toHaveLength(1);
+  });
+  it.each(["failed", "cancelled", "timeout", "deleted"])("refunds low-quality credits once on provider status %s", async terminal => {
+    env.WAVESPEED_API_KEY = "wave-secret";
+    const id = await create(form("low"));
+    const mock = vi.fn(async (_url: string, init?: RequestInit) => Response.json({ code: 200, data: {
+      id: "wave-1", status: init?.method === "POST" ? "created" : terminal, error: "private input-url and provider details",
+    } })); vi.stubGlobal("fetch", mock);
+    const flow = new (VideoGeneration as any)({}, env);
+    await expect(flow.run({ payload: { jobId: id } }, step)).rejects.toThrow();
+    await expect(flow.run({ payload: { jobId: id } }, step)).rejects.toThrow();
+    expect(used()).toBe(100);
+    expect(mock.mock.calls.filter(c => c[1]?.method === "POST")).toHaveLength(1);
+    expect(await (await request(`/jobs/${id}`)).text()).not.toContain("private input-url");
+  });
+  it("handles WaveSpeed application errors in HTTP 200 responses without keeping reserved credits", async () => {
+    env.WAVESPEED_API_KEY = "wave-secret";
+    const id = await create(form("low"));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ code: 402, message: "insufficient balance" })));
+    await expect(new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step)).rejects.toThrow("VIDEO_SUBMIT_BALANCE_402");
+    expect(used()).toBe(100);
+  });
+  it("resumes a saved WaveSpeed ticket without another paid POST", async () => {
+    env.WAVESPEED_API_KEY = "wave-secret";
+    const id = await create(form("low"));
+    sqlite.prepare("UPDATE jobs SET submitted_at=?,provider_request=? WHERE id=?").run(now(), JSON.stringify({ provider: "wavespeed", request_id: "wave-1", status_url: "https://evil.test", response_url: "https://evil.test" }), id);
+    const mock = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(init?.method).not.toBe("POST");
+      if (url === videoUrl) { expect(init?.headers).toBeUndefined(); return new Response(mp4); }
+      expect(url).toBe("https://api.wavespeed.ai/api/v3/predictions/wave-1/result");
+      return Response.json({ data: { id: "wave-1", status: "completed", outputs: [{ url: videoUrl }] } });
+    }); vi.stubGlobal("fetch", mock);
+    await new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step);
+    expect(used()).toBe(6100);
+  });
+  it("preserves old Argil job routing and does not offer Argil for new requests", async () => {
+    expect((await request("/videos", { method: "POST", body: form("standard") })).status).toBe(400);
+    const id = await create();
+    sqlite.prepare("UPDATE jobs SET video_tier='standard',video_meta=json_set(json_remove(video_meta,'$.tier'),'$.avatar','mia') WHERE id=?").run(id);
+    const mock = mockProvider();
+    await new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step);
+    const call = mock.mock.calls.find(c => c[1]?.method === "POST")!;
+    expect(call[0]).toBe("https://queue.fal.run/argil/avatars/audio-to-video");
+    expect(JSON.parse(call[1]!.body as string).avatar).toBe("Mia outdoor (UGC)");
+    expect(used()).toBe(18100);
+  });
+});
 describe("Video workflow and private assets", () => {
   it("notifies the verified owner once after completion with a link to the exact video", async () => {
     const send = vi.fn().mockResolvedValue({ messageId: "mail-1" });
     env.EMAIL = { send };
-    const id = await create(form("standard", { notifyEmail: "true" }));
+    const id = await create(form("medium", { notifyEmail: "true" }));
     mockProvider();
     await new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step);
     await notifyVideo(env, id);
@@ -128,12 +228,12 @@ describe("Video workflow and private assets", () => {
   });
   it("keeps completed media and charged quota if email delivery fails", async () => {
     const send = vi.fn().mockRejectedValue(new Error("Email unavailable")); env.EMAIL = { send };
-    const id = await create(form("standard", { notifyEmail: "true" }));
+    const id = await create(form("medium", { notifyEmail: "true" }));
     mockProvider();
     await new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step);
     await notifyVideo(env, id);
     expect(send).toHaveBeenCalledTimes(1);
-    expect(used()).toBe(9100);
+    expect(used()).toBe(18100);
     expect((await (await request(`/jobs/${id}`)).json() as any).job).toMatchObject({ status: "completed", email_status: "failed" });
     expect((await request(`/jobs/${id}/video`)).status).toBe(200);
   });
@@ -145,7 +245,7 @@ describe("Video workflow and private assets", () => {
   });
   it("notifies of failure only after refunding video credits", async () => {
     const send = vi.fn(async () => { expect(used()).toBe(100); return { messageId: "failed-mail" }; }); env.EMAIL = { send };
-    const id = await create(form("standard", { notifyEmail: "true" }));
+    const id = await create(form("medium", { notifyEmail: "true" }));
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ detail: "Payment required" }, { status: 402 })));
     await expect(new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step)).rejects.toThrow();
     expect(send).toHaveBeenCalledTimes(1);
@@ -181,7 +281,7 @@ describe("Video workflow and private assets", () => {
     expect(used()).toBe(100);
     expect(mock.mock.calls.filter(c => c[1]?.method === "POST")).toHaveLength(1);
   });
-  it("completes Argil generation, stores MP4 privately and expires input access", async () => {
+  it("completes Kling Standard generation, stores MP4 privately and expires input access", async () => {
     delete env.SITE_URL;
     env.FAL_KEY = " test-secret\n";
     const id = await create(); const mock = mockProvider();
@@ -192,14 +292,14 @@ describe("Video workflow and private assets", () => {
     expect(detail).not.toContain(meta.token); expect(detail).not.toContain("video_meta");
     await new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step);
     const submitted = mock.mock.calls.find(c => c[1]?.method === "POST")!;
-    expect(submitted[0]).toBe("https://queue.fal.run/argil/avatars/audio-to-video");
+    expect(submitted[0]).toBe("https://queue.fal.run/fal-ai/kling-video/ai-avatar/v2/standard");
     expect((submitted[1]!.headers as any).Authorization).toBe("Key test-secret");
     const input = JSON.parse(submitted[1]!.body as string);
     expect(new URL(input.audio_url).origin).toBe("https://rechbg.com");
-    expect(input.avatar).toBe("Mia outdoor (UGC)"); expect(typeof input.audio_url).toBe("string");
-    expect(input.remove_background).toBe(false);
+    expect(typeof input.image_url).toBe("string"); expect(typeof input.audio_url).toBe("string");
+    expect(input.avatar).toBeUndefined();
     expect(sqlite.prepare("SELECT status FROM jobs WHERE id=?").get(id)!.status).toBe("completed");
-    expect(used()).toBe(9100);
+    expect(used()).toBe(18100);
     expect((await request(`/video-inputs/${id}/audio?token=${meta.token}`, {}, false)).status).toBe(404);
     expect((await request(`/jobs/${id}/video`, {}, false)).status).toBe(401);
     const r = await request(`/jobs/${id}/video?download=1`);
@@ -209,7 +309,7 @@ describe("Video workflow and private assets", () => {
     expect(download[1]?.headers).toBeUndefined();
   });
   it("submits Kling Pro with a protected portrait and deletes the temporary image", async () => {
-    const body = form("quality", { consent: "true" }); body.set("image", new Blob([png]), "portrait.png");
+    const body = form("high", { consent: "true" }); body.set("image", new Blob([png]), "portrait.png");
     const id = await create(body); const mock = mockProvider();
     const meta = JSON.parse(sqlite.prepare("SELECT video_meta FROM jobs WHERE id=?").get(id)!.video_meta as string);
     expect((await request(`/video-inputs/${id}/image?token=${meta.token}`, {}, false)).status).toBe(200);

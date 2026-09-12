@@ -343,7 +343,7 @@ const publicJob = (j: any) => {
   return ({
   id: j.id, project_id: j.project_id, title: j.title, status: j.status,
   chars: j.chars, duration: j.duration, created_at: j.created_at, error: j.error,
-  kind: j.kind || "audio", video_tier: j.video_tier || null,
+  kind: j.kind || "audio", video_tier: ["low", "medium", "high"].includes(meta.tier) ? meta.tier : j.video_tier || null,
   source_job_id: j.source_job_id || null, mode: j.mode,
   video_phase: ["queued", "processing", "saving"].includes(meta.phase) ? meta.phase : null,
   notify_email: meta.notifyEmail === true,

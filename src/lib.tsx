@@ -40,7 +40,7 @@ export type Job = {
   email_status?: "sending" | "sent" | "failed" | null;
   kind?: "audio" | "video";
   mode?: string;
-  video_tier?: "standard" | "quality";
+  video_tier?: "low" | "medium" | "high" | "standard" | "quality";
   source_job_id?: string;
   id: string;
   project_id: string;

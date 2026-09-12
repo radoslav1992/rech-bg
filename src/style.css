@@ -4277,7 +4277,8 @@ label,
 .avatar-fields { border: 0; padding: 0; margin: 24px 0; min-width: 0; display: grid; gap: 20px; }
 .avatar-fields label { display: grid; gap: 9px; font-size: .85rem; }
 .avatar-fields select, .avatar-fields input[type=file] { width: 100%; padding: 13px; border: 1px solid var(--border); background: var(--paper, #fff); border-radius: 10px; font: inherit; }
-.avatar-tiers { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.avatar-tiers { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.avatar-tiers button:disabled { opacity: .55; cursor: not-allowed; }
 .avatar-tiers button { text-align: left; padding: 20px; border: 1px solid var(--border); border-radius: 14px; background: #f6f5f2; display: grid; gap: 8px; color: inherit; cursor: pointer; }
 .avatar-tiers button.selected { border: 2px solid #252724; padding: 19px; background: #efeee9; }
 .avatar-tiers button small { color: #646660; line-height: 1.5; }

@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Film, Sparkles, ImagePlus } from "lucide-react";
-import { avatars, videoTiers, videoCredits, type VideoTier } from "../shared/video";
+import { videoTiers, videoCredits, type VideoTier } from "../shared/video";
 import { api, Button, Notice, number, useAuth, type Job } from "./lib";
 import { jobStatus } from "./JobActivity";
 export function VideoPanel({ jobs, currentJob, disabled, onCreated }: { jobs: Job[]; currentJob: Job | null; disabled: boolean; onCreated: (job: Job) => void }) {
   const { user, refresh } = useAuth();
   const [enabled, setEnabled] = useState<boolean | null>(null);
-  const [tier, setTier] = useState<VideoTier>("standard");
+  const [tier, setTier] = useState<VideoTier>("medium");
+  const [available, setAvailable] = useState<Record<VideoTier, boolean>>({ low: false, medium: false, high: false });
   const [sourceId, setSourceId] = useState("");
-  const [avatar, setAvatar] = useState<string>(avatars[0].id);
   const [image, setImage] = useState<File | null>(null);
   const [imageUrl, setImageUrl] = useState("");
   const [consent, setConsent] = useState(false);
@@ -25,7 +25,12 @@ export function VideoPanel({ jobs, currentJob, disabled, onCreated }: { jobs: Jo
     try { cost = videoCredits(source.duration, tier); } catch (e) { durationError = (e as Error).message; }
   }
   const remaining = Math.max(0, (user?.limit || 0) - (user?.used || 0));
-  useEffect(() => { api("/videos/config").then(d => { setEnabled(d.enabled); setEmailAvailable(d.emailNotifications); }).catch(() => setEnabled(false)); }, []);
+  useEffect(() => { api("/videos/config").then(d => {
+    setEnabled(d.enabled); setEmailAvailable(d.emailNotifications);
+    const enabledTiers = { low: !!d.tiers.low?.enabled, medium: !!d.tiers.medium?.enabled, high: !!d.tiers.high?.enabled };
+    setAvailable(enabledTiers);
+    setTier(enabledTiers.medium ? "medium" : enabledTiers.low ? "low" : "high");
+  }).catch(() => setEnabled(false)); }, []);
   useEffect(() => {
     if (!image) { setImageUrl(""); return; }
     const url = URL.createObjectURL(image); setImageUrl(url);
@@ -39,9 +44,9 @@ export function VideoPanel({ jobs, currentJob, disabled, onCreated }: { jobs: Jo
       const body = new FormData();
       body.set("sourceId", source.id); body.set("tier", tier);
       body.set("idempotencyKey", key.current); body.set("credits", String(cost));
-      body.set("avatar", avatar); body.set("consent", String(consent));
+      body.set("consent", String(consent));
       body.set("notifyEmail", String(emailAvailable && notifyEmail));
-      if (tier === "quality" && image) body.set("image", image);
+      if (image) body.set("image", image);
       const result = await api("/videos", { method: "POST", body });
       const { job } = await api("/jobs/" + result.id);
       onCreated(job); key.current = crypto.randomUUID(); await refresh();
@@ -50,7 +55,7 @@ export function VideoPanel({ jobs, currentJob, disabled, onCreated }: { jobs: Jo
   };
   return <section className="output-panel avatar-panel">
     <div className="sub-heading"><h2><Film size={22} /> Дайте лице на гласа</h2><span>ВИДЕО АВАТАР</span></div>
-    <p>Превърнете готовия си аудиозапис в говорещо видео. Изберете водещ или оживете свой портрет.</p>
+    <p>Превърнете готовия си аудиозапис в говорещо видео. Качете портрет и изберете едно от трите нива на качество.</p>
     <div aria-live="polite">
       {currentJob?.kind === "video" && currentJob.status === "failed" && <Notice>{currentJob.error} Номер на заявката: {currentJob.id}</Notice>}
       {currentJob?.kind === "video" && ["queued", "running"].includes(currentJob.status) && <div className="video-background-confirmation"><h3>Заявката е приета. Ние поемаме оттук.</h3><p>{jobStatus(currentJob)}. Можете да затворите приложението или да продължите с проектите си. {currentJob.notify_email && "Ще ви изпратим имейл, когато обработката приключи."}</p><Link className="btn dark" to="/app#activity">Към моите записи</Link></div>}
@@ -63,14 +68,12 @@ export function VideoPanel({ jobs, currentJob, disabled, onCreated }: { jobs: Jo
           {sources.map(j => <option key={j.id} value={j.id}>{j.title} · {Math.ceil(j.duration)} сек. · {new Date(j.created_at * 1000).toLocaleString("bg")}</option>)}
         </select></label>
         <div className="avatar-tiers" role="group" aria-label="Качество на видеото">
-          {(Object.keys(videoTiers) as VideoTier[]).map(id => <button type="button" key={id} aria-pressed={tier === id} className={tier === id ? "selected" : ""} onClick={() => edit(() => setTier(id))}>
+          {(Object.keys(videoTiers) as VideoTier[]).map(id => <button type="button" key={id} disabled={!available[id]} aria-pressed={tier === id} className={tier === id ? "selected" : ""} onClick={() => edit(() => setTier(id))}>
             <strong>{videoTiers[id].name}</strong><span>{number(videoTiers[id].creditsPerSecond)} кредита / сек.</span>
-            <small>{id === "standard" ? "Готови водещи за вашите истории" : "Ваш портрет с изразително движение"}</small>
+            <small>{available[id] ? videoTiers[id].description : "Временно недостъпно"}</small>
           </button>)}
         </div>
-        {tier === "standard" ? <label>Изберете водещ<select value={avatar} onChange={e => edit(() => setAvatar(e.target.value))}>
-          {avatars.map(a => <option key={a.id} value={a.id}>{a.name} · {a.scene}</option>)}
-        </select></label> : <div className="avatar-portrait">
+        <div className="avatar-portrait">
           <label><ImagePlus size={18} /> Вашият портрет<input type="file" accept="image/jpeg,image/png" onChange={e => edit(() => {
             const file = e.target.files?.[0] || null;
             if (file && file.size > 2 * 1024 * 1024) { setImage(null); e.target.value = ""; setError("Изберете изображение до 2 MB."); return; }
@@ -79,14 +82,14 @@ export function VideoPanel({ jobs, currentJob, disabled, onCreated }: { jobs: Jo
           <p className="small-note">JPG или PNG до 2 MB, с ясно видимо лице. За вертикално видео използвайте вертикален портрет.</p>
           {imageUrl && <img src={imageUrl} alt="Вашият портрет за видеото" />}
           <label className="checkbox-label"><input type="checkbox" checked={consent} onChange={e => edit(() => setConsent(e.target.checked))} /> Имам право да използвам изображението и съгласието на изобразения човек.</label>
-        </div>}
+        </div>
         {emailAvailable && <label className="checkbox-label"><input type="checkbox" checked={notifyEmail} onChange={e => edit(() => setNotifyEmail(e.target.checked))} /> Уведоми ме по имейл, когато видеото е готово или ако възникне грешка.</label>}
       </fieldset>
       {durationError && <Notice>{durationError}</Notice>}
       {error && <Notice>{error}</Notice>}
       <div className="generate-bar">
         <div><strong>{number(cost)} кредита за видеото</strong><small>Налични: {number(remaining)} кредита</small></div>
-        <Button className="btn dark" busy={busy} disabled={disabled || !enabled || !user?.verified || !cost || cost > remaining || (tier === "quality" && (!image || !consent))} onClick={generate}>
+        <Button className="btn dark" busy={busy} disabled={disabled || !enabled || !available[tier] || !user?.verified || !cost || cost > remaining || !image || !consent} onClick={generate}>
           <Sparkles size={18} /> Създай видео · {number(cost)} кредита
         </Button>
       </div>

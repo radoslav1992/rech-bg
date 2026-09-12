@@ -7,6 +7,7 @@ export interface Env {
   GENERATION: Workflow<{ jobId: string }>;
   VIDEO_GENERATION?: Workflow<{ jobId: string }>;
   FAL_KEY?: string;
+  WAVESPEED_API_KEY?: string;
   ASSETS: Fetcher;
   SITE_URL?: string;
   APP_ENV?: string;
