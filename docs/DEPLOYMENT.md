@@ -136,6 +136,19 @@ Endpoint-ът проверява подписа върху оригинално�
 
 Обработката на refund/chargeback е чрез Stripe Dashboard и поддръжката. При възстановяване на цяла покупка прекратете и съответния абонамент в Stripe, ако достъпът трябва да спре; `charge.refunded` самостоятелно не прекратява subscription. Потребителските права са описани в страницата за отказ; не е включено автоматично отказване от тях при checkout.
 
+### Диагностика при отваряне на плащане
+
+При непредвидена грешка checkout показва код `BILLING_*` и номер за проследяване. В Worker Logs потърсете `Billing request failed` със същия `reference`. При отговор от Stripe записът съдържа `stripeRequestId`, който може да се намери в Stripe Workbench → Logs. Суровите съобщения, ключовете и личните данни не се записват.
+
+- `BILLING_STRIPE_KEY` / `BILLING_STRIPE_PERMISSION`: проверете secret ключа и правата му.
+- `BILLING_CUSTOMER_ACCOUNT` / `BILLING_PRICE_ACCOUNT`: customer/price не е наличен за използвания ключ; проверете акаунта и test/live режима. Не изтривайте клиентски записи на сляпо.
+- `BILLING_TAX_SETUP`: проверете Stripe Tax и бизнес адреса.
+- `BILLING_PORTAL_SETUP`: конфигурирайте Customer Portal в същия акаунт и режим.
+- `BILLING_DB_SCHEMA`: проверете приложените миграции, включително `checkout_intents`.
+- `BILLING_CHECKOUT_EXPIRY` / `BILLING_CHECKOUT_RETRY`: проверете Stripe request log за срока на сесията или idempotency конфликта.
+- `BILLING_STRIPE_REQUEST` / `BILLING_STRIPE_RESOURCE`: прочетете конкретния request в Stripe чрез `stripeRequestId`.
+- `BILLING_INTERNAL` / `BILLING_DB_ERROR`: необходима е допълнителна проверка на Worker/DB; кодът сам по себе си не определя причината.
+
 ## 6. Примери на гласовете
 
 1. Регистрирайте и потвърдете администраторския имейл от `ADMIN_EMAILS`.

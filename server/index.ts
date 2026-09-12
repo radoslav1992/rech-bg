@@ -9,6 +9,7 @@ import { uid, now, ready } from "./types";
 import { sha, rate, checkPassword, hashPassword } from "./security";
 import { auth, isAdmin } from "./auth";
 import { billing, webhook, allowance, stripe } from "./billing";
+import { billingFailure } from "./billing-errors";
 import { segments, voiceMap, TTS_MODEL, decodeAudio, wavHeader } from "./audio";
 import { withDefaults } from "./config";
 import { videos, videoInputs } from "./video";
@@ -675,6 +676,8 @@ app.onError((e, c) => {
       },
       400,
     );
+  if (c.req.path.startsWith("/api/billing/"))
+    return c.json(billingFailure(e), 503);
   console.error("Request failed", { path: c.req.path, error: e.name });
   return c.json(
     { error: "Услугата временно не е достъпна. Опитайте отново след малко." },
