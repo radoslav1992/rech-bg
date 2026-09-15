@@ -3,13 +3,12 @@ import { Link } from "react-router-dom";
 import { Film, Sparkles, ImagePlus } from "lucide-react";
 import { videoTiers, videoCredits, type VideoTier } from "../shared/video";
 import { api, Button, Notice, number, useAuth, type Job } from "./lib";
-import { jobStatus } from "./JobActivity";
-export function VideoPanel({ jobs, currentJob, disabled, onCreated }: { jobs: Job[]; currentJob: Job | null; disabled: boolean; onCreated: (job: Job) => void }) {
+import { jobLink, jobStatus } from "./JobActivity";
+export function VideoPanel({ jobs, approved, activeJob, submissionBlocked, onCreated }: { jobs: Job[]; approved: boolean; activeJob: Job | null; submissionBlocked: boolean; onCreated: (job: Job) => void }) {
   const { user, refresh } = useAuth();
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [tier, setTier] = useState<VideoTier>("medium");
   const [available, setAvailable] = useState<Record<VideoTier, boolean>>({ low: false, medium: false, high: false });
-  const [sourceId, setSourceId] = useState("");
   const [image, setImage] = useState<File | null>(null);
   const [imageUrl, setImageUrl] = useState("");
   const [consent, setConsent] = useState(false);
@@ -18,19 +17,28 @@ export function VideoPanel({ jobs, currentJob, disabled, onCreated }: { jobs: Jo
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const key = useRef(crypto.randomUUID());
+  const submitting = useRef(false);
+  const [configAttempt, setConfigAttempt] = useState(0);
   const sources = jobs.filter(j => j.kind !== "video" && j.status === "completed" && j.mode !== "podcast");
-  const source = sources.find(j => j.id === sourceId) || sources[0];
+  const source = sources[0];
   let cost = 0, durationError = "";
   if (source) {
     try { cost = videoCredits(source.duration, tier); } catch (e) { durationError = (e as Error).message; }
   }
   const remaining = Math.max(0, (user?.limit || 0) - (user?.used || 0));
-  useEffect(() => { api("/videos/config").then(d => {
-    setEnabled(d.enabled); setEmailAvailable(d.emailNotifications);
-    const enabledTiers = { low: !!d.tiers.low?.enabled, medium: !!d.tiers.medium?.enabled, high: !!d.tiers.high?.enabled };
-    setAvailable(enabledTiers);
-    setTier(enabledTiers.medium ? "medium" : enabledTiers.low ? "low" : "high");
-  }).catch(() => setEnabled(false)); }, []);
+  useEffect(() => {
+    let live = true;
+    setEnabled(null);
+    api("/videos/config").then(d => {
+      if (!live) return;
+      setEnabled(d.enabled); setEmailAvailable(d.emailNotifications);
+      const enabledTiers = { low: !!d.tiers.low?.enabled, medium: !!d.tiers.medium?.enabled, high: !!d.tiers.high?.enabled };
+      setAvailable(enabledTiers);
+      setTier(current => enabledTiers[current] ? current : enabledTiers.medium ? "medium" : enabledTiers.low ? "low" : "high");
+    }).catch(() => { if (live) setEnabled(false); });
+    return () => { live = false; };
+  }, [configAttempt]);
+  useEffect(() => { key.current = crypto.randomUUID(); }, [source?.id]);
   useEffect(() => {
     if (!image) { setImageUrl(""); return; }
     const url = URL.createObjectURL(image); setImageUrl(url);
@@ -38,7 +46,8 @@ export function VideoPanel({ jobs, currentJob, disabled, onCreated }: { jobs: Jo
   }, [image]);
   const edit = (fn: () => void) => { setError(""); fn(); key.current = crypto.randomUUID(); };
   const generate = async () => {
-    if (!source || !cost) return;
+    if (submitting.current || !source || !cost || !approved || submissionBlocked || activeJob || !enabled || !available[tier] || !image || !consent || !user?.verified || cost > remaining) return;
+    submitting.current = true;
     setBusy(true); setError("");
     try {
       const body = new FormData();
@@ -51,22 +60,20 @@ export function VideoPanel({ jobs, currentJob, disabled, onCreated }: { jobs: Jo
       const { job } = await api("/jobs/" + result.id);
       onCreated(job); key.current = crypto.randomUUID(); await refresh();
     } catch (e) { setError((e as Error).message); }
-    finally { setBusy(false); }
+    finally { submitting.current = false; setBusy(false); }
   };
   return <section className="output-panel avatar-panel">
     <div className="sub-heading"><h2><Film size={22} /> Дайте лице на гласа</h2><span>ВИДЕО АВАТАР</span></div>
     <p>Превърнете готовия си аудиозапис в говорещо видео. Качете портрет и изберете едно от трите нива на качество.</p>
     <div aria-live="polite">
-      {currentJob?.kind === "video" && currentJob.status === "failed" && <Notice>{currentJob.error} Номер на заявката: {currentJob.id}</Notice>}
-      {currentJob?.kind === "video" && ["queued", "running"].includes(currentJob.status) && <div className="video-background-confirmation"><h3>Заявката е приета. Ние поемаме оттук.</h3><p>{jobStatus(currentJob)}. Можете да затворите приложението или да продължите с проектите си. {currentJob.notify_email && "Ще ви изпратим имейл, когато обработката приключи."}</p><Link className="btn dark" to="/app#activity">Към моите записи</Link></div>}
-      {currentJob?.kind === "video" && currentJob.status === "completed" && <p>Видеото е готово. Можете да го гледате и изтеглите от „Вашият запис“ по-горе.</p>}
+      {activeJob && <Notice>„{activeJob.title}“ — {jobStatus(activeJob).toLowerCase()}. Можете да подготвите следващото видео. Генерирането ще се отключи след завършване на текущата заявка. <Link to={jobLink(activeJob)}>Проследете заявката</Link></Notice>}
+      {enabled === null && <p>Проверка на наличните нива на качество…</p>}
+      {enabled === false && <Notice>Не успяхме да заредим налично видео качество. <button className="btn" type="button" onClick={() => setConfigAttempt(n => n + 1)}>Провери отново</button></Notice>}
+      {!source && <p>Създайте и прослушайте аудиозапис от 5 до 60 секунди. Можете да подготвите портрета и качеството още сега.</p>}
+      {source && !approved && <Notice>Одобрете избраната версия на гласа по-горе, за да създадете видео. Настройките ви се запазват, докато редактирате сценария.</Notice>}
     </div>
-    {enabled === false && <Notice>Създаването на видео ще бъде достъпно скоро.</Notice>}
-    {!sources.length ? <div className="output-empty"><Film size={30} /><p>Първо създайте аудио с един глас, с продължителност от 5 до 60 секунди.</p></div> : <>
-      <fieldset disabled={busy || disabled || !enabled} className="avatar-fields">
-        <label>Аудиозапис<select value={source?.id || ""} onChange={e => edit(() => setSourceId(e.target.value))}>
-          {sources.map(j => <option key={j.id} value={j.id}>{j.title} · {Math.ceil(j.duration)} сек. · {new Date(j.created_at * 1000).toLocaleString("bg")}</option>)}
-        </select></label>
+      <fieldset disabled={busy} className="avatar-fields">
+        {source && <div className="video-source-summary"><strong>Избрана версия на гласа</strong><p>{source.title} · {Math.ceil(source.duration)} сек. · {new Date(source.created_at * 1000).toLocaleString("bg")}</p><small>За друга версия използвайте избора на глас в секцията за прослушване.</small></div>}
         <div className="avatar-tiers" role="group" aria-label="Качество на видеото">
           {(Object.keys(videoTiers) as VideoTier[]).map(id => <button type="button" key={id} disabled={!available[id]} aria-pressed={tier === id} className={tier === id ? "selected" : ""} onClick={() => edit(() => setTier(id))}>
             <strong>{videoTiers[id].name}</strong><span>{number(videoTiers[id].creditsPerSecond)} кредита / сек.</span>
@@ -89,12 +96,11 @@ export function VideoPanel({ jobs, currentJob, disabled, onCreated }: { jobs: Jo
       {error && <Notice>{error}</Notice>}
       <div className="generate-bar">
         <div><strong>{number(cost)} кредита за видеото</strong><small>Налични: {number(remaining)} кредита</small></div>
-        <Button className="btn dark" busy={busy} disabled={disabled || !enabled || !available[tier] || !user?.verified || !cost || cost > remaining || !image || !consent} onClick={generate}>
+        <Button className="btn dark" busy={busy} disabled={submissionBlocked || !!activeJob || !source || !approved || !enabled || !available[tier] || !user?.verified || !cost || cost > remaining || !image || !consent} onClick={generate}>
           <Sparkles size={18} /> Създай видео · {number(cost)} кредита
         </Button>
       </div>
       {cost > remaining && <p className="small-note">Нямате достатъчно кредити. <Link to="/app/billing">Вижте плановете</Link></p>}
       <p className="small-note">Цената е допълнителна към вече създаденото аудио. Всяка започната секунда се брои за цяла. При неуспешно видео кредитите за него се връщат. Можете да затворите страницата — резултатът ще ви очаква в проекта.</p>
-    </>}
   </section>;
 }

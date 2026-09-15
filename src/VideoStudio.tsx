@@ -5,6 +5,7 @@ import { api, post, Button, Notice, number, useAuth, type Job } from "./lib";
 import { jobsChanged, jobStatus, useJobs } from "./JobActivity";
 import { studioVoices, emotionTags, studioMaxChars, validateStudioScript } from "../shared/studio";
 import { VideoPanel } from "./VideoPanel";
+import { mergeJobs } from "./job-state";
 import { CaptionEditor } from "./CaptionEditor";
 import "./video-studio.css";
 
@@ -16,19 +17,23 @@ export function VideoStudio() {
   const [dirty, setDirty] = useState(false), [tone, setTone] = useState("ad"), [suggestion, setSuggestion] = useState(""), [undo, setUndo] = useState<string | null>(null);
   const [selectedAudio, setSelectedAudio] = useState(""), [approved, setApproved] = useState(""), [selectedVideo, setSelectedVideo] = useState("");
   const [localJobs, setLocalJobs] = useState<Job[]>([]);
+  const [videoFormKey, setVideoFormKey] = useState(() => crypto.randomUUID());
   const projectId = useRef(id), key = useRef(crypto.randomUUID()), editor = useRef<HTMLTextAreaElement>(null), skipLoad = useRef("");
-  const jobs = [...allJobs, ...localJobs.filter(j => !allJobs.some(x => x.id === j.id))].filter(j => j.project_id === id).sort((a, b) => b.created_at - a.created_at);
+  const jobs = mergeJobs(localJobs, allJobs).filter(j => j.project_id === id).sort((a, b) => b.created_at - a.created_at);
   const audioJobs = jobs.filter(j => j.kind !== "video"), videoJobs = jobs.filter(j => j.kind === "video");
   const audio = audioJobs.find(j => j.id === selectedAudio) || audioJobs[0] || null;
   const video = videoJobs.find(j => j.id === selectedVideo) || videoJobs[0] || null;
-  const active = allJobs.some(j => ["queued", "running"].includes(j.status)) || jobs.some(j => ["queued", "running"].includes(j.status));
+  const activeJob = mergeJobs(localJobs.filter(j => j.project_id === id), allJobs).find(j => ["queued", "running"].includes(j.status)) || null;
+  const active = !!activeJob;
   const sourceId = video?.status === "completed" ? video.source_job_id : audio?.status === "completed" ? audio.id : undefined;
   const remaining = Math.max(0, (user?.limit || 0) - (user?.used || 0));
   let cost = script.length * 3, scriptError = "";
   try { cost = validateStudioScript(script); } catch (e) { scriptError = (e as Error).message; }
   useEffect(() => { api("/video-studio/config").then(d => setEnabled(d.enabled)).catch(e => setError(e.message)); }, []);
   useEffect(() => {
-    let live = true; projectId.current = id; setApproved(""); setSuggestion("");
+    let live = true;
+    if (projectId.current !== id) setVideoFormKey(crypto.randomUUID());
+    projectId.current = id; setApproved(""); setSuggestion("");
     if (!id) { setTitle("Моята видео история"); setScript(""); setVoice(studioVoices[0].id); setDirty(false); setLoading(false); return; }
     if (skipLoad.current === id) { skipLoad.current = ""; return; }
     setLoading(true);
@@ -104,7 +109,7 @@ export function VideoStudio() {
       {audio?.status === "completed" && <><audio key={audio.id} controls src={`/api/jobs/${audio.id}/audio`} /><a href={`/api/jobs/${audio.id}/audio`} download className="btn">Изтегли WAV</a><p>{audio.duration.toFixed(1)} секунди · {number(audio.chars)} кредита за тази версия</p><Button className={approved === audio.id ? "btn dark" : "btn primary"} onClick={() => setApproved(audio.id)}><Check size={17} /> {approved === audio.id ? "Гласът е одобрен" : "Одобрявам този глас"}</Button></>}
       <p className="vs-fine">Редакциите в сценария не променят вече създадените записи.</p>
     </aside></div>
-    {approved && audio?.id === approved && <VideoPanel key={approved} jobs={[audio]} currentJob={video} disabled={busy || active} onCreated={j => { setLocalJobs(list => [j, ...list]); setSelectedVideo(j.id); jobsChanged(); }} />}
+    <VideoPanel key={videoFormKey} jobs={audio ? [audio] : []} approved={!!audio && audio.id === approved} activeJob={activeJob} submissionBlocked={busy} onCreated={j => { setLocalJobs(list => mergeJobs(list, [j])); setSelectedVideo(j.id); jobsChanged(); }} />
     {videoJobs.length > 0 && <section className="vs-card"><h2>Вашите видеа</h2><select aria-label="Версия на видеото" value={video?.id || ""} onChange={e => setSelectedVideo(e.target.value)}>{videoJobs.map(j => <option key={j.id} value={j.id}>{new Date(j.created_at * 1000).toLocaleString("bg")} · {jobStatus(j)}</option>)}</select>{video?.status === "failed" && <Notice>{video.error}</Notice>}{video && ["queued", "running"].includes(video.status) && <Notice>{jobStatus(video)}. Продължаваме във фонов режим. Готовото видео ще се появи в този проект.</Notice>}</section>}
     {sourceId && <CaptionEditor key={sourceId} audioId={sourceId} video={video?.status === "completed" ? video : null} />}
   </div>;
