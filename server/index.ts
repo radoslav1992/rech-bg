@@ -12,6 +12,8 @@ import { billing, webhook, allowance, stripe } from "./billing";
 import { billingFailure } from "./billing-errors";
 import { segments, voiceMap, TTS_MODEL, decodeAudio, wavHeader } from "./audio";
 import { withDefaults } from "./config";
+import { studio } from "./studio";
+import { studioVoices, validateStudioScript } from "../shared/studio";
 import { videos, videoInputs } from "./video";
 import { notifyVideo } from "./video-notifications";
 export { AudioGeneration } from "./workflow";
@@ -151,14 +153,15 @@ app.use("/api/*", async (c, next) => {
 });
 app.route("/api/billing", billing);
 app.route("/api/videos", videos);
+app.route("/api/video-studio", studio);
 const projectSchema = z.object({
   title: z.string().trim().min(1).max(120),
-  mode: z.enum(["tts", "podcast", "voiceover"]),
+  mode: z.enum(["tts", "podcast", "voiceover", "studio"]),
   script: z.string().max(14000),
-  voice: z.string().refine((s) => !!voiceMap[s]),
+  voice: z.string().refine((s) => !!voiceMap[s] || studioVoices.some(v => v.id === s)),
   second_voice: z.string().refine((s) => !!voiceMap[s]),
   pause_ms: z.number().int().min(0).max(1500).default(400),
-});
+}).refine(p => p.mode === "studio" ? studioVoices.some(v => v.id === p.voice) && p.script.length <= 1500 : !!voiceMap[p.voice], { message: "Невалиден глас или сценарий за този тип проект." });
 app.get("/api/projects", async (c) => {
   const r = await c.env.DB.prepare(
     "SELECT p.*,j.id AS latest_job,j.status,j.duration FROM projects p LEFT JOIN jobs j ON j.id=(SELECT id FROM jobs WHERE project_id=p.id ORDER BY created_at DESC, rowid DESC LIMIT 1) WHERE p.user_id=? ORDER BY p.updated_at DESC LIMIT 100",
@@ -263,7 +266,7 @@ app.post("/api/generate", async (c) => {
     });
   await rate(c, "generate", 30, 3600, u.id);
   const d = z
-    .object({ projectId: z.uuid(), idempotencyKey: z.uuid() })
+    .object({ projectId: z.uuid(), idempotencyKey: z.uuid(), credits: z.number().int().positive().optional() })
     .parse(await c.req.json());
   const previous = await c.env.DB.prepare(
     "SELECT id FROM jobs WHERE user_id=? AND idempotency_key=?",
@@ -277,13 +280,18 @@ app.post("/api/generate", async (c) => {
     .bind(d.projectId, u.id)
     .first<any>();
   if (!p) throw new HTTPException(404, { message: "Проектът не е намерен." });
+  if (p.mode === "studio" && !c.env.ELEVENLABS_API_KEY?.trim())
+    throw new HTTPException(503, { message: "Озвучаването във видео студиото още не е активирано." });
   let turns;
   try {
-    turns = segments(p.script, p.mode, p.voice, p.second_voice);
+    if (p.mode === "studio") validateStudioScript(p.script);
+    turns = p.mode === "studio" ? [{ text: p.script, voice: p.voice }] : segments(p.script, p.mode, p.voice, p.second_voice);
   } catch (e) {
     throw new HTTPException(400, { message: (e as Error).message });
   }
-  const chars = turns.reduce((s, t) => s + t.text.length, 0);
+  const chars = turns.reduce((s, t) => s + t.text.length, 0) * (p.mode === "studio" ? 3 : 1);
+  if (p.mode === "studio" && d.credits !== chars)
+    throw new HTTPException(409, { message: "Сценарият или цената се промени. Прегледайте сумата и опитайте отново." });
   if (chars < 1 || chars > 10000 || turns.length > 40)
     throw new HTTPException(400, {
       message: "Записът трябва да е до 10 000 символа и до 40 реплики/части.",

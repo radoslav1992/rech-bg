@@ -6,7 +6,7 @@ import { api, useAuth, type Job } from "./lib";
 const JobsContext = createContext<{ jobs: Job[]; error: string }>({ jobs: [], error: "" });
 export const useJobs = () => useContext(JobsContext);
 export const jobsChanged = () => window.dispatchEvent(new Event("rech:jobs-changed"));
-export const jobLink = (j: Job) => `/app/studio/${j.project_id}?job=${j.id}`;
+export const jobLink = (j: Job) => `/app/${j.mode === "studio" ? "video-studio" : "studio"}/${j.project_id}?job=${j.id}`;
 export function jobStatus(j: Job) {
   if (j.status === "completed") return "Готово";
   if (j.status === "failed") return "Неуспешно";

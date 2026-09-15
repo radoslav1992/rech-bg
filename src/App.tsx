@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import {
   Routes,
   Route,
@@ -11,6 +11,7 @@ import {
 } from "react-router-dom";
 import {
   House,
+  Film,
   AudioLines,
   Folder,
   Users,
@@ -45,6 +46,7 @@ import { Dashboard, Projects } from "./Dashboard";
 import { Studio } from "./Studio";
 import { SettingsPage } from "./Settings";
 import { JobActivity } from "./JobActivity";
+const VideoStudio = lazy(() => import("./VideoStudio").then(m => ({ default: m.VideoStudio })));
 function Scroll() {
   const { pathname } = useLocation();
   useEffect(() => {
@@ -74,7 +76,8 @@ function Shell() {
     );
   const nav = [
     ["/app", "Начало", House],
-    ["/app/studio", "Студио", AudioLines],
+    ["/app/studio", "Аудио", AudioLines],
+    ["/app/video-studio", "Видео студио", Film],
     ["/app/projects", "Моите проекти", Folder],
     ["/app/voices", "Гласове", Users],
     ["/app/billing", "Абонамент", CreditCard],
@@ -198,6 +201,8 @@ export function App() {
           <Route index element={<Dashboard />} />
           <Route path="studio" element={<Studio />} />
           <Route path="studio/:id" element={<Studio />} />
+          <Route path="video-studio" element={<Suspense fallback={<p>Зареждане…</p>}><VideoStudio /></Suspense>} />
+          <Route path="video-studio/:id" element={<Suspense fallback={<p>Зареждане…</p>}><VideoStudio /></Suspense>} />
           <Route path="projects" element={<Projects />} />
           <Route path="voices" element={<Voices inApp />} />
           <Route path="billing" element={<Pricing inApp />} />

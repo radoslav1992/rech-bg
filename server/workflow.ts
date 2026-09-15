@@ -6,6 +6,7 @@ import {
 import type { Env } from "./types";
 import { now } from "./types";
 import { segments, decodeAudio, wavHeader, voiceMap, TTS_MODEL } from "./audio";
+import { runStudioSpeech } from "./studio-speech";
 export class AudioGeneration extends WorkflowEntrypoint<
   Env,
   { jobId: string }
@@ -26,6 +27,10 @@ export class AudioGeneration extends WorkflowEntrypoint<
           .run();
         return job;
       });
+      if (job.mode === "studio") {
+        await runStudioSpeech(this.env, job, step);
+        return;
+      }
       const turns = segments(job.script, job.mode, job.voice, job.second_voice);
       const parts: { key: string; size: number; rate: number }[] = [];
       for (let i = 0; i < turns.length; i++)

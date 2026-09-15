@@ -19,7 +19,7 @@ import {
   Upload,
   Video,
 } from "lucide-react";
-import { VideoPanel } from "./VideoPanel";
+
 import { jobsChanged, jobStatus } from "./JobActivity";
 import { voiceList } from "../shared/catalog";
 import { segments } from "../shared/text";
@@ -85,6 +85,7 @@ export function Studio() {
       setLoading(true);
       api("/projects/" + id)
         .then(({ project: p }) => {
+          if (p.mode === "studio") { navigate("/app/video-studio/" + id + location.search, { replace: true }); return; }
           setTitle(p.title);
           setMode(p.mode);
           setScript(p.script);
@@ -594,7 +595,7 @@ export function Studio() {
               </details>
             )}
           </section>
-          <VideoPanel key={id || "new"} currentJob={job} jobs={[...(job ? [job] : []), ...history.filter(j => j.id !== job?.id)]} disabled={busy || active} onCreated={j => { setJob(j); setHistory(h => [j, ...h.filter(x => x.id !== j.id)]); jobsChanged(); }} />
+          <section className="output-panel"><h2>Историята ви може да има и лице.</h2><p>Създайте видео в отделното студио — с изразителен глас, емоции и субтитри.</p><Link className="btn primary" to="/app/video-studio">Към видео студиото</Link></section>
         </>
       )}
     </div>

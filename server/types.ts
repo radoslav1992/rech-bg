@@ -6,6 +6,9 @@ export interface Env {
   };
   GENERATION: Workflow<{ jobId: string }>;
   VIDEO_GENERATION?: Workflow<{ jobId: string }>;
+  ELEVENLABS_API_KEY?: string;
+  ELEVENLABS_VOICES?: string;
+  STUDIO_SCRIPT_MODEL?: string;
   FAL_KEY?: string;
   WAVESPEED_API_KEY?: string;
   ASSETS: Fetcher;

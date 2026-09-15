@@ -14,7 +14,7 @@ export async function notifyVideo(env: Env, id: string) {
     .bind(id).run();
   if (!claim.meta.changes) return;
   const complete = job.status === "completed";
-  const link = `${e.SITE_URL!.replace(/\/$/, "")}/app/studio/${job.project_id}?job=${id}`;
+  const link = `${e.SITE_URL!.replace(/\/$/, "")}/app/${job.mode === "studio" ? "video-studio" : "studio"}/${job.project_id}?job=${id}`;
   try {
     await sendMail(e, job.email,
       complete ? "Видеото ви е готово — Реч БГ" : "Видеото не беше създадено — Реч БГ",

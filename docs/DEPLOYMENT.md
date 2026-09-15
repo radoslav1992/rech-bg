@@ -212,3 +212,8 @@ HTTP 202 от `/api/videos` означава приета заявка, а HTTP 
 - `INTERNAL_0`: проверете проваления step в Cloudflare → Workflows → `rech-bg-video` → instance със същия job ID.
 
 Старите грешки не съдържат изхвърлената HTTP диагностика; новите кодове се появяват при следваща заявка. Не повтаряйте платена заявка автоматично при неизвестен резултат от първото изпращане.
+# Premium Video Studio
+
+Set the server secret `ELEVENLABS_API_KEY` and deploy to activate `/app/video-studio`.
+The existing database and Workflow bindings are reused; no new migration is required.
+See [VIDEO-STUDIO.md](VIDEO-STUDIO.md) for voice overrides, credit pricing, captions and the activation check.

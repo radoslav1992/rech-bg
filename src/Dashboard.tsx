@@ -132,12 +132,13 @@ export function Dashboard() {
           ["tts", "Текст в реч", "Статии, истории и учебни материали."],
           ["podcast", "Подкаст", "Разговор с два различни гласа."],
           ["voiceover", "Озвучаване", "За видеа, реклами и презентации."],
+          ["studio", "Видео студио", "Изразителен глас, аватар и субтитри."],
         ].map(([id, t, d]) => {
-          const Icon = icons[id as keyof typeof icons];
+          const Icon = icons[id as keyof typeof icons] || FileText;
           return (
             <Link
               key={id}
-              to={"/app/studio?mode=" + id}
+              to={id === "studio" ? "/app/video-studio" : "/app/studio?mode=" + id}
               className={"mode-card " + id}
             >
               <Icon size={24} />
@@ -191,11 +192,11 @@ export function ProjectList({
             <span className={"project-icon " + p.mode}>
               <Icon size={20} />
             </span>
-            <Link to={"/app/studio/" + p.id}>
+            <Link to={"/app/" + (p.mode === "studio" ? "video-studio/" : "studio/") + p.id}>
               <strong>{p.title}</strong>
               <small>
                 {new Date(p.updated_at * 1000).toLocaleDateString("bg-BG")} ·{" "}
-                {p.mode === "podcast"
+                {p.mode === "studio" ? "Видео студио" : p.mode === "podcast"
                   ? "Подкаст"
                   : p.mode === "voiceover"
                     ? "Озвучаване"
@@ -216,7 +217,7 @@ export function ProjectList({
             ) : (
               <Link
                 className="round"
-                to={"/app/studio/" + p.id}
+                to={"/app/" + (p.mode === "studio" ? "video-studio/" : "studio/") + p.id}
                 aria-label={"Отвори " + p.title}
               >
                 <ArrowUpRight size={18} />
@@ -260,6 +261,7 @@ export function Projects() {
             ["tts", "Текст в реч"],
             ["podcast", "Подкасти"],
             ["voiceover", "Озвучаване"],
+            ["studio", "Видео студио"],
           ].map(([id, label]) => (
             <button
               key={id}
