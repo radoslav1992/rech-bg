@@ -12,7 +12,7 @@ Optional server configuration:
 
 | Variable | Default / meaning |
 | --- | --- |
-| `ELEVENLABS_VOICES` | JSON mapping public voice IDs to voice IDs available in your account. Omit to use the defaults below. |
+| `ELEVENLABS_VOICES` | Optional fallback JSON mapping public voice IDs to provider voice IDs. Saved admin settings take precedence; omit to use the defaults below. |
 | `STUDIO_SCRIPT_MODEL` | `openai/gpt-5.6-luna`, called through the existing Cloudflare AI binding using the Responses API shape. |
 
 | Public ID | Bulgarian name | Default provider voice ID |
@@ -23,6 +23,18 @@ Optional server configuration:
 | `studio-elena` | Елена | `XB0fDUnXU5powFXDhCwa` |
 
 The provider/model identifiers are server-side; the product uses Bulgarian voice names. Preview a short Bulgarian script before choosing final voices for the brand. Emotion tags guide delivery; they do not guarantee a particular performance for every voice.
+
+## Admin voice settings and samples
+
+Go to **Настройки → Гласове за видео студиото** while signed in as an administrator (`ADMIN_EMAILS`). Choose one of the four studio voice slots, set its Bulgarian name/description and paste the ElevenLabs Voice ID from your account, then click **Запази гласа**. Only admins see provider IDs; the studio receives public IDs, labels and sample URLs. New settings apply without redeploying the Worker.
+
+Mapping precedence is saved admin configuration → `ELEVENLABS_VOICES` → built-in defaults. **Възстанови първоначалния глас** removes the saved override. The existing secret `ELEVENLABS_API_KEY` stays in Cloudflare; it is never managed or exposed through this panel.
+
+Click **Създай студиен пример** to synthesize the same `sampleSentence` used by standard TTS, with Eleven v3, Bulgarian and the selected saved voice. Listen to the draft and explicitly publish it. Generation consumes ElevenLabs usage but does not charge the administrator's application credit wallet. Paid sample requests have SDK retries disabled and share the existing 60-per-hour/admin sample generation limit. WAV/MP3 upload and sample removal are also available.
+
+Published samples appear beside the corresponding voice in Video Studio. Changing the provider voice ID hides its old sample; publishing an outdated draft is rejected. Name/description-only changes keep the existing matching sample. Studio samples use revision-specific object keys so replacing them gets a fresh URL.
+
+Configuration lives in private R2 at `config/studio-voices/{publicId}.json`; samples use the existing `voice_samples` D1 table and `samples/{publicId}/{voiceRevision}/{uuid}.wav` (or `.mp3`) R2 keys. No migration, new secret or binding is needed.
 
 ## Flow and credits
 

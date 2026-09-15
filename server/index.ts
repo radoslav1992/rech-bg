@@ -1,3 +1,5 @@
+import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
+import { isStudioVoice, resolveStudioVoice, studioVoiceCatalog, studioVoiceKey, studioVoiceSchema } from "./studio-voices";
 import { Hono } from "hono";
 import { getCookie } from "hono/cookie";
 import { HTTPException } from "hono/http-exception";
@@ -100,12 +102,17 @@ app.get("/api/voices/:id/sample", async (c) => {
     .bind(c.req.param("id"))
     .first<any>();
   if (!row) throw new HTTPException(404, { message: "Примерът предстои." });
+  if (isStudioVoice(c.req.param("id"))) {
+    const voice = await resolveStudioVoice(c.env, c.req.param("id"));
+    if (!row.object_key.startsWith(`samples/${voice.id}/${voice.revision}/`))
+      throw new HTTPException(404, { message: "Примерът предстои." });
+  }
   const o = await c.env.AUDIO.get(row.object_key);
   if (!o) throw new HTTPException(404, { message: "Примерът не е наличен." });
   return new Response(o.body, {
     headers: {
       "Content-Type": row.mime,
-      "Cache-Control": "public,max-age=3600",
+      "Cache-Control": isStudioVoice(c.req.param("id")) ? "no-store" : "public,max-age=3600",
       "Content-Length": String(o.size),
     },
   });
@@ -557,11 +564,44 @@ app.get("/api/admin/messages", async (c) =>
     ).results,
   }),
 );
+app.get("/api/admin/studio-voices", async c => c.json({
+  enabled: !!c.env.ELEVENLABS_API_KEY?.trim(), voices: await studioVoiceCatalog(c.env),
+}));
+app.put("/api/admin/studio-voices/:id", async c => {
+  const id = c.req.param("id");
+  if (!isStudioVoice(id)) throw new HTTPException(400, { message: "Невалиден студиен глас." });
+  const configuration = studioVoiceSchema.parse(await c.req.json());
+  await c.env.AUDIO.put(studioVoiceKey(id), JSON.stringify(configuration), { httpMetadata: { contentType: "application/json" } });
+  return c.json({ voice: await resolveStudioVoice(c.env, id) });
+});
+app.delete("/api/admin/studio-voices/:id", async c => {
+  const id = c.req.param("id");
+  if (!isStudioVoice(id)) throw new HTTPException(400, { message: "Невалиден студиен глас." });
+  await c.env.AUDIO.delete(studioVoiceKey(id));
+  return c.json({ voice: await resolveStudioVoice(c.env, id) });
+});
 app.post("/api/admin/voices/:id/sample/generate", async (c) => {
   const id = c.req.param("id");
-  if (!Object.hasOwn(voiceMap, id))
+  if (!Object.hasOwn(voiceMap, id) && !isStudioVoice(id))
     throw new HTTPException(400, { message: "Невалиден глас." });
   await rate(c, "sample-generation", 60, 3600, c.get("user").id);
+  if (isStudioVoice(id)) {
+    if (!c.env.ELEVENLABS_API_KEY?.trim()) throw new HTTPException(503, { message: "Добавете ELEVENLABS_API_KEY в Cloudflare, за да генерирате примери." });
+    const voice = await resolveStudioVoice(c.env, id);
+    try {
+      const client = new ElevenLabsClient({ apiKey: c.env.ELEVENLABS_API_KEY.trim() });
+      const result = await client.textToSpeech.convertWithTimestamps(voice.providerVoiceId, {
+        text: sampleSentence, modelId: "eleven_v3", languageCode: "bg", outputFormat: "pcm_24000",
+      }, { maxRetries: 0, timeoutInSeconds: 90 });
+      if (!result.audioBase64 || result.audioBase64.length > 3_000_000) throw new Error("Invalid sample");
+      const pcm = Uint8Array.from(atob(result.audioBase64), c => c.charCodeAt(0));
+      if (!pcm.length || pcm.length % 2 || pcm.length + 44 > 2 * 1024 * 1024) throw new Error("Invalid sample size");
+      const wav = new Uint8Array(pcm.length + 44); wav.set(wavHeader(pcm.length, 24000)); wav.set(pcm, 44);
+      return new Response(wav, { headers: { "Content-Type": "audio/wav", "Cache-Control": "no-store", "X-Voice-Revision": voice.revision } });
+    } catch {
+      throw new HTTPException(502, { message: "Примерът не беше създаден. Проверете Voice ID, достъпа до гласа и наличните кредити в ElevenLabs." });
+    }
+  }
   try {
     const result = (await c.env.AI.run(TTS_MODEL, {
       text: sampleSentence,
@@ -585,9 +625,12 @@ app.post("/api/admin/voices/:id/sample/generate", async (c) => {
 });
 app.post("/api/admin/voices/:id/sample", async (c) => {
   const id = c.req.param("id");
-  if (!voiceMap[id])
+  if (!voiceMap[id] && !isStudioVoice(id))
     throw new HTTPException(400, { message: "Невалиден глас." });
   const form = await c.req.formData();
+  const studioVoice = isStudioVoice(id) ? await resolveStudioVoice(c.env, id) : null;
+  if (studioVoice && form.get("voiceRevision") !== studioVoice.revision)
+    throw new HTTPException(409, { message: "Гласът е променен. Презаредете настройките и създайте нов пример." });
   const file = form.get("file");
   if (!(file instanceof File) || file.size > 2 * 1024 * 1024 || file.size < 44)
     throw new HTTPException(400, {
@@ -604,7 +647,7 @@ app.post("/api/admin/voices/:id/sample", async (c) => {
       message: "Невалиден аудио файл. Използвайте WAV или MP3.",
     });
   const mime = wav ? "audio/wav" : "audio/mpeg",
-    key = `samples/${id}.${wav ? "wav" : "mp3"}`;
+    key = studioVoice ? `samples/${id}/${studioVoice.revision}/${crypto.randomUUID()}.${wav ? "wav" : "mp3"}` : `samples/${id}.${wav ? "wav" : "mp3"}`;
   const old = await c.env.DB.prepare(
     "SELECT object_key FROM voice_samples WHERE voice_id=?",
   )

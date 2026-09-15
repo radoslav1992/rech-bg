@@ -4,6 +4,8 @@ import { Film, Mic, Sparkles, Save, Check, ArrowRight } from "lucide-react";
 import { api, post, Button, Notice, number, useAuth, type Job } from "./lib";
 import { jobsChanged, jobStatus, useJobs } from "./JobActivity";
 import { studioVoices, emotionTags, studioMaxChars, validateStudioScript } from "../shared/studio";
+import { StudioVoicePicker } from "./StudioVoicePicker";
+import type { StudioVoice } from "../shared/studio";
 import { VideoPanel } from "./VideoPanel";
 import { mergeJobs } from "./job-state";
 import { CaptionEditor } from "./CaptionEditor";
@@ -13,6 +15,7 @@ export function VideoStudio() {
   const { id } = useParams(), navigate = useNavigate(), [params] = useSearchParams();
   const { user, refresh } = useAuth(), { jobs: allJobs, error: pollingError } = useJobs();
   const [title, setTitle] = useState("Моята видео история"), [script, setScript] = useState(""), [voice, setVoice] = useState<string>(studioVoices[0].id);
+  const [voices, setVoices] = useState<readonly StudioVoice[]>(studioVoices);
   const [enabled, setEnabled] = useState(false), [loading, setLoading] = useState(!!id), [busy, setBusy] = useState(false), [error, setError] = useState("");
   const [dirty, setDirty] = useState(false), [tone, setTone] = useState("ad"), [suggestion, setSuggestion] = useState(""), [undo, setUndo] = useState<string | null>(null);
   const [selectedAudio, setSelectedAudio] = useState(""), [approved, setApproved] = useState(""), [selectedVideo, setSelectedVideo] = useState("");
@@ -29,7 +32,7 @@ export function VideoStudio() {
   const remaining = Math.max(0, (user?.limit || 0) - (user?.used || 0));
   let cost = script.length * 3, scriptError = "";
   try { cost = validateStudioScript(script); } catch (e) { scriptError = (e as Error).message; }
-  useEffect(() => { api("/video-studio/config").then(d => setEnabled(d.enabled)).catch(e => setError(e.message)); }, []);
+  useEffect(() => { api("/video-studio/config").then(d => { setEnabled(d.enabled); setVoices(d.voices || studioVoices); }).catch(e => setError(e.message)); }, []);
   useEffect(() => {
     let live = true;
     if (projectId.current !== id) setVideoFormKey(crypto.randomUUID());
@@ -89,7 +92,7 @@ export function VideoStudio() {
     {!enabled && <Notice>Видео студиото е подготвено. Премиум озвучаването ще бъде достъпно след активиране.</Notice>}
     <div className="vs-layout"><section className="vs-card vs-script"><div className="sub-heading"><h2><Film size={23} /> Дайте начало на историята</h2><span>01 / СЦЕНАРИЙ</span></div>
       <fieldset disabled={busy}><label>Име на проекта<input value={title} maxLength={120} onChange={e => edit(() => setTitle(e.target.value))} /></label>
-      <div className="vs-voices" role="group" aria-label="Избор на глас">{studioVoices.map(v => <button key={v.id} className={voice === v.id ? "selected" : ""} aria-pressed={voice === v.id} onClick={() => edit(() => setVoice(v.id))}><span className="vs-initial">{v.name[0]}</span><strong>{v.name}</strong><small>{v.description}</small>{voice === v.id && <Check size={16} />}</button>)}</div>
+      <StudioVoicePicker voices={voices} selected={voice} onSelect={id => edit(() => setVoice(id))} />
       <label htmlFor="video-script">Вашият сценарий</label><div className="vs-tags">{emotionTags.map(([tag, label]) => <button key={tag} onClick={() => insertTag(tag)} title={`[${tag}]`}>{label}</button>)}</div>
       <textarea ref={editor} id="video-script" value={script} maxLength={studioMaxChars} rows={10} placeholder="[curious]Понякога е нужен само един глас, за да оживее една история…" onChange={e => edit(() => setScript(e.target.value))} />
       <div className="vs-counter"><span>Таговете в [скоби] насочват гласа. Изразителността зависи от избрания глас.</span><strong>{number(script.length)} / {number(studioMaxChars)}</strong></div>

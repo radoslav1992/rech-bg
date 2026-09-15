@@ -1,3 +1,4 @@
+import { StudioVoiceAdmin } from "./StudioVoiceAdmin";
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
@@ -175,7 +176,7 @@ export function SettingsPage() {
           Изтеглете данните
         </a>
       </section>
-      {user?.admin && <AdminSettings />}
+      {user?.admin && <><StudioVoiceAdmin /><AdminSettings /></>}
       <section className="settings-card danger-zone">
         <h2>
           <Trash2 size={21} />

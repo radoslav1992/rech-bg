@@ -5,9 +5,10 @@ import type { ContextVars, Env } from "./types";
 import { rate } from "./security";
 import { captionKey } from "./studio-speech";
 import { captionStyles, defaultCaptions } from "../shared/captions";
-import { emotionTags, studioVoices, stripTags, validateStudioScript, validateSuggestedDelivery } from "../shared/studio";
+import { emotionTags, stripTags, validateStudioScript, validateSuggestedDelivery } from "../shared/studio";
+import { publicStudioVoices } from "./studio-voices";
 export const studio = new Hono<{ Bindings: Env; Variables: ContextVars }>();
-studio.get("/config", c => c.json({ enabled: !!c.env.ELEVENLABS_API_KEY?.trim(), voices: studioVoices }));
+studio.get("/config", async c => c.json({ enabled: !!c.env.ELEVENLABS_API_KEY?.trim(), voices: await publicStudioVoices(c.env) }));
 studio.post("/delivery", async c => {
   if (!c.get("user").verified) throw new HTTPException(403, { message: "Потвърдете имейла си." });
   await rate(c, "studio-delivery", 5, 86400, c.get("user").id);

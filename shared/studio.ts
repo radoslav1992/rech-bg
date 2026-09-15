@@ -1,3 +1,4 @@
+export type StudioVoice = { id: string; name: string; description: string; sampleUrl?: string | null };
 export const studioVoices = [
   { id: "studio-boris", name: "Борис", description: "Плътен и уверен разказвач" },
   { id: "studio-mila", name: "Мила", description: "Мек и естествен глас" },
