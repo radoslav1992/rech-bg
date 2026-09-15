@@ -21,7 +21,7 @@ function request(path: string, init: RequestInit = {}, cookie = true) {
 }
 function form(tier = "medium", changes: Record<string, string> = {}) {
   const body = new FormData();
-  for (const [key, value] of Object.entries({ sourceId, tier, idempotencyKey: crypto.randomUUID(), credits: tier === "high" ? "36000" : tier === "low" ? "6000" : "18000", consent: "true", ...changes })) body.set(key, value);
+  for (const [key, value] of Object.entries({ sourceId, tier, idempotencyKey: crypto.randomUUID(), credits: tier === "high" ? "54000" : tier === "low" ? "9000" : "27000", consent: "true", ...changes })) body.set(key, value);
   body.set("image", new Blob([png]), "portrait.png");
   return body;
 }
@@ -58,10 +58,10 @@ beforeEach(async () => {
 afterEach(() => { vi.unstubAllGlobals(); sqlite.close(); });
 describe("Video credits and request validation", () => {
   it("prices real duration, rounding up, and bounds supported clips", () => {
-    expect(videoCredits(30, "medium")).toBe(18000);
-    expect(videoCredits(30, "low")).toBe(6000);
-    expect(videoCredits(30.1, "low")).toBe(6200);
-    expect(videoCredits(30.1, "high")).toBe(37200);
+    expect(videoCredits(30, "medium")).toBe(27000);
+    expect(videoCredits(30, "low")).toBe(9000);
+    expect(videoCredits(30.1, "low")).toBe(9300);
+    expect(videoCredits(30.1, "high")).toBe(55800);
     expect(() => videoCredits(4.9, "medium")).toThrow();
     expect(() => videoCredits(60.1, "medium")).toThrow();
     expect(() => videoCredits(NaN, "high")).toThrow();
@@ -70,9 +70,9 @@ describe("Video credits and request validation", () => {
     const body = form(); const id = await create(body);
     const retry = await request("/videos", { method: "POST", body });
     expect((await retry.json() as any).id).toBe(id);
-    expect(used()).toBe(18100); expect(env.VIDEO_GENERATION.create).toHaveBeenCalledTimes(1);
+    expect(used()).toBe(27100); expect(env.VIDEO_GENERATION.create).toHaveBeenCalledTimes(1);
     expect((await request("/videos", { method: "POST", body: form() })).status).toBe(409);
-    expect(used()).toBe(18100);
+    expect(used()).toBe(27100);
   });
   it("rejects missing auth, unverified users, cross-origin requests and missing configuration", async () => {
     expect((await request("/videos", { method: "POST", body: form() }, false)).status).toBe(401);
@@ -96,16 +96,24 @@ describe("Video credits and request validation", () => {
     expect((await request("/videos", { method: "POST", body: form() })).status).toBe(402);
     expect(used()).toBe(100); expect(env.VIDEO_GENERATION.create).not.toHaveBeenCalled();
   });
+  it("rejects prices quoted before the rate change without reserving credits", async () => {
+    env.WAVESPEED_API_KEY = "test-key";
+    for (const [tier, credits] of [["low", "6000"], ["medium", "18000"], ["high", "36000"]]) {
+      expect((await request("/videos", { method: "POST", body: form(tier, { credits }) })).status).toBe(409);
+    }
+    expect(used()).toBe(100);
+    expect(env.VIDEO_GENERATION.create).not.toHaveBeenCalled();
+  });
   it("requires a real image and consent for high quality", async () => {
     expect((await request("/videos", { method: "POST", body: form("high", { consent: "false" }) })).status).toBe(400);
     const bad = form("high", { consent: "true" }); bad.set("image", new Blob(["x".repeat(100)]), "portrait.png");
     expect((await request("/videos", { method: "POST", body: bad })).status).toBe(400);
     const body = form("high", { consent: "true" }); body.set("image", new Blob([png]), "portrait.png");
-    await create(body); expect(used()).toBe(36100);
+    await create(body); expect(used()).toBe(54100);
   });
   it("keeps a reservation on ambiguous dispatch and cron selects the video workflow", async () => {
     env.VIDEO_GENERATION.create.mockRejectedValueOnce(new Error("timeout"));
-    const id = await create(); expect(used()).toBe(18100);
+    const id = await create(); expect(used()).toBe(27100);
     sqlite.prepare("UPDATE jobs SET updated_at=? WHERE id=?").run(now()-1000, id);
     env.VIDEO_GENERATION.get.mockRejectedValue(new Error("not found"));
     await maintenance(env);
@@ -158,7 +166,7 @@ describe("Three-tier provider routing", () => {
     }); vi.stubGlobal("fetch", mock);
     await new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step);
     const row = sqlite.prepare("SELECT * FROM jobs WHERE id=?").get(id)!;
-    expect(row.status).toBe("completed"); expect(used()).toBe(6100);
+    expect(row.status).toBe("completed"); expect(used()).toBe(9100);
     expect(JSON.parse(row.provider_request as string)).toMatchObject({ provider: "wavespeed", request_id: "wave-1", status_url: statusUrl });
     expect(env.AUDIO.objects.has(JSON.parse(row.video_meta as string).imageKey)).toBe(false);
     expect((await (await request(`/jobs/${id}`)).json() as any).job.video_tier).toBe("low");
@@ -196,7 +204,7 @@ describe("Three-tier provider routing", () => {
       return Response.json({ data: { id: "wave-1", status: "completed", outputs: [{ url: videoUrl }] } });
     }); vi.stubGlobal("fetch", mock);
     await new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step);
-    expect(used()).toBe(6100);
+    expect(used()).toBe(9100);
   });
   it("preserves old Argil job routing and does not offer Argil for new requests", async () => {
     expect((await request("/videos", { method: "POST", body: form("standard") })).status).toBe(400);
@@ -207,7 +215,7 @@ describe("Three-tier provider routing", () => {
     const call = mock.mock.calls.find(c => c[1]?.method === "POST")!;
     expect(call[0]).toBe("https://queue.fal.run/argil/avatars/audio-to-video");
     expect(JSON.parse(call[1]!.body as string).avatar).toBe("Mia outdoor (UGC)");
-    expect(used()).toBe(18100);
+    expect(used()).toBe(27100);
   });
 });
 describe("Video workflow and private assets", () => {
@@ -233,7 +241,7 @@ describe("Video workflow and private assets", () => {
     await new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step);
     await notifyVideo(env, id);
     expect(send).toHaveBeenCalledTimes(1);
-    expect(used()).toBe(18100);
+    expect(used()).toBe(27100);
     expect((await (await request(`/jobs/${id}`)).json() as any).job).toMatchObject({ status: "completed", email_status: "failed" });
     expect((await request(`/jobs/${id}/video`)).status).toBe(200);
   });
@@ -299,7 +307,7 @@ describe("Video workflow and private assets", () => {
     expect(typeof input.image_url).toBe("string"); expect(typeof input.audio_url).toBe("string");
     expect(input.avatar).toBeUndefined();
     expect(sqlite.prepare("SELECT status FROM jobs WHERE id=?").get(id)!.status).toBe("completed");
-    expect(used()).toBe(18100);
+    expect(used()).toBe(27100);
     expect((await request(`/video-inputs/${id}/audio?token=${meta.token}`, {}, false)).status).toBe(404);
     expect((await request(`/jobs/${id}/video`, {}, false)).status).toBe(401);
     const r = await request(`/jobs/${id}/video?download=1`);
@@ -318,7 +326,7 @@ describe("Video workflow and private assets", () => {
     expect(call[0]).toBe("https://queue.fal.run/fal-ai/kling-video/ai-avatar/v2/pro");
     expect(JSON.parse(call[1]!.body as string).image_url).toContain(`/video-inputs/${id}/image?token=`);
     expect(env.AUDIO.objects.has(meta.imageKey)).toBe(false);
-    expect(used()).toBe(36100);
+    expect(used()).toBe(54100);
   });
   it("refunds the original window exactly once when provider submission fails", async () => {
     const id = await create();

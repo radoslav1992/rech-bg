@@ -15,7 +15,7 @@ export const plans = [
   {
     id: "starter",
     name: "Начало",
-    price: 9,
+    price: 12,
     chars: 30000,
     description: "За първите ви аудио истории.",
     features: [
@@ -28,7 +28,7 @@ export const plans = [
   {
     id: "creator",
     name: "Създател",
-    price: 19,
+    price: 29,
     chars: 100000,
     description: "За съдържание със собствен глас.",
     features: [
@@ -41,7 +41,7 @@ export const plans = [
   {
     id: "studio",
     name: "Студио",
-    price: 39,
+    price: 59,
     chars: 250000,
     description: "За ежедневна работа с аудио.",
     features: [

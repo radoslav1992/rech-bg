@@ -48,11 +48,11 @@ The catalogue is discovered from per-voice objects, including paginated listings
 | --- | --- |
 | Existing audio workspace | 1 credit per billable text character |
 | Premium studio speech | 3 credits per character, including spaces, punctuation and emotion tags |
-| Video low / medium / high | 200 / 600 / 1,200 credits per started second, additional to speech |
+| Video low / medium / high | 300 / 900 / 1,800 credits per started second, additional to speech |
 | Caption editing/export | Included |
 | Delivery suggestions | 5 requests/day included |
 
-Example: a 500-character tagged script costs 1,500 credits for speech. A resulting 30-second medium video costs another 18,000 credits: 19,500 total. Regenerating speech creates a new paid version; editing captions does not regenerate audio or video. Dollar costs depend on the owner's ElevenLabs plan and video provider rates; app credits are not ElevenLabs credits. The existing Stripe prices do not need changes for this release.
+Example: a 500-character tagged script costs 1,500 credits for speech. A resulting 30-second medium video costs another 27,000 credits: 28,500 total. Regenerating speech creates a new paid version; editing captions does not regenerate audio or video. Dollar costs depend on the owner's ElevenLabs plan and video provider rates; app credits are not ElevenLabs credits. Monthly plans are now €12 / €29 / €59 with unchanged credit allowances; follow the Stripe price migration steps in DEPLOYMENT.md. Existing jobs keep their reserved credit amounts.
 
 ## Reliability and storage
 

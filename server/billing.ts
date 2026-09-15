@@ -144,7 +144,7 @@ billing.post("/checkout", async (c) => {
       success_url: origin(c.env, c.req.raw) + "/app/billing?success=1",
       cancel_url: origin(c.env, c.req.raw) + "/app/billing?cancelled=1",
     },
-    { idempotencyKey: `rech-checkout-${intent.intent_id}` },
+    { idempotencyKey: `rech-checkout-${intent.intent_id}-${id}` },
   );
   return c.json({ url: session.url });
 });

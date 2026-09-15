@@ -14,9 +14,9 @@ beforeEach(async () => {
   log = vi.spyOn(console, "error").mockImplementation(() => {});
 });
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); sqlite.close(); });
-function checkout() {
+function checkout(plan = "creator") {
   return worker.fetch(new Request("https://rechbg.com/api/billing/checkout", {
-    method: "POST", headers: { Origin: "https://rechbg.com", Cookie: "rech_session=session", "Content-Type": "application/json" }, body: JSON.stringify({ plan: "creator" }),
+    method: "POST", headers: { Origin: "https://rechbg.com", Cookie: "rech_session=session", "Content-Type": "application/json" }, body: JSON.stringify({ plan }),
   }), env, { waitUntil: () => {} } as any);
 }
 it.each([
@@ -48,7 +48,7 @@ it("preserves successful checkout and grants no credits before the webhook", asy
   vi.stubGlobal("fetch", vi.fn(async (input: any) => {
     const url = String(input);
     if (url.includes("/subscriptions")) return Response.json({ data: [] });
-    if (url.includes("/prices/")) return Response.json({ active: true, currency: "eur", unit_amount: 1900, recurring: { interval: "month", interval_count: 1 }, tax_behavior: "inclusive" });
+    if (url.includes("/prices/")) return Response.json({ active: true, currency: "eur", unit_amount: 2900, recurring: { interval: "month", interval_count: 1 }, tax_behavior: "inclusive" });
     return Response.json({ url: "https://checkout.stripe.com/test" });
   }));
   const response = await checkout();
@@ -56,4 +56,44 @@ it("preserves successful checkout and grants no credits before the webhook", asy
   expect(await response.json()).toEqual({ url: "https://checkout.stripe.com/test" });
   expect(sqlite.prepare("SELECT COUNT(*) n FROM subscriptions").get()!.n).toBe(0);
   expect(log).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["starter", "STRIPE_PRICE_STARTER", 1200, 900],
+  ["creator", "STRIPE_PRICE_CREATOR", 2900, 1900],
+  ["studio", "STRIPE_PRICE_STUDIO", 5900, 3900],
+])("checks the new %s price and rejects the old amount", async (plan, variable, amount, oldAmount) => {
+  env[variable] = "price_new_" + plan;
+  let unitAmount = oldAmount;
+  const sessions: URLSearchParams[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: any, init: any) => {
+    const url = String(input);
+    if (url.includes("/subscriptions")) return Response.json({ data: [] });
+    if (url.includes("/prices/")) return Response.json({ active: true, currency: "eur", unit_amount: unitAmount, recurring: { interval: "month", interval_count: 1 }, tax_behavior: "inclusive" });
+    sessions.push(new URLSearchParams(init.body));
+    return Response.json({ url: "https://checkout.stripe.com/new" });
+  }));
+  expect((await checkout(String(plan))).status).toBe(503);
+  expect(sessions).toHaveLength(0);
+  unitAmount = amount;
+  expect((await checkout(String(plan))).status).toBe(200);
+  expect(sessions[0].get("line_items[0][price]")).toBe("price_new_" + plan);
+  expect(sessions[0].get("automatic_tax[enabled]")).toBe("true");
+});
+it("uses a fresh Stripe idempotency key when the configured price changes", async () => {
+  const keys: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: any, init: any) => {
+    const url = String(input);
+    if (url.includes("/subscriptions")) return Response.json({ data: [] });
+    if (url.includes("/prices/")) return Response.json({ active: true, currency: "eur", unit_amount: 2900, recurring: { interval: "month", interval_count: 1 }, tax_behavior: "inclusive" });
+    keys.push(new Headers(init.headers).get("idempotency-key")!);
+    return Response.json({ url: "https://checkout.stripe.com/new" });
+  }));
+  expect((await checkout()).status).toBe(200);
+  expect((await checkout()).status).toBe(200);
+  env.STRIPE_PRICE_CREATOR = "price_replacement";
+  expect((await checkout()).status).toBe(200);
+  expect(keys[0]).toBe(keys[1]);
+  expect(keys[2]).not.toBe(keys[0]);
+  expect(keys[2]).toContain("price_replacement");
 });

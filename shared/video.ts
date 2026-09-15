@@ -1,7 +1,7 @@
 export const videoTiers = {
-  low: { name: "Ниско качество", description: "Икономичен вариант за вашия портрет", creditsPerSecond: 200 },
-  medium: { name: "Средно качество", description: "Баланс между детайл и цена", creditsPerSecond: 600 },
-  high: { name: "Високо качество", description: "Повече детайл и изразително движение", creditsPerSecond: 1200 },
+  low: { name: "Ниско качество", description: "Икономичен вариант за вашия портрет", creditsPerSecond: 300 },
+  medium: { name: "Средно качество", description: "Баланс между детайл и цена", creditsPerSecond: 900 },
+  high: { name: "Високо качество", description: "Повече детайл и изразително движение", creditsPerSecond: 1800 },
 } as const;
 export type VideoTier = keyof typeof videoTiers;
 export const MIN_VIDEO_SECONDS = 5;
