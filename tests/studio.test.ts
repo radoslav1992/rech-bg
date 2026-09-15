@@ -4,7 +4,7 @@ import { AudioGeneration } from "../server/workflow";
 import { database, bucket } from "./helpers";
 import { sha } from "../server/security";
 import { now } from "../server/types";
-import { alignmentWords, subtitleFile } from "../shared/captions";
+import { alignmentWords, captionStyles, subtitleFile } from "../shared/captions";
 import { validateStudioScript, validateSuggestedDelivery } from "../shared/studio";
 
 let env: any, sqlite: ReturnType<typeof database>["sqlite"];
@@ -106,6 +106,21 @@ it("protects caption ownership and validates edited timings", async () => {
   sqlite.prepare("UPDATE jobs SET user_id='other' WHERE id=?").run(id);
   expect((await request(`/video-studio/captions/${id}`, undefined, "GET")).status).toBe(404);
   expect((await request(`/video-studio/captions/${id}`, doc, "PUT")).status).toBe(404);
+});
+it("round-trips every caption preset and export option while rejecting malformed looks", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(speech())));
+  const { id } = await (await generate()).json() as any;
+  await new AudioGeneration({} as any, env).run({ payload: { jobId: id } } as any, step);
+  const path = `/video-studio/captions/${id}`;
+  const doc = { words: [{ text: "История", start: 0, end: .4 }], style: "karaoke", format: "4:5", position: "top", enabled: true, accent: "#ffe16b", textColor: "#ffffff", size: 1.2, uppercase: true, resolution: "1080p", fit: "cover" };
+  for (const style of captionStyles) {
+    expect((await request(path, { ...doc, style }, "PUT")).status).toBe(200);
+    expect(await (await request(path, undefined, "GET")).json()).toEqual({ ...doc, style });
+  }
+  for (const invalid of [{ accent: "red" }, { textColor: "url(x)" }, { size: 10 }, { resolution: "4k" }, { fit: "stretch" }, { style: "unknown" }]) {
+    expect((await request(path, { ...doc, ...invalid }, "PUT")).status).toBe(400);
+  }
+  expect((await request(path, { ...doc, enabled: false }, "PUT")).status).toBe(200);
 });
 it("strips performance cues from timed captions and exports proper subtitle files", () => {
   const characters = [..."[laughs]Здравей свят!"];

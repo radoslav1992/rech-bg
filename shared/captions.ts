@@ -1,8 +1,37 @@
 export type CaptionWord = { text: string; start: number; end: number };
-export type CaptionStyle = "classic" | "bold" | "karaoke";
-export type CaptionFormat = "9:16" | "1:1" | "16:9";
-export type CaptionDocument = { words: CaptionWord[]; style: CaptionStyle; format: CaptionFormat; position: "bottom" | "middle"; enabled: boolean };
+export const captionStyles = ["classic", "bold", "karaoke", "highlight", "pop", "minimal", "neon", "typewriter"] as const;
+export type CaptionStyle = typeof captionStyles[number];
+export type CaptionFormat = "9:16" | "1:1" | "16:9" | "4:5";
+export type CaptionDocument = {
+  words: CaptionWord[]; style: CaptionStyle; format: CaptionFormat;
+  position: "bottom" | "middle" | "top"; enabled: boolean;
+  accent?: string; textColor?: string; size?: number; uppercase?: boolean;
+  resolution?: "720p" | "1080p"; fit?: "contain" | "cover";
+};
+export type CaptionLook = Omit<CaptionDocument, "words">;
+export const captionPresets: { id: CaptionStyle; name: string; description: string; accent: string; uppercase: boolean }[] = [
+  { id: "karaoke", name: "Караоке", description: "Всяка дума получава своя момент", accent: "#c8f560", uppercase: true },
+  { id: "highlight", name: "Маркер", description: "Цветен фон следва гласа", accent: "#ffe16b", uppercase: false },
+  { id: "bold", name: "Силен глас", description: "Едър текст с ясен контур", accent: "#c8f560", uppercase: true },
+  { id: "pop", name: "На фокус", description: "Една дума. Цялото внимание.", accent: "#c8f560", uppercase: true },
+  { id: "classic", name: "Класика", description: "Четлив текст върху тъмен фон", accent: "#c8f560", uppercase: false },
+  { id: "minimal", name: "Чисто", description: "Дискретен текст, повече картина", accent: "#c8f560", uppercase: false },
+  { id: "neon", name: "Неон", description: "Цветен акцент с меко сияние", accent: "#73e8ec", uppercase: true },
+  { id: "typewriter", name: "Разкриване", description: "Думите се появяват с разказа", accent: "#c8f560", uppercase: false },
+];
 export const defaultCaptions: CaptionDocument = { words: [], style: "karaoke", format: "9:16", position: "bottom", enabled: true };
+export const demoWords: CaptionWord[] = [
+  { text: "Всяка", start: 0, end: .65 }, { text: "история", start: .65, end: 1.3 },
+  { text: "заслужава", start: 1.3, end: 2 }, { text: "глас.", start: 2, end: 2.8 },
+];
+export function captionLook(document: CaptionDocument): CaptionLook {
+  return {
+    style: document.style, format: document.format, position: document.position, enabled: document.enabled,
+    accent: document.accent || captionPresets.find(p => p.id === document.style)!.accent,
+    textColor: document.textColor || "#ffffff", size: document.size || 1, uppercase: document.uppercase || false,
+    resolution: document.resolution || "720p", fit: document.fit || "contain",
+  };
+}
 export function alignmentWords(alignment: { characters: string[]; characterStartTimesSeconds: number[]; characterEndTimesSeconds: number[] } | undefined): CaptionWord[] {
   if (!alignment) return [];
   const { characters, characterStartTimesSeconds: starts, characterEndTimesSeconds: ends } = alignment;

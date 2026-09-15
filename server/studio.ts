@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { ContextVars, Env } from "./types";
 import { rate } from "./security";
 import { captionKey } from "./studio-speech";
-import { defaultCaptions } from "../shared/captions";
+import { captionStyles, defaultCaptions } from "../shared/captions";
 import { emotionTags, studioVoices, stripTags, validateStudioScript, validateSuggestedDelivery } from "../shared/studio";
 export const studio = new Hono<{ Bindings: Env; Variables: ContextVars }>();
 studio.get("/config", c => c.json({ enabled: !!c.env.ELEVENLABS_API_KEY?.trim(), voices: studioVoices }));
@@ -24,7 +24,10 @@ studio.post("/delivery", async c => {
 });
 const documentSchema = z.object({
   words: z.array(z.object({ text: z.string().trim().min(1).max(80).refine(s => !/[\[\]\r\n<>]/.test(s)), start: z.number().finite().min(0), end: z.number().finite().min(0) })).max(1000),
-  style: z.enum(["classic", "bold", "karaoke"]), format: z.enum(["9:16", "1:1", "16:9"]), position: z.enum(["bottom", "middle"]), enabled: z.boolean(),
+  style: z.enum(captionStyles), format: z.enum(["9:16", "1:1", "16:9", "4:5"]), position: z.enum(["bottom", "middle", "top"]), enabled: z.boolean(),
+  accent: z.string().regex(/^#[0-9a-f]{6}$/i).optional(), textColor: z.string().regex(/^#[0-9a-f]{6}$/i).optional(),
+  size: z.number().min(.7).max(1.4).optional(), uppercase: z.boolean().optional(),
+  resolution: z.enum(["720p", "1080p"]).optional(), fit: z.enum(["contain", "cover"]).optional(),
 });
 studio.use("/captions/:id", async (c, next) => {
   const job = await c.env.DB.prepare("SELECT id FROM jobs WHERE id=? AND user_id=? AND mode='studio' AND kind='audio' AND status='completed'").bind(c.req.param("id"), c.get("user").id).first();
