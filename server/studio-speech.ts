@@ -14,7 +14,7 @@ export async function runStudioSpeech(env: Env, job: any, step: WorkflowStep) {
   await step.do("studio-speech-once", { retries: { limit: 0, delay: "5 seconds" }, timeout: "5 minutes" }, async () => {
     if (await env.AUDIO.head(key)) return;
     validateStudioScript(job.script);
-    const { providerVoiceId: voice } = await resolveStudioVoice(env, job.voice);
+    const { providerVoiceId: voice } = await resolveStudioVoice(env, job.voice, true);
     if (!env.ELEVENLABS_API_KEY?.trim() || typeof voice !== "string" || !voice) throw new Error("Studio voice unavailable");
     const claim = await env.DB.prepare("UPDATE jobs SET submitted_at=?,updated_at=? WHERE id=? AND submitted_at IS NULL AND status IN ('queued','running')")
       .bind(now(), now(), job.id).run();

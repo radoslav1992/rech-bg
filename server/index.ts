@@ -15,7 +15,7 @@ import { billingFailure } from "./billing-errors";
 import { segments, voiceMap, TTS_MODEL, decodeAudio, wavHeader } from "./audio";
 import { withDefaults } from "./config";
 import { studio } from "./studio";
-import { studioVoices, validateStudioScript } from "../shared/studio";
+import { validateStudioScript } from "../shared/studio";
 import { videos, videoInputs } from "./video";
 import { notifyVideo } from "./video-notifications";
 export { AudioGeneration } from "./workflow";
@@ -103,8 +103,8 @@ app.get("/api/voices/:id/sample", async (c) => {
     .first<any>();
   if (!row) throw new HTTPException(404, { message: "Примерът предстои." });
   if (isStudioVoice(c.req.param("id"))) {
-    const voice = await resolveStudioVoice(c.env, c.req.param("id"));
-    if (!row.object_key.startsWith(`samples/${voice.id}/${voice.revision}/`))
+    const voice = await resolveStudioVoice(c.env, c.req.param("id"), true);
+    if (voice.removed || !row.object_key.startsWith(`samples/${voice.id}/${voice.revision}/`))
       throw new HTTPException(404, { message: "Примерът предстои." });
   }
   const o = await c.env.AUDIO.get(row.object_key);
@@ -165,10 +165,10 @@ const projectSchema = z.object({
   title: z.string().trim().min(1).max(120),
   mode: z.enum(["tts", "podcast", "voiceover", "studio"]),
   script: z.string().max(14000),
-  voice: z.string().refine((s) => !!voiceMap[s] || studioVoices.some(v => v.id === s)),
+  voice: z.string().refine((s) => !!voiceMap[s] || isStudioVoice(s)),
   second_voice: z.string().refine((s) => !!voiceMap[s]),
   pause_ms: z.number().int().min(0).max(1500).default(400),
-}).refine(p => p.mode === "studio" ? studioVoices.some(v => v.id === p.voice) && p.script.length <= 1500 : !!voiceMap[p.voice], { message: "Невалиден глас или сценарий за този тип проект." });
+}).refine(p => p.mode === "studio" ? isStudioVoice(p.voice) && p.script.length <= 1500 : !!voiceMap[p.voice], { message: "Невалиден глас или сценарий за този тип проект." });
 app.get("/api/projects", async (c) => {
   const r = await c.env.DB.prepare(
     "SELECT p.*,j.id AS latest_job,j.status,j.duration FROM projects p LEFT JOIN jobs j ON j.id=(SELECT id FROM jobs WHERE project_id=p.id ORDER BY created_at DESC, rowid DESC LIMIT 1) WHERE p.user_id=? ORDER BY p.updated_at DESC LIMIT 100",
@@ -189,6 +189,7 @@ app.get("/api/projects/:id", async (c) => {
 app.post("/api/projects", async (c) => {
   await rate(c, "project-create", 100, 3600, c.get("user").id);
   const d = projectSchema.parse(await c.req.json());
+  if (d.mode === "studio") await resolveStudioVoice(c.env, d.voice);
   const count = await c.env.DB.prepare(
     "SELECT COUNT(*) n FROM projects WHERE user_id=?",
   )
@@ -219,6 +220,7 @@ app.post("/api/projects", async (c) => {
 });
 app.put("/api/projects/:id", async (c) => {
   const d = projectSchema.parse(await c.req.json());
+  if (d.mode === "studio") await resolveStudioVoice(c.env, d.voice);
   const r = await c.env.DB.prepare(
     "UPDATE projects SET title=?,mode=?,script=?,voice=?,second_voice=?,pause_ms=?,updated_at=? WHERE id=? AND user_id=?",
   )
@@ -289,6 +291,7 @@ app.post("/api/generate", async (c) => {
   if (!p) throw new HTTPException(404, { message: "Проектът не е намерен." });
   if (p.mode === "studio" && !c.env.ELEVENLABS_API_KEY?.trim())
     throw new HTTPException(503, { message: "Озвучаването във видео студиото още не е активирано." });
+  if (p.mode === "studio") await resolveStudioVoice(c.env, p.voice);
   let turns;
   try {
     if (p.mode === "studio") validateStudioScript(p.script);
@@ -567,18 +570,25 @@ app.get("/api/admin/messages", async (c) =>
 app.get("/api/admin/studio-voices", async c => c.json({
   enabled: !!c.env.ELEVENLABS_API_KEY?.trim(), voices: await studioVoiceCatalog(c.env),
 }));
+app.post("/api/admin/studio-voices", async c => {
+  await rate(c, "studio-voice-create", 60, 3600, c.get("user").id);
+  const configuration = studioVoiceSchema.parse(await c.req.json());
+  const id = `studio-${uid()}`;
+  await c.env.AUDIO.put(studioVoiceKey(id), JSON.stringify(configuration), { httpMetadata: { contentType: "application/json" } });
+  return c.json({ voice: await resolveStudioVoice(c.env, id) }, 201);
+});
 app.put("/api/admin/studio-voices/:id", async c => {
   const id = c.req.param("id");
-  if (!isStudioVoice(id)) throw new HTTPException(400, { message: "Невалиден студиен глас." });
+  await resolveStudioVoice(c.env, id);
   const configuration = studioVoiceSchema.parse(await c.req.json());
   await c.env.AUDIO.put(studioVoiceKey(id), JSON.stringify(configuration), { httpMetadata: { contentType: "application/json" } });
   return c.json({ voice: await resolveStudioVoice(c.env, id) });
 });
 app.delete("/api/admin/studio-voices/:id", async c => {
-  const id = c.req.param("id");
-  if (!isStudioVoice(id)) throw new HTTPException(400, { message: "Невалиден студиен глас." });
-  await c.env.AUDIO.delete(studioVoiceKey(id));
-  return c.json({ voice: await resolveStudioVoice(c.env, id) });
+  const id = c.req.param("id"), voice = await resolveStudioVoice(c.env, id, true);
+  // A tombstone prevents built-in voices from reappearing. Keep the mapping for already-queued jobs.
+  await c.env.AUDIO.put(studioVoiceKey(id), JSON.stringify({ ...studioVoiceSchema.parse(voice), removed: true }), { httpMetadata: { contentType: "application/json" } });
+  return c.json({ ok: true });
 });
 app.post("/api/admin/voices/:id/sample/generate", async (c) => {
   const id = c.req.param("id");

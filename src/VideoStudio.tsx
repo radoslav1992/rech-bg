@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { Film, Mic, Sparkles, Save, Check, ArrowRight } from "lucide-react";
 import { api, post, Button, Notice, number, useAuth, type Job } from "./lib";
 import { jobsChanged, jobStatus, useJobs } from "./JobActivity";
-import { studioVoices, emotionTags, studioMaxChars, validateStudioScript } from "../shared/studio";
+import { emotionTags, studioMaxChars, validateStudioScript } from "../shared/studio";
 import { StudioVoicePicker } from "./StudioVoicePicker";
 import type { StudioVoice } from "../shared/studio";
 import { VideoPanel } from "./VideoPanel";
@@ -14,8 +14,10 @@ import "./video-studio.css";
 export function VideoStudio() {
   const { id } = useParams(), navigate = useNavigate(), [params] = useSearchParams();
   const { user, refresh } = useAuth(), { jobs: allJobs, error: pollingError } = useJobs();
-  const [title, setTitle] = useState("Моята видео история"), [script, setScript] = useState(""), [voice, setVoice] = useState<string>(studioVoices[0].id);
-  const [voices, setVoices] = useState<readonly StudioVoice[]>(studioVoices);
+  const [title, setTitle] = useState("Моята видео история"), [script, setScript] = useState(""), [voice, setVoice] = useState<string>("");
+  const [voices, setVoices] = useState<readonly StudioVoice[]>([]);
+  const [voiceError, setVoiceError] = useState(""), [voicesLoaded, setVoicesLoaded] = useState(false);
+  const catalogRequest = useRef(0);
   const [enabled, setEnabled] = useState(false), [loading, setLoading] = useState(!!id), [busy, setBusy] = useState(false), [error, setError] = useState("");
   const [dirty, setDirty] = useState(false), [tone, setTone] = useState("ad"), [suggestion, setSuggestion] = useState(""), [undo, setUndo] = useState<string | null>(null);
   const [selectedAudio, setSelectedAudio] = useState(""), [approved, setApproved] = useState(""), [selectedVideo, setSelectedVideo] = useState("");
@@ -32,12 +34,27 @@ export function VideoStudio() {
   const remaining = Math.max(0, (user?.limit || 0) - (user?.used || 0));
   let cost = script.length * 3, scriptError = "";
   try { cost = validateStudioScript(script); } catch (e) { scriptError = (e as Error).message; }
-  useEffect(() => { api("/video-studio/config").then(d => { setEnabled(d.enabled); setVoices(d.voices || studioVoices); }).catch(e => setError(e.message)); }, []);
+  const loadVoices = async () => {
+    const request = ++catalogRequest.current;
+    try {
+      const d = await api<{ enabled: boolean; voices: StudioVoice[] }>("/video-studio/config");
+      if (!Array.isArray(d.voices)) throw new Error("Списъкът с гласове не се зареди. Опитайте отново.");
+      if (request !== catalogRequest.current) return;
+      setEnabled(d.enabled); setVoices(d.voices); setVoicesLoaded(true); setVoiceError("");
+    } catch (e) { if (request === catalogRequest.current) setVoiceError((e as Error).message); }
+  };
+  useEffect(() => {
+    void loadVoices();
+    const refreshVoices = () => { void loadVoices(); };
+    window.addEventListener("focus", refreshVoices); window.addEventListener("rech:studio-voices-changed", refreshVoices);
+    return () => { catalogRequest.current++; window.removeEventListener("focus", refreshVoices); window.removeEventListener("rech:studio-voices-changed", refreshVoices); };
+  }, []);
+  useEffect(() => { if (!id && !voice && voices.length) setVoice(voices[0].id); }, [id, voice, voices]);
   useEffect(() => {
     let live = true;
     if (projectId.current !== id) setVideoFormKey(crypto.randomUUID());
     projectId.current = id; setApproved(""); setSuggestion("");
-    if (!id) { setTitle("Моята видео история"); setScript(""); setVoice(studioVoices[0].id); setDirty(false); setLoading(false); return; }
+    if (!id) { setTitle("Моята видео история"); setScript(""); setVoice(""); setDirty(false); setLoading(false); return; }
     if (skipLoad.current === id) { skipLoad.current = ""; return; }
     setLoading(true);
     api("/projects/" + id).then(({ project }) => {
@@ -92,6 +109,9 @@ export function VideoStudio() {
     {!enabled && <Notice>Видео студиото е подготвено. Премиум озвучаването ще бъде достъпно след активиране.</Notice>}
     <div className="vs-layout"><section className="vs-card vs-script"><div className="sub-heading"><h2><Film size={23} /> Дайте начало на историята</h2><span>01 / СЦЕНАРИЙ</span></div>
       <fieldset disabled={busy}><label>Име на проекта<input value={title} maxLength={120} onChange={e => edit(() => setTitle(e.target.value))} /></label>
+      {voiceError && <Notice>{voiceError} <button type="button" className="text-link" onClick={() => void loadVoices()}>Зареди гласовете отново</button></Notice>}
+      {!voicesLoaded && !voiceError && <p>Зареждане на гласовете…</p>}
+      {voicesLoaded && !voices.length && <Notice>В момента няма активни гласове за видео. Администраторът може да добави глас от настройките.</Notice>}
       <StudioVoicePicker voices={voices} selected={voice} onSelect={id => edit(() => setVoice(id))} />
       <label htmlFor="video-script">Вашият сценарий</label><div className="vs-tags">{emotionTags.map(([tag, label]) => <button key={tag} onClick={() => insertTag(tag)} title={`[${tag}]`}>{label}</button>)}</div>
       <textarea ref={editor} id="video-script" value={script} maxLength={studioMaxChars} rows={10} placeholder="[curious]Понякога е нужен само един глас, за да оживее една история…" onChange={e => edit(() => setScript(e.target.value))} />
@@ -100,7 +120,7 @@ export function VideoStudio() {
       {suggestion && <div className="vs-suggestion"><strong>Предложение — прегледайте преди да приложите</strong><p>{suggestion}</p><button className="btn dark" onClick={() => { setUndo(script); edit(() => setScript(suggestion)); }}>Приложи</button><button className="btn" onClick={() => setSuggestion("")}>Отхвърли</button></div>}
       {undo !== null && <button className="btn" onClick={() => { edit(() => setScript(undo)); setUndo(null); }}>Върни предишния сценарий</button>}
       </fieldset>
-      <div className="vs-actions"><Button className="btn" busy={busy} disabled={!title.trim()} onClick={async () => { setBusy(true); try { await save(); } catch (e) { setError((e as Error).message); } finally { setBusy(false); } }}><Save size={17} /> {dirty || !id ? "Запази проекта" : "Запазен"}</Button><Button className="btn primary" busy={busy} disabled={!enabled || active || !!scriptError || !title.trim() || cost > remaining || !user?.verified} onClick={generate}><Mic size={17} /> Създай глас · {number(cost)} кредита</Button></div>
+      <div className="vs-actions"><Button className="btn" busy={busy} disabled={!title.trim() || !voices.some(v => v.id === voice)} onClick={async () => { setBusy(true); try { await save(); } catch (e) { setError((e as Error).message); } finally { setBusy(false); } }}><Save size={17} /> {dirty || !id ? "Запази проекта" : "Запазен"}</Button><Button className="btn primary" busy={busy} disabled={!enabled || !voices.some(v => v.id === voice) || active || !!scriptError || !title.trim() || cost > remaining || !user?.verified} onClick={generate}><Mic size={17} /> Създай глас · {number(cost)} кредита</Button></div>
       {script.length > 0 && scriptError && <Notice>{scriptError}</Notice>}
       {cost > remaining && <p>Нужни са още {number(cost - remaining)} кредита. <Link to="/app/billing">Вижте плановете</Link></p>}
       <p className="vs-fine">3 кредита за символ, включително таговете. Всяко ново озвучаване се заплаща. Видеото се таксува отделно след одобрението ви. За видео целете 5–60 секунди — обикновено около 50–120 думи.</p>

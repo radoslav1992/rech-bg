@@ -4301,3 +4301,8 @@ label,
 .studio-sample-admin > form { margin-top: 24px; }
 .studio-voice-admin button:disabled { opacity: .55; cursor: not-allowed; }
 .studio-voice-admin blockquote { margin: 16px 0; }
+
+.studio-admin-toolbar { display: flex; align-items: flex-end; gap: 16px; margin-bottom: 16px; }
+.studio-admin-toolbar label { flex: 1; margin: 0; min-width: 0; }
+.studio-admin-toolbar .btn { flex-shrink: 0; }
+@media (max-width: 600px) { .studio-admin-toolbar { flex-direction: column; align-items: stretch; } }
