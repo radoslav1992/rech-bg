@@ -1819,7 +1819,8 @@ progress::-webkit-progress-value {
 .mobile-app {
   display: none;
 }
-.studio-page {
+.studio-page,
+.video-studio {
   padding: 30px 35px 50px;
   max-width: 1600px;
   margin: auto;
@@ -2437,7 +2438,8 @@ blockquote {
   .app-page {
     padding: 30px;
   }
-  .studio-page {
+  .studio-page,
+  .video-studio {
     padding: 25px;
   }
   .studio-layout {
@@ -3468,7 +3470,8 @@ blockquote {
     padding: 12px 20px;
     font-size: 0.75rem;
   }
-  .studio-page {
+  .studio-page,
+  .video-studio {
     padding: 23px 18px 40px;
   }
   .studio-heading {
