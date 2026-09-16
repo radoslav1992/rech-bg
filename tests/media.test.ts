@@ -266,22 +266,30 @@ it("transcribes Bulgarian using a private input URL and never repeats an ambiguo
   expect(fetch).toHaveBeenCalledTimes(1);
   expect(usage()).toBe(1000);
 });
-it("queues the documented two-image product edit, stores private variants, and exposes no provider ticket", async () => {
+it.each([
+  { scene: undefined, count: 2 },
+  { scene: "original", count: 4 },
+  { scene: "studio", count: 2 },
+  { scene: "home", count: 2 },
+  { scene: "outdoor", count: 2 },
+])("queues product edits ($scene, $count variants), stores private variants, and exposes no provider ticket", async ({ scene, count }) => {
   const portrait = asset("portrait"),
     product = asset("product"),
     key = crypto.randomUUID();
   const response = await request("/media/products", {
     portraitId: portrait,
     productId: product,
-    count: 2,
+    count,
     placement: "hold",
-    scene: "studio",
+    scene,
     consent: true,
     idempotencyKey: key,
-    credits: 5000,
+    credits: count * 2500,
   });
   expect(response.status).toBe(202);
   const { id } = (await response.json()) as any;
+  const payload = JSON.parse(String(sqlite.prepare("SELECT payload FROM media_tasks WHERE id=?").get(id)!.payload));
+  expect(payload.scene).toBe(scene ?? "original");
   const ticket = {
     request_id: "r",
     status_url:
@@ -299,19 +307,20 @@ it("queues the documented two-image product edit, stores private variants, and e
   const mock = vi.fn(async (url: string, init: any) => {
     if (init?.method === "POST") {
       const input = JSON.parse(init.body);
-      expect(input.num_images).toBe(2);
+      expect(input.num_images).toBe(count);
       expect(input.resolution).toBe("1K");
+      expect(input.aspect_ratio).toBe("9:16");
+      expect(input.limit_generations).toBe(true);
       expect(input.image_urls).toHaveLength(2);
+      expect(input.image_urls[0]).toContain(`/api/media-inputs/${id}/0?token=`);
+      expect(input.image_urls[1]).toContain(`/api/media-inputs/${id}/1?token=`);
       return Response.json(ticket);
     }
     if (url === ticket.status_url)
       return Response.json({ status: "COMPLETED" });
     if (url === ticket.response_url)
       return Response.json({
-        images: [
-          { url: "https://fal.media/1.jpg" },
-          { url: "https://fal.media/2.jpg" },
-        ],
+        images: Array.from({ length: count }, (_, i) => ({ url: `https://fal.media/${i + 1}.jpg` })),
       });
     return new Response(new Uint8Array([255, 216, 255, ...Array(30).fill(0)]));
   });
@@ -326,8 +335,8 @@ it("queues the documented two-image product edit, stores private variants, and e
         "SELECT COUNT(*) n FROM media_assets WHERE kind='variant' AND status='ready'",
       )
       .get()!.n,
-  ).toBe(2);
-  expect(usage()).toBe(5000);
+  ).toBe(count);
+  expect(usage()).toBe(count * 2500);
   const publicResponse = await (
     await request("/media", undefined, "GET")
   ).text();

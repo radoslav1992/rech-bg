@@ -597,7 +597,7 @@ media.post("/products", async (c) => {
       productId: z.uuid(),
       count: z.union([z.literal(2), z.literal(4)]),
       placement: z.enum(["hold", "table", "beside"]),
-      scene: z.enum(["studio", "home", "outdoor"]),
+      scene: z.enum(["original", "studio", "home", "outdoor"]).default("original"),
       consent: z.literal(true),
       idempotencyKey: z.uuid(),
       credits: z.number().int(),

@@ -254,7 +254,7 @@ export function ProductAvatarPanel({
     [product, setProduct] = useState(""),
     [count, setCount] = useState(2),
     [placement, setPlacement] = useState("hold"),
-    [scene, setScene] = useState("studio"),
+    [scene, setScene] = useState("original"),
     [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState(false),
     [progress, setProgress] = useState<number | null>(null),
@@ -410,6 +410,7 @@ export function ProductAvatarPanel({
           <label>
             Обстановка
             <select value={scene} onChange={(e) => setScene(e.target.value)}>
+              <option value="original">Запази от снимката</option>
               <option value="studio">Студио</option>
               <option value="home">У дома</option>
               <option value="outdoor">На открито</option>
