@@ -58,3 +58,7 @@ npx wrangler deploy --dry-run --no-autoconfig
 - Локалният браузърен преглед беше блокиран от средата за изпълнение; визуална проверка на десктоп и телефон е част от приемането на реалния deployment.
 - Подкастът използва **въведен от потребителя сценарий** с двама водещи. Не обещава автоматично писане на сценарии от тема, voice cloning, MP3 експорт или музикален монтаж.
 - Форматът за озвучаване създава WAV файл за добавяне във външен видео редактор; не рендерира видео.
+
+### Media tools (background captions, uploads, product avatars)
+
+See [deployment and limits](docs/MEDIA-STUDIO.md). Apply `0003_media_studio.sql`, deploy the private FFmpeg container through Workers Builds, then set `MEDIA_ENABLED=true`. The feature stays disabled until configured. Existing ElevenLabs and fal keys are reused.

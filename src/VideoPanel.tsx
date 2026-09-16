@@ -4,7 +4,7 @@ import { Film, Sparkles, ImagePlus } from "lucide-react";
 import { videoTiers, videoCredits, type VideoTier } from "../shared/video";
 import { api, Button, Notice, number, useAuth, type Job } from "./lib";
 import { jobLink, jobStatus } from "./JobActivity";
-export function VideoPanel({ jobs, approved, activeJob, submissionBlocked, onCreated }: { jobs: Job[]; approved: boolean; activeJob: Job | null; submissionBlocked: boolean; onCreated: (job: Job) => void }) {
+export function VideoPanel({ jobs, approved, activeJob, submissionBlocked, onCreated, selectedAsset = "", onClearAsset }: { selectedAsset?: string; onClearAsset?: () => void; jobs: Job[]; approved: boolean; activeJob: Job | null; submissionBlocked: boolean; onCreated: (job: Job) => void }) {
   const { user, refresh } = useAuth();
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [tier, setTier] = useState<VideoTier>("medium");
@@ -44,9 +44,10 @@ export function VideoPanel({ jobs, approved, activeJob, submissionBlocked, onCre
     const url = URL.createObjectURL(image); setImageUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [image]);
+  useEffect(() => { key.current = crypto.randomUUID(); setConsent(false); }, [selectedAsset]);
   const edit = (fn: () => void) => { setError(""); fn(); key.current = crypto.randomUUID(); };
   const generate = async () => {
-    if (submitting.current || !source || !cost || !approved || submissionBlocked || activeJob || !enabled || !available[tier] || !image || !consent || !user?.verified || cost > remaining) return;
+    if (submitting.current || !source || !cost || !approved || submissionBlocked || activeJob || !enabled || !available[tier] || (!image && !selectedAsset) || !consent || !user?.verified || cost > remaining) return;
     submitting.current = true;
     setBusy(true); setError("");
     try {
@@ -55,7 +56,8 @@ export function VideoPanel({ jobs, approved, activeJob, submissionBlocked, onCre
       body.set("idempotencyKey", key.current); body.set("credits", String(cost));
       body.set("consent", String(consent));
       body.set("notifyEmail", String(emailAvailable && notifyEmail));
-      if (image) body.set("image", image);
+      if (selectedAsset) body.set("assetId", selectedAsset);
+      else if (image) body.set("image", image);
       const result = await api("/videos", { method: "POST", body });
       const { job } = await api("/jobs/" + result.id);
       onCreated(job); key.current = crypto.randomUUID(); await refresh();
@@ -81,10 +83,11 @@ export function VideoPanel({ jobs, approved, activeJob, submissionBlocked, onCre
           </button>)}
         </div>
         <div className="avatar-portrait">
+          {selectedAsset && <div className="product-selected"><strong>Избран аватар с продукт</strong><img src={`/api/media/assets/${selectedAsset}/file`} alt="Избран аватар с продукт"/><button type="button" className="btn" onClick={onClearAsset}>Използвай друг портрет</button></div>}
           <label><ImagePlus size={18} /> Вашият портрет<input type="file" accept="image/jpeg,image/png" onChange={e => edit(() => {
             const file = e.target.files?.[0] || null;
             if (file && file.size > 2 * 1024 * 1024) { setImage(null); e.target.value = ""; setError("Изберете изображение до 2 MB."); return; }
-            setImage(file); setConsent(false);
+            setImage(file); onClearAsset?.(); setConsent(false);
           })} /></label>
           <p className="small-note">JPG или PNG до 2 MB, с ясно видимо лице. За вертикално видео използвайте вертикален портрет.</p>
           {imageUrl && <img src={imageUrl} alt="Вашият портрет за видеото" />}
@@ -96,7 +99,7 @@ export function VideoPanel({ jobs, approved, activeJob, submissionBlocked, onCre
       {error && <Notice>{error}</Notice>}
       <div className="generate-bar">
         <div><strong>{number(cost)} кредита за видеото</strong><small>Налични: {number(remaining)} кредита</small></div>
-        <Button className="btn dark" busy={busy} disabled={submissionBlocked || !!activeJob || !source || !approved || !enabled || !available[tier] || !user?.verified || !cost || cost > remaining || !image || !consent} onClick={generate}>
+        <Button className="btn dark" busy={busy} disabled={submissionBlocked || !!activeJob || !source || !approved || !enabled || !available[tier] || !user?.verified || !cost || cost > remaining || (!image && !selectedAsset) || !consent} onClick={generate}>
           <Sparkles size={18} /> Създай видео · {number(cost)} кредита
         </Button>
       </div>

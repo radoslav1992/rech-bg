@@ -1,3 +1,4 @@
+import { finishJobStorage } from './media-storage';
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import type { Env } from "./types";
 import { now } from "./types";
@@ -132,6 +133,7 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> 
           if (result.moderation_error || !result.video?.url) throw new VideoFailure("RESULT", "PROVIDER");
           await storeVideo(this.env, key, result.video.url);
         }
+        await finishJobStorage(this.env,id,key,job.duration);
         await this.env.DB.prepare("UPDATE jobs SET status='completed',video_key=?,updated_at=? WHERE id=? AND status IN ('queued','running')").bind(key, now(), id).run();
       });
       stage = "CLEANUP";

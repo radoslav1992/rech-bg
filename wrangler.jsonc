@@ -25,7 +25,11 @@
     },
   ],
   "r2_buckets": [{ "binding": "AUDIO", "bucket_name": "rech-bg-audio" }],
+  "containers": [{ "class_name": "MediaRenderer", "image": "./renderer/Dockerfile", "max_instances": 3, "instance_type": "standard-2" }],
+  "durable_objects": { "bindings": [{ "name": "MEDIA_RENDERER", "class_name": "MediaRenderer" }] },
+  "migrations": [{ "tag": "media-v1", "new_sqlite_classes": ["MediaRenderer"] }],
   "workflows": [
+    { "name": "rech-bg-media", "binding": "MEDIA_GENERATION", "class_name": "MediaGeneration" },
     {
       "name": "rech-bg-video",
       "binding": "VIDEO_GENERATION",

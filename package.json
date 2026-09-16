@@ -14,6 +14,7 @@
     "check": "tsc --noEmit"
   },
   "dependencies": {
+    "@cloudflare/containers": "^0.3.7",
     "@elevenlabs/elevenlabs-js": "^2.68.0",
     "@fontsource-variable/manrope": "^5.2.8",
     "hono": "^4.12.0",

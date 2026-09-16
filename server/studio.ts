@@ -23,8 +23,8 @@ studio.post("/delivery", async c => {
   try { return c.json({ text: validateSuggestedDelivery(plain, String(suggestion || "")) }); }
   catch (e) { throw new HTTPException(422, { message: (e as Error).message }); }
 });
-const documentSchema = z.object({
-  words: z.array(z.object({ text: z.string().trim().min(1).max(80).refine(s => !/[\[\]\r\n<>]/.test(s)), start: z.number().finite().min(0), end: z.number().finite().min(0) })).max(1000),
+export const documentSchema = z.object({
+  words: z.array(z.object({ text: z.string().trim().min(1).max(80).refine(s => !/[\[\]\r\n<>]/.test(s)), start: z.number().finite().min(0), end: z.number().finite().min(0) })).max(4000),
   style: z.enum(captionStyles), format: z.enum(["9:16", "1:1", "16:9", "4:5"]), position: z.enum(["bottom", "middle", "top"]), enabled: z.boolean(),
   accent: z.string().regex(/^#[0-9a-f]{6}$/i).optional(), textColor: z.string().regex(/^#[0-9a-f]{6}$/i).optional(),
   size: z.number().min(.7).max(1.4).optional(), uppercase: z.boolean().optional(),

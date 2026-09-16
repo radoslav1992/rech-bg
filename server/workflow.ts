@@ -1,3 +1,4 @@
+import { finishJobStorage, releaseJobStorage } from './media-storage';
 import {
   WorkflowEntrypoint,
   type WorkflowEvent,
@@ -108,6 +109,7 @@ export class AudioGeneration extends WorkflowEntrypoint<
           }),
           feed,
         ]);
+        await finishJobStorage(this.env,id,key,total / rate / 2);
         await this.env.DB.prepare(
           "UPDATE jobs SET status='completed',audio_key=?,duration=?,updated_at=? WHERE id=? AND status IN ('queued','running')",
         )
@@ -137,6 +139,7 @@ export class AudioGeneration extends WorkflowEntrypoint<
             id,
           )
           .run();
+        await releaseJobStorage(this.env,id);
       });
       throw error;
     }

@@ -1,3 +1,5 @@
+import { ownedAsset, mediaError } from './media';
+import { jobStorage, releaseJobStorage } from './media-storage';
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
@@ -31,6 +33,7 @@ export function jobVideoTier(job: { video_meta: string; video_tier: string }): k
 export async function failVideo(env: Env, id: string, message = "Видеото не беше създадено. Кредитите за него са върнати. Аудиозаписът остава наличен.") {
   await env.DB.prepare("UPDATE jobs SET status='failed',error=?,updated_at=? WHERE id=? AND status IN ('queued','running')")
     .bind(message, now(), id).run();
+  await releaseJobStorage(env,id);
 }
 export const videos = new Hono<{ Bindings: Env; Variables: ContextVars }>();
 videos.get("/config", (c) => {
@@ -66,8 +69,14 @@ videos.post("/", async (c) => {
   let image: Uint8Array | undefined;
   {
     if (!meta.consent) throw new HTTPException(400, { message: "Потвърдете правото си да използвате изображението." });
-    const file = form.get("image");
-    if (!(file instanceof File) || file.size < 24 || file.size > 2 * 1024 * 1024)
+    let file = form.get("image");
+    if (form.get("assetId") && c.env.MEDIA_ENABLED === "true") {
+      const asset = await ownedAsset(c.env,user.id,String(form.get("assetId")));
+      if (!["variant","portrait"].includes(asset.kind) || asset.bytes > 8*1024*1024) throw new HTTPException(400);
+      const object = await c.env.AUDIO.get(asset.object_key); if (!object) throw new HTTPException(404);
+      file = new File([await object.arrayBuffer()],"portrait.jpg",{type:asset.mime});
+    }
+    if (!(file instanceof File) || file.size < 24 || file.size > (form.get("assetId") ? 8 : 2) * 1024 * 1024)
       throw new HTTPException(400, { message: "Качете JPG или PNG портрет до 2 MB." });
     image = new Uint8Array(await file.arrayBuffer());
     const png = image.slice(0, 8).every((b, i) => b === [137,80,78,71,13,10,26,10][i]);
@@ -78,10 +87,10 @@ videos.post("/", async (c) => {
   }
   const a = await allowance(c.env, user);
   try {
-    await c.env.DB.prepare("INSERT INTO jobs(id,user_id,project_id,window_id,idempotency_key,title,mode,script,voice,second_voice,pause_ms,chars,created_at,updated_at,kind,source_job_id,video_tier,video_meta,duration) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'video',?,?,?,?)")
+    await c.env.DB.batch([c.env.DB.prepare("INSERT INTO jobs(id,user_id,project_id,window_id,idempotency_key,title,mode,script,voice,second_voice,pause_ms,chars,created_at,updated_at,kind,source_job_id,video_tier,video_meta,duration) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'video',?,?,?,?)")
       // The old column has a two-value CHECK. Store the new tier in metadata;
       // this avoids rebuilding the jobs table and its quota/refund triggers.
-      .bind(id,user.id,source.project_id,a.window,d.idempotencyKey,source.title,source.mode,source.script,source.voice,source.second_voice,0,credits,now(),now(),source.id,"quality",JSON.stringify(meta),source.duration).run();
+      .bind(id,user.id,source.project_id,a.window,d.idempotencyKey,source.title,source.mode,source.script,source.voice,source.second_voice,0,credits,now(),now(),source.id,"quality",JSON.stringify(meta),source.duration), ...(await jobStorage(c.env,user,id,source.title,"video"))]);
   } catch (e) {
     if (String(e).includes("QUOTA_EXCEEDED")) throw new HTTPException(402, { message: "Недостатъчно кредити за това видео. Изберете по-висок план." });
     if (String(e).includes("UNIQUE")) {
@@ -89,7 +98,7 @@ videos.post("/", async (c) => {
       if (existing) return c.json({ id: existing.id });
       throw new HTTPException(409, { message: "Вече се създава запис. Изчакайте той да завърши." });
     }
-    throw e;
+    mediaError(e);
   }
   if (image && meta.imageKey) {
     try { await c.env.AUDIO.put(meta.imageKey, image, { httpMetadata: { contentType: meta.imageMime } }); }

@@ -1,3 +1,4 @@
+import { BackgroundExport } from "./MediaTools";
 import { useEffect, useRef, useState } from "react";
 import { Captions, Download } from "lucide-react";
 import { api, Button, Notice, type Job } from "./lib";
@@ -6,19 +7,20 @@ import { downloadBlob, renderCaptionedVideo } from "./caption-render";
 import { CaptionStyles } from "./CaptionStyles";
 import { CaptionPreview } from "./CaptionPreview";
 import "./captions.css";
-export function CaptionEditor({ audioId, video }: { audioId: string; video: Job | null }) {
+export function CaptionEditor({ audioId, video, uploaded = false }: { audioId: string; video: Job | null; uploaded?: boolean }) {
   const [document, setDocument] = useState<CaptionDocument>(defaultCaptions);
   const [loaded, setLoaded] = useState(false), [error, setError] = useState(""), [saved, setSaved] = useState(false);
   const [exporting, setExporting] = useState(false), [progress, setProgress] = useState(0);
   const abort = useRef<AbortController | null>(null);
-  const url = video ? `/api/jobs/${video.id}/video` : "";
-  useEffect(() => { let live = true; setLoaded(false); setError(""); api<CaptionDocument>(`/video-studio/captions/${audioId}`).then(d => { if (live) { setDocument({ ...defaultCaptions, ...d }); setLoaded(true); } }).catch(e => live && setError(e.message)); return () => { live = false; abort.current?.abort(); }; }, [audioId]);
+  const endpoint = uploaded ? `/media/assets/${audioId}/captions` : `/video-studio/captions/${audioId}`;
+  const url = uploaded ? `/api/media/assets/${audioId}/file` : video ? `/api/jobs/${video.id}/video` : "";
+  useEffect(() => { let live = true; setLoaded(false); setError(""); api<CaptionDocument>(endpoint).then(d => { if (live) { setDocument({ ...defaultCaptions, ...d }); setLoaded(true); } }).catch(e => live && setError(e.message)); return () => { live = false; abort.current?.abort(); }; }, [audioId, endpoint]);
   useEffect(() => { if (!exporting) return; const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); }; window.addEventListener("beforeunload", warn); return () => window.removeEventListener("beforeunload", warn); }, [exporting]);
   const edit = (change: Partial<CaptionDocument>) => { setDocument(d => ({ ...d, ...change })); setSaved(false); };
-  const save = async () => { setError(""); await api(`/video-studio/captions/${audioId}`, { method: "PUT", body: JSON.stringify(document) }); setSaved(true); };
+  const save = async () => { setError(""); await api(endpoint, { method: "PUT", body: JSON.stringify(document) }); setSaved(true); };
   const render = async () => {
     setError(""); setExporting(true); setProgress(0); abort.current = new AbortController();
-    try { await save(); const blob = await renderCaptionedVideo(url, document, setProgress, abort.current.signal); downloadBlob(blob, `rechbg-${video!.id}-${document.format.replace(":", "x")}.mp4`); }
+    try { await save(); const blob = await renderCaptionedVideo(url, document, setProgress, abort.current.signal); downloadBlob(blob, `rechbg-${(video?.id || audioId)}-${document.format.replace(":", "x")}.mp4`); }
     catch (e) { if (!abort.current.signal.aborted) setError((e as Error).message); }
     finally { setExporting(false); }
   };
@@ -44,10 +46,11 @@ export function CaptionEditor({ audioId, video }: { audioId: string; video: Job 
         {document.words.map((word, i) => <div className="vs-word" key={i}><input aria-label={`Дума ${i + 1}`} value={word.text} maxLength={80} onChange={e => edit({ words: document.words.map((w, n) => n === i ? { ...w, text: e.target.value } : w) })} /><input aria-label={`Начало ${i + 1}`} type="number" min="0" step="0.01" value={word.start} onChange={e => edit({ words: document.words.map((w, n) => n === i ? { ...w, start: Number(e.target.value) } : w) })} /><input aria-label={`Край ${i + 1}`} type="number" min="0" step="0.01" value={word.end} onChange={e => edit({ words: document.words.map((w, n) => n === i ? { ...w, end: Number(e.target.value) } : w) })} /><button className="btn" aria-label={`Изтрий дума ${i + 1}`} onClick={() => edit({ words: document.words.filter((_, n) => n !== i) })}>×</button></div>)}
         <button className="btn" onClick={() => { const start = document.words.at(-1)?.end || 0; edit({ words: [...document.words, { text: "Дума", start, end: start + 0.3 }] }); }}>Добави дума</button>
       </fieldset></details>
+      {(video || uploaded) && <BackgroundExport sourceId={uploaded ? audioId : video!.id} document={document} onSave={save} />}
       <div className="vs-actions caption-export-actions"><Button className="btn" disabled={exporting} onClick={() => void save().catch(e => setError(e.message))}>{saved ? "Запазено ✓" : "Запази субтитрите"}</Button>{(["srt", "vtt"] as const).map(type => <Button key={type} className="btn" disabled={!document.words.length || exporting} onClick={async () => { try { await save(); downloadBlob(new Blob([subtitleFile(document.words, type)], { type: "text/plain;charset=utf-8" }), `rechbg.${type}`); } catch (e) { setError((e as Error).message); } }}><Download size={16} /> {type.toUpperCase()}</Button>)}
-      {video && <><a className="btn" href={url} download>Оригинален MP4</a><Button className="btn primary" busy={exporting} onClick={render}><Download size={16} /> {exporting ? `Експорт · ${Math.round(progress * 100)}%` : document.enabled ? "Изтегли MP4 със субтитри" : "Изтегли MP4 без субтитри"}</Button></>}</div>
+      {(video || uploaded) && <><a className="btn" href={url} download>Оригинален MP4</a><Button className="btn" busy={exporting} onClick={render}><Download size={16} /> {exporting ? `Експорт · ${Math.round(progress * 100)}%` : document.enabled ? "Локален експорт със субтитри" : "Локален експорт без субтитри"}</Button></>}</div>
       {exporting && <div className="caption-export-progress" role="status"><progress value={progress} max={1} aria-label="Експорт на видео" /><span>{Math.round(progress * 100)}% · Вграждаме визията във видеото</span><Button className="btn" onClick={() => abort.current?.abort()}>Спри експорта</Button></div>}
-      <p className="vs-fine">Субтитрите и експортът са включени. Проверете текста преди публикуване. За MP4 оставете страницата отворена до завършване; препоръчваме Chrome или Edge на компютър.</p>
+      <p className="vs-fine">Локалният експорт в браузъра е безплатен. Проверете текста преди публикуване. За локален MP4 оставете страницата отворена до завършване; препоръчваме Chrome или Edge на компютър.</p>
     </>}
   </section>;
 }

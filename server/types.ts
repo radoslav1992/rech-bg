@@ -1,5 +1,8 @@
 export interface Env {
   DB: D1Database;
+  MEDIA_ENABLED?: string;
+  MEDIA_GENERATION?: Workflow<{ taskId: string }>;
+  MEDIA_RENDERER?: DurableObjectNamespace;
   AUDIO: R2Bucket;
   AI: {
     run: (model: string, input: Record<string, unknown>) => Promise<unknown>;

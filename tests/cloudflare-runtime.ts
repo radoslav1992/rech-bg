@@ -5,3 +5,6 @@ export class WorkflowEntrypoint {
     this.env = env;
   }
 }
+
+export class DurableObject extends WorkflowEntrypoint {}
+export class WorkerEntrypoint extends WorkflowEntrypoint {}

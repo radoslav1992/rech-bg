@@ -18,6 +18,12 @@ import { studio } from "./studio";
 import { validateStudioScript } from "../shared/studio";
 import { videos, videoInputs } from "./video";
 import { notifyVideo } from "./video-notifications";
+import { jobStorage } from './media-storage';
+import { mediaError } from './media';
+import { media, mediaInputs } from './media';
+import { maintainMedia } from './media-maintenance';
+export { MediaGeneration } from './media-workflow';
+export { MediaRenderer } from './media-container';
 export { AudioGeneration } from "./workflow";
 export { VideoGeneration } from "./video-workflow";
 const app = new Hono<{ Bindings: Env; Variables: ContextVars }>();
@@ -40,15 +46,19 @@ app.use("*", async (c, next) => {
     c.header("Cache-Control", "no-store");
 });
 app.use(
+  "/api/media/uploads/:id/parts/:part",
+  bodyLimit({ maxSize: 8 * 1024 * 1024, onError: c => c.json({error: "Фрагментът е твърде голям."}, 413) }),
+);
+app.use(
   "/api/*",
-  bodyLimit({
+  async (c, next) => { if (/^\/api\/media\/uploads\/[^/]+\/parts\/\d+$/.test(c.req.path)) return next(); return bodyLimit({
     maxSize: 3 * 1024 * 1024,
     onError: (c) =>
       c.json({ error: "Файлът или заявката е твърде голяма." }, 413),
-  }),
+  })(c, next); },
 );
 app.use("/api/*", async (c, next) => {
-  if (c.req.method !== "GET" && c.req.path !== "/api/billing/webhook") {
+  if (!["GET", "HEAD"].includes(c.req.method) && c.req.path !== "/api/billing/webhook") {
     const supplied = c.req.header("Origin");
     const allowed = new URL(c.env.SITE_URL || c.req.url).origin;
     if (supplied !== allowed)
@@ -136,6 +146,7 @@ app.post("/api/contact", async (c) => {
   return c.json({ ok: true });
 });
 app.route("/api/video-inputs", videoInputs);
+app.route("/api/media-inputs", mediaInputs);
 app.use("/api/*", async (c, next) => {
   const t = getCookie(c, "rech_session");
   if (t) {
@@ -161,6 +172,7 @@ app.use("/api/*", async (c, next) => {
 app.route("/api/billing", billing);
 app.route("/api/videos", videos);
 app.route("/api/video-studio", studio);
+app.route("/api/media", media);
 const projectSchema = z.object({
   title: z.string().trim().min(1).max(120),
   mode: z.enum(["tts", "podcast", "voiceover", "studio"]),
@@ -243,6 +255,7 @@ app.put("/api/projects/:id", async (c) => {
 app.delete("/api/projects/:id", async (c) => {
   const user = c.get("user"),
     id = c.req.param("id");
+  if (c.env.MEDIA_ENABLED === "true" && await c.env.DB.prepare("SELECT id FROM media_tasks WHERE user_id=? AND status IN ('queued','running')").bind(c.get("user").id).first()) throw new HTTPException(409,{message:"Изчакайте медийната обработка да завърши."});
   const noActive =
     "NOT EXISTS(SELECT 1 FROM jobs WHERE project_id=? AND status IN ('queued','running'))";
   // Capture cleanup paths inside the deletion transaction so a concurrently completed job is included.
@@ -309,7 +322,7 @@ app.post("/api/generate", async (c) => {
   const a = await allowance(c.env, u);
   const id = uid();
   try {
-    await c.env.DB.prepare(
+    await c.env.DB.batch([c.env.DB.prepare(
       "INSERT INTO jobs(id,user_id,project_id,window_id,idempotency_key,title,mode,script,voice,second_voice,pause_ms,chars,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
     )
       .bind(
@@ -327,8 +340,8 @@ app.post("/api/generate", async (c) => {
         chars,
         now(),
         now(),
-      )
-      .run();
+      ), ...(await jobStorage(c.env,u,id,p.title,"audio"))
+      ]);
   } catch (e) {
     const msg = String(e);
     if (msg.includes("QUOTA_EXCEEDED"))
@@ -347,7 +360,7 @@ app.post("/api/generate", async (c) => {
         message: "Вече се създава запис. Изчакайте той да завърши.",
       });
     }
-    throw e;
+    mediaError(e);
   }
   // Preserve the reservation on ambiguous create errors. Cron reconciles by deterministic workflow ID.
   try {
@@ -530,6 +543,7 @@ app.delete("/api/settings/account", async (c) => {
     throw new HTTPException(409, {
       message: "Изчакайте текущия запис да завърши.",
     });
+  if (c.env.MEDIA_ENABLED === "true" && await c.env.DB.prepare("SELECT id FROM media_tasks WHERE user_id=? AND status IN ('queued','running')").bind(c.get("user").id).first()) throw new HTTPException(409,{message:"Изчакайте медийната обработка да завърши."});
   const noActive =
     "NOT EXISTS(SELECT 1 FROM jobs WHERE user_id=? AND status IN ('queued','running'))";
   const results = await c.env.DB.batch([
@@ -772,6 +786,7 @@ async function drainCleanup(e: Env) {
   }
 }
 export async function maintenance(e: Env) {
+  if (e.MEDIA_ENABLED === "true") await maintainMedia(e);
   await drainCleanup(e);
   await e.DB.batch([
     e.DB.prepare("DELETE FROM sessions WHERE expires_at<?").bind(now()),

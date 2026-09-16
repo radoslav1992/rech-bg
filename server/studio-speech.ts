@@ -1,3 +1,4 @@
+import { finishJobStorage } from './media-storage';
 import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
 import type { WorkflowStep } from "cloudflare:workers";
 import type { Env } from "./types";
@@ -54,6 +55,7 @@ export async function runStudioSpeech(env: Env, job: any, step: WorkflowStep) {
   await step.do("complete-studio-speech", async () => {
     const audio = await env.AUDIO.head(key);
     if (!audio) throw new Error("Missing studio recording");
+    await finishJobStorage(env,job.id,key,Number(audio.customMetadata?.duration) || (audio.size - 44) / 48000);
     await env.DB.prepare("UPDATE jobs SET status='completed',audio_key=?,duration=?,updated_at=? WHERE id=? AND status IN ('queued','running')")
       .bind(key, Number(audio.customMetadata?.duration) || (audio.size - 44) / 48000, now(), job.id).run();
   });

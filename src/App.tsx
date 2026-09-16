@@ -46,6 +46,7 @@ import { Dashboard, Projects } from "./Dashboard";
 import { Studio } from "./Studio";
 import { SettingsPage } from "./Settings";
 import { JobActivity } from "./JobActivity";
+const MediaTools = lazy(() => import("./MediaTools").then(m => ({default:m.MediaTools})));
 const VideoStudio = lazy(() => import("./VideoStudio").then(m => ({ default: m.VideoStudio })));
 function Scroll() {
   const { pathname } = useLocation();
@@ -78,6 +79,7 @@ function Shell() {
     ["/app", "Начало", House],
     ["/app/studio", "Аудио", AudioLines],
     ["/app/video-studio", "Видео студио", Film],
+    ["/app/media", "Медийни инструменти", Film],
     ["/app/projects", "Моите проекти", Folder],
     ["/app/voices", "Гласове", Users],
     ["/app/billing", "Абонамент", CreditCard],
@@ -203,6 +205,7 @@ export function App() {
           <Route path="studio/:id" element={<Studio />} />
           <Route path="video-studio" element={<Suspense fallback={<p>Зареждане…</p>}><VideoStudio /></Suspense>} />
           <Route path="video-studio/:id" element={<Suspense fallback={<p>Зареждане…</p>}><VideoStudio /></Suspense>} />
+          <Route path="media" element={<Suspense fallback={<p>Зареждане…</p>}><MediaTools /></Suspense>} />
           <Route path="projects" element={<Projects />} />
           <Route path="voices" element={<Voices inApp />} />
           <Route path="billing" element={<Pricing inApp />} />
