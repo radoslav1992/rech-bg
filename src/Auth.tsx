@@ -88,7 +88,7 @@ export function AuthPage({ mode }: { mode: string }) {
   };
   const descriptions: Record<string, string> = {
     login: "Вашите идеи и записи ви очакват.",
-    register: "Създайте профил и опитайте с 1 000 безплатни символа.",
+    register: "Създайте профил и опитайте с 1 000 безплатни кредита.",
     forgot: "Ще ви изпратим линк за нова парола.",
     reset: "Изберете сигурна парола с поне 10 знака.",
     verify: "Една последна стъпка, преди да дадете глас на думите си.",
@@ -107,12 +107,13 @@ export function AuthPage({ mode }: { mode: string }) {
             от глас.
           </h2>
           <p>Нека вашата бъде чута.</p>
+          <img className="auth-avatar" src="/images/avatars/mila.webp" alt="AI-генериран примерен аватар" width="900" height="1200" />
           <div className="auth-wave">
             <AudioLines size={34} />
             <Wave bars={36} />
           </div>
         </div>
-        <span>Текст. Глас. Възможности.</span>
+        <span>Текст. Глас. Видео. Вашите възможности.</span>
       </aside>
       <section className="auth-main">
         <Link to="/" className="auth-back">

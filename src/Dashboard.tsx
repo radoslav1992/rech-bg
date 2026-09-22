@@ -87,10 +87,7 @@ export function Dashboard() {
             Към студиото <ArrowUpRight size={18} />
           </Link>
         </div>
-        <div className="banner-disc">
-          <AudioLines size={85} />
-          <span>ВАШИЯТ ГЛАС. ВАШАТА ИСТОРИЯ.</span>
-        </div>
+        <div className="dashboard-portraits" aria-hidden="true"><img src="/images/avatars/boris.webp" alt="" /><img src="/images/avatars/mila.webp" alt="" /></div>
       </div>
       <div className="stat-grid">
         <div>

@@ -1,23 +1,15 @@
 import { useEffect, useState } from "react";
 import { Link, NavLink, Outlet, useSearchParams } from "react-router-dom";
 import {
-  ArrowRight,
   ArrowUpRight,
   AudioLines,
   Check,
-  ChevronDown,
-  FileText,
-  Headphones,
   Menu,
   Mic2,
-  Play,
-  Podcast,
   ShieldCheck,
-  Sparkles,
-  Video,
   X,
 } from "lucide-react";
-import { plans, voiceList, modes } from "../shared/catalog";
+import { plans, voiceList } from "../shared/catalog";
 import {
   Logo,
   Wave,
@@ -37,7 +29,7 @@ export function PublicLayout() {
       <header className="public-header">
         <div className="container header-inner">
           <Logo />
-          <nav className={open ? "open" : ""} aria-label="Основно меню">
+          <nav id="public-navigation" className={open ? "open" : ""} aria-label="Основно меню">
             {[
               ["/", "Начало"],
               ["/voices", "Гласове"],
@@ -54,7 +46,7 @@ export function PublicLayout() {
               {user ? "Табло" : "Вход"}
             </Link>
             <Link
-              className="btn dark small-btn"
+              className="btn primary small-btn"
               to={user ? "/app/studio" : "/register"}
             >
               {user ? "Към студиото" : "Опитайте безплатно"}
@@ -64,6 +56,8 @@ export function PublicLayout() {
               className="mobile-menu round"
               onClick={() => setOpen(!open)}
               aria-label="Меню"
+              aria-expanded={open}
+              aria-controls="public-navigation"
             >
               {open ? <X /> : <Menu />}
             </button>
@@ -79,13 +73,15 @@ export function PublicLayout() {
               <p>
                 Думите са ваши.
                 <br />
-                Ние им даваме глас.
+                Ние им даваме глас и лице.
               </p>
             </div>
             <div>
               <strong>Създавайте</strong>
               <Link to="/app/studio">Текст в реч</Link>
               <Link to="/app/studio?mode=podcast">Подкасти</Link>
+              <Link to="/app/video-studio">Видео студио</Link>
+              <Link to="/app/media">Аватари и субтитри</Link>
               <Link to="/voices">Всички гласове</Link>
             </div>
             <div>
@@ -115,372 +111,7 @@ export function PublicLayout() {
     </>
   );
 }
-function StudioPreview() {
-  return (
-    <div className="studio-preview">
-      <div className="preview-top">
-        <div>
-          <AudioLines size={18} />
-          <strong>Вашето аудио студио</strong>
-        </div>
-        <span className="preview-tag">ПРЕГЛЕД</span>
-      </div>
-      <div className="preview-tabs">
-        <span className="active">
-          <FileText size={15} />
-          Текст в реч
-        </span>
-        <span>
-          <Podcast size={15} />
-          Подкаст
-        </span>
-        <span>
-          <Video size={15} />
-          Озвучаване
-        </span>
-      </div>
-      <div className="preview-content">
-        <span className="micro">ТЕКСТЪТ ВИ</span>
-        <p>
-          Някои думи просто трябва
-          <br />
-          да бъдат чути.
-        </p>
-        <p className="preview-secondary">
-          Превърнете следващата си идея в глас,
-          <br />
-          който хората ще запомнят.
-        </p>
-        <div className="preview-caret" />
-        <span className="preview-count">Вашата история започва тук.</span>
-      </div>
-      <div className="preview-voice">
-        <span className="voice-avatar Корал">М</span>
-        <div>
-          <strong>Мила</strong>
-          <small>Ясен и свеж глас</small>
-        </div>
-        <ChevronDown size={16} />
-        <Link to="/register" className="btn dark">
-          <Sparkles size={16} />
-          Създай аудио
-        </Link>
-      </div>
-      <div className="preview-audio">
-        <span className="round decorative">
-          <AudioLines size={20} />
-        </span>
-        <Wave small bars={55} />
-        <span>WAV</span>
-      </div>
-      <div className="preview-caption">
-        Илюстрация на студиото · чуйте гласовете в каталога
-      </div>
-    </div>
-  );
-}
-export function Landing() {
-  const [voices, setVoices] = useState<Voice[]>(voiceList);
-  useEffect(() => {
-    api<{ voices: Voice[] }>("/voices")
-      .then((d) => setVoices(d.voices))
-      .catch(() => {});
-  }, []);
-  return (
-    <main>
-      <section className="hero container">
-        <div className="hero-copy">
-          <span className="eyebrow">
-            <span className="tiny-wave">〰</span> ВАШЕТО АУДИО СТУДИО. НА
-            БЪЛГАРСКИ.
-          </span>
-          <h1>
-            Дайте глас
-            <br />
-            на думите си.
-          </h1>
-          <p className="hero-description">
-            От първото изречение до цял подкаст.
-            <br className="desktop" /> Създавайте аудио на български, което
-            звучи
-            <br className="desktop" /> точно като вашата идея.
-          </p>
-          <div className="hero-cta">
-            <Link className="btn primary" to="/register">
-              Създайте първия си запис <ArrowUpRight size={20} />
-            </Link>
-            <Link className="text-link" to="/voices">
-              <Headphones size={18} />
-              Разгледайте гласовете
-            </Link>
-          </div>
-          <div className="hero-proof">
-            <span>
-              <Check size={14} />1 000 безплатни кредита
-            </span>
-            <span>
-              <Check size={14} />
-              Без банкова карта
-            </span>
-          </div>
-        </div>
-        <div className="hero-visual">
-          <div className="orbit-label">
-            <AudioLines size={15} />
-            Написано от вас. Изговорено с характер.
-          </div>
-          <StudioPreview />
-          <div className="hero-sticker">
-            <Mic2 size={22} />
-            <div>
-              <strong>30 различни гласа</strong>
-              <span>Намерете вашия.</span>
-            </div>
-          </div>
-        </div>
-      </section>
-      <div className="format-strip">
-        <div className="container">
-          <span>ЕДНА ИДЕЯ. МНОГО НАЧИНИ ДА СЕ ЧУЕ.</span>
-          <span>
-            <Podcast />
-            Подкасти
-          </span>
-          <span>
-            <Video />
-            Видеа и реклами
-          </span>
-          <span>
-            <Headphones />
-            Аудио уроци
-          </span>
-          <span>
-            <FileText />
-            Статии и истории
-          </span>
-        </div>
-      </div>
-      <section className="section container">
-        <div className="section-heading">
-          <div>
-            <span className="eyebrow">
-              ПО-МАЛКО ТЕХНИКА. ПОВЕЧЕ ТВОРЧЕСТВО.
-            </span>
-            <h2>
-              Вашият текст.
-              <br />
-              Следващото му звучене.
-            </h2>
-          </div>
-          <p>
-            Не ви трябват микрофон, тиха стая
-            <br />
-            или часове пред аудио редактор.
-            <br />
-            Само нещо, което искате да кажете.
-          </p>
-        </div>
-        <div className="features">
-          <Link to="/app/studio" className="feature feature-green">
-            <div className="feature-art art-text">
-              <span>Здравей, свят.</span>
-              <ArrowRight />
-              <div className="mini-audio">
-                <AudioLines />
-                <Wave bars={17} small />
-              </div>
-            </div>
-            <span className="feature-number">01 / ТЕКСТ В РЕЧ</span>
-            <h3>
-              Напишете го.
-              <br />
-              Нека се чуе.
-            </h3>
-            <p>
-              Озвучавайте статии, истории и уроци. Изберете глас и изтеглете
-              готовия запис.
-            </p>
-            <span className="feature-arrow">
-              <ArrowUpRight />
-            </span>
-          </Link>
-          <Link to="/app/studio?mode=podcast" className="feature feature-lilac">
-            <div className="feature-art art-podcast">
-              <div>
-                <span className="voice-avatar Корал">М</span>
-                <Wave bars={13} small />
-              </div>
-              <div>
-                <Wave bars={13} small />
-                <span className="voice-avatar Син">Б</span>
-              </div>
-            </div>
-            <span className="feature-number">02 / ПОДКАСТ</span>
-            <h3>
-              Разговорът
-              <br />
-              започва с идея.
-            </h3>
-            <p>
-              Подгответе сценарий с двама водещи. Дайте на всеки свой глас и
-              създайте един общ запис.
-            </p>
-            <span className="feature-arrow">
-              <ArrowUpRight />
-            </span>
-          </Link>
-          <Link
-            to="/app/studio?mode=voiceover"
-            className="feature feature-peach"
-          >
-            <div className="feature-art art-video">
-              <div className="video-box">
-                <Video size={30} />
-                <span>ВАШАТА ИСТОРИЯ</span>
-              </div>
-              <div className="video-track">
-                <Wave bars={26} small />
-              </div>
-            </div>
-            <span className="feature-number">03 / ОЗВУЧАВАНЕ</span>
-            <h3>
-              Доброто видео
-              <br />
-              заслужава глас.
-            </h3>
-            <p>
-              Създайте аудио за следващата си реклама, кратко видео или
-              презентация.
-            </p>
-            <span className="feature-arrow">
-              <ArrowUpRight />
-            </span>
-          </Link>
-        </div>
-      </section>
-      <section className="voices-section">
-        <div className="container section">
-          <div className="section-heading">
-            <div>
-              <span className="eyebrow">ГЛАС С ХАРАКТЕР</span>
-              <h2>
-                Кой ще разкаже
-                <br />
-                вашата история?
-              </h2>
-            </div>
-            <Link className="btn outline" to="/voices">
-              Всички 30 гласа <ArrowUpRight size={18} />
-            </Link>
-          </div>
-          <div className="voice-grid">
-            {voices.slice(0, 6).map((v) => (
-              <VoiceCard key={v.id} voice={v} />
-            ))}
-          </div>
-          <p className="small-note">
-            Гласовете са синтетични. Аудио примерите се добавят постепенно.
-          </p>
-        </div>
-      </section>
-      <section className="section container how-section">
-        <div>
-          <span className="eyebrow">ОТ ИДЕЯ ДО АУДИО</span>
-          <h2>
-            Три стъпки.
-            <br />И сте в ефир.
-          </h2>
-          <Link to="/register" className="text-link">
-            Отворете вашето студио <ArrowUpRight size={18} />
-          </Link>
-        </div>
-        <div className="steps">
-          {[
-            [
-              "01",
-              "Добавете вашия текст",
-              "Напишете, поставете или качете текстов файл. За подкаст разпределете репликите между двама водещи.",
-            ],
-            [
-              "02",
-              "Изберете как да звучи",
-              "Намерете подходящия глас и настройте паузата между репликите.",
-            ],
-            [
-              "03",
-              "Създайте и споделете",
-              "Преслушайте записа, изтеглете WAV файла и го добавете към вашето съдържание.",
-            ],
-          ].map(([n, t, d]) => (
-            <div key={n}>
-              <span>{n}</span>
-              <div>
-                <h3>{t}</h3>
-                <p>{d}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-      <section className="section container faq-section">
-        <div>
-          <span className="eyebrow">ПРЕДИ ДА НАТИСНЕТЕ PLAY</span>
-          <h2>Добри въпроси.</h2>
-        </div>
-        <div>
-          {[
-            [
-              "Как се използват кредитите?",
-              "В Аудио: 1 символ озвучен текст = 1 кредит. Във Видео студио: 3 кредита за символ, включително таговете за емоция, включително интервалите и пунктуацията. При подкаст етикетите на водещите не се таксуват. Видео използва 300 кредита на секунда за Ниско качество, 900 за Средно и 1 800 за Високо. Цената се показва преди генериране.",
-            ],
-            [
-              "Мога ли да използвам аудиото за работа?",
-              "Да, можете да го включвате в съдържание и клиентски проекти, когато имате необходимите права върху текста. Проверявайте произношението и спазвайте правилата на платформата, където публикувате.",
-            ],
-            [
-              "Как работи подкастът?",
-              "Въвеждате сценарий с редуващи се реплики на двама водещи. Всеки има отделен глас. Студиото озвучава репликите и ги комбинира в един WAV файл.",
-            ],
-            [
-              "Какво става, ако записът се провали?",
-              "При неуспешна генерация резервираните кредити се връщат автоматично. Можете да опитате отново.",
-            ],
-            [
-              "Мога ли да прекратя абонамента?",
-              "Да. Управлявате абонамента си от профила. При прекратяване той остава достъпен до края на вече платения период.",
-            ],
-          ].map(([q, a]) => (
-            <details key={q}>
-              <summary>
-                {q}
-                <PlusIcon />
-              </summary>
-              <p>{a}</p>
-            </details>
-          ))}
-        </div>
-      </section>
-      <section className="container">
-        <div className="closing">
-          <AudioLines size={45} />
-          <h2>
-            Следващият ви запис
-            <br />
-            започва с едно изречение.
-          </h2>
-          <Link className="btn dark" to="/register">
-            Дайте му глас <ArrowUpRight size={20} />
-          </Link>
-          <p>Опитайте безплатно. Без банкова карта.</p>
-          <Wave bars={78} />
-        </div>
-      </section>
-    </main>
-  );
-}
-function PlusIcon() {
-  return <span className="plus-icon">+</span>;
-}
+export { Landing } from "./Landing";
 export function Pricing({ inApp = false }: { inApp?: boolean }) {
   const { user, refresh } = useAuth();
   const [params] = useSearchParams();
