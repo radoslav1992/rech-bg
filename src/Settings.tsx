@@ -1,3 +1,4 @@
+import { AvatarLibraryAdmin } from "./AvatarLibrary";
 import { StudioVoiceAdmin } from "./StudioVoiceAdmin";
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
@@ -176,7 +177,7 @@ export function SettingsPage() {
           Изтеглете данните
         </a>
       </section>
-      {user?.admin && <><StudioVoiceAdmin /><AdminSettings /></>}
+      {user?.admin && <><AvatarLibraryAdmin /><StudioVoiceAdmin /><AdminSettings /></>}
       <section className="settings-card danger-zone">
         <h2>
           <Trash2 size={21} />

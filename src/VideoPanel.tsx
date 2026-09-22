@@ -1,3 +1,5 @@
+import { AvatarLibraryPicker } from "./AvatarLibrary";
+import type { LibraryAvatar } from "../shared/avatars";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Film, Sparkles, ImagePlus } from "lucide-react";
@@ -9,6 +11,8 @@ export function VideoPanel({ jobs, approved, activeJob, submissionBlocked, onCre
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [tier, setTier] = useState<VideoTier>("medium");
   const [available, setAvailable] = useState<Record<VideoTier, boolean>>({ low: false, medium: false, high: false });
+  const [libraryAvatar, setLibraryAvatar] = useState<LibraryAvatar | null>(null);
+  const [picking, setPicking] = useState(false);
   const [image, setImage] = useState<File | null>(null);
   const [imageUrl, setImageUrl] = useState("");
   const [consent, setConsent] = useState(false);
@@ -44,10 +48,10 @@ export function VideoPanel({ jobs, approved, activeJob, submissionBlocked, onCre
     const url = URL.createObjectURL(image); setImageUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [image]);
-  useEffect(() => { key.current = crypto.randomUUID(); setConsent(false); }, [selectedAsset]);
+  useEffect(() => { key.current = crypto.randomUUID(); setConsent(false); if (selectedAsset) { setImage(null); setLibraryAvatar(null); } }, [selectedAsset]);
   const edit = (fn: () => void) => { setError(""); fn(); key.current = crypto.randomUUID(); };
   const generate = async () => {
-    if (submitting.current || !source || !cost || !approved || submissionBlocked || activeJob || !enabled || !available[tier] || (!image && !selectedAsset) || !consent || !user?.verified || cost > remaining) return;
+    if (submitting.current || picking || !source || !cost || !approved || submissionBlocked || activeJob || !enabled || !available[tier] || (!image && !selectedAsset) || !consent || !user?.verified || cost > remaining) return;
     submitting.current = true;
     setBusy(true); setError("");
     try {
@@ -66,7 +70,7 @@ export function VideoPanel({ jobs, approved, activeJob, submissionBlocked, onCre
   };
   return <section className="output-panel avatar-panel">
     <div className="sub-heading"><h2><Film size={22} /> Дайте лице на гласа</h2><span>ВИДЕО АВАТАР</span></div>
-    <p>Превърнете готовия си аудиозапис в говорещо видео. Качете портрет и изберете едно от трите нива на качество.</p>
+    <p>Превърнете готовия си аудиозапис в говорещо видео. Изберете готов аватар или качете портрет и задайте едно от трите нива на качество.</p>
     <div aria-live="polite">
       {activeJob && <Notice>„{activeJob.title}“ — {jobStatus(activeJob).toLowerCase()}. Можете да подготвите следващото видео. Генерирането ще се отключи след завършване на текущата заявка. <Link to={jobLink(activeJob)}>Проследете заявката</Link></Notice>}
       {enabled === null && <p>Проверка на наличните нива на качество…</p>}
@@ -74,7 +78,7 @@ export function VideoPanel({ jobs, approved, activeJob, submissionBlocked, onCre
       {!source && <p>Създайте и прослушайте аудиозапис от 5 до 60 секунди. Можете да подготвите портрета и качеството още сега.</p>}
       {source && !approved && <Notice>Одобрете избраната версия на гласа по-горе, за да създадете видео. Настройките ви се запазват, докато редактирате сценария.</Notice>}
     </div>
-      <fieldset disabled={busy} className="avatar-fields">
+      <fieldset disabled={busy || picking} className="avatar-fields">
         {source && <div className="video-source-summary"><strong>Избрана версия на гласа</strong><p>{source.title} · {Math.ceil(source.duration)} сек. · {new Date(source.created_at * 1000).toLocaleString("bg")}</p><small>За друга версия използвайте избора на глас в секцията за прослушване.</small></div>}
         <div className="avatar-tiers" role="group" aria-label="Качество на видеото">
           {(Object.keys(videoTiers) as VideoTier[]).map(id => <button type="button" key={id} disabled={!available[id]} aria-pressed={tier === id} className={tier === id ? "selected" : ""} onClick={() => edit(() => setTier(id))}>
@@ -82,16 +86,19 @@ export function VideoPanel({ jobs, approved, activeJob, submissionBlocked, onCre
             <small>{available[id] ? videoTiers[id].description : "Временно недостъпно"}</small>
           </button>)}
         </div>
+        <AvatarLibraryPicker selectedId={libraryAvatar?.id} disabled={busy} onBusyChange={setPicking} onSelect={(avatar, file) => edit(() => { setImage(file); setLibraryAvatar(avatar); onClearAsset?.(); setConsent(false); })}/>
+        <div className="avatar-input-divider">или използвайте свой портрет</div>
         <div className="avatar-portrait">
           {selectedAsset && <div className="product-selected"><strong>Избран аватар с продукт</strong><img src={`/api/media/assets/${selectedAsset}/file`} alt="Избран аватар с продукт"/><button type="button" className="btn" onClick={onClearAsset}>Използвай друг портрет</button></div>}
           <label><ImagePlus size={18} /> Вашият портрет<input type="file" accept="image/jpeg,image/png" onChange={e => edit(() => {
+            setLibraryAvatar(null);
             const file = e.target.files?.[0] || null;
             if (file && file.size > 2 * 1024 * 1024) { setImage(null); e.target.value = ""; setError("Изберете изображение до 2 MB."); return; }
             setImage(file); onClearAsset?.(); setConsent(false);
           })} /></label>
           <p className="small-note">JPG или PNG до 2 MB, с ясно видимо лице. За вертикално видео използвайте вертикален портрет.</p>
           {imageUrl && <img src={imageUrl} alt="Вашият портрет за видеото" />}
-          <label className="checkbox-label"><input type="checkbox" checked={consent} onChange={e => edit(() => setConsent(e.target.checked))} /> Имам право да използвам изображението и съгласието на изобразения човек.</label>
+          <label className="checkbox-label"><input type="checkbox" checked={consent} onChange={e => edit(() => setConsent(e.target.checked))} /> {libraryAvatar ? `Ще използвам синтетичния аватар ${libraryAvatar.name} за съдържание, за което имам необходимите права.` : "Имам право да използвам изображението и съгласието на изобразения човек."}</label>
         </div>
         {emailAvailable && <label className="checkbox-label"><input type="checkbox" checked={notifyEmail} onChange={e => edit(() => setNotifyEmail(e.target.checked))} /> Уведоми ме по имейл, когато видеото е готово или ако възникне грешка.</label>}
       </fieldset>
@@ -99,7 +106,7 @@ export function VideoPanel({ jobs, approved, activeJob, submissionBlocked, onCre
       {error && <Notice>{error}</Notice>}
       <div className="generate-bar">
         <div><strong>{number(cost)} кредита за видеото</strong><small>Налични: {number(remaining)} кредита</small></div>
-        <Button className="btn dark" busy={busy} disabled={submissionBlocked || !!activeJob || !source || !approved || !enabled || !available[tier] || !user?.verified || !cost || cost > remaining || (!image && !selectedAsset) || !consent} onClick={generate}>
+        <Button className="btn dark" busy={busy} disabled={picking || submissionBlocked || !!activeJob || !source || !approved || !enabled || !available[tier] || !user?.verified || !cost || cost > remaining || (!image && !selectedAsset) || !consent} onClick={generate}>
           <Sparkles size={18} /> Създай видео · {number(cost)} кредита
         </Button>
       </div>

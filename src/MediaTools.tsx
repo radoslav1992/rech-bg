@@ -1,3 +1,4 @@
+import { AvatarLibraryPicker } from "./AvatarLibrary";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Captions, Package, Upload, Download, Trash2 } from "lucide-react";
@@ -250,6 +251,8 @@ export function ProductAvatarPanel({
 }) {
   const { data, error: loadError, enabled, reload } = useMediaLibrary(),
     { user, refresh } = useAuth();
+  const [libraryAvatarId, setLibraryAvatarId] = useState("");
+  const [picking, setPicking] = useState(false);
   const [portrait, setPortrait] = useState(""),
     [product, setProduct] = useState(""),
     [count, setCount] = useState(2),
@@ -276,7 +279,7 @@ export function ProductAvatarPanel({
     setProgress(0);
     try {
       const id = await uploadMedia(file, kind, setProgress);
-      if (kind === "portrait") setPortrait(id);
+      if (kind === "portrait") { setPortrait(id); setLibraryAvatarId(""); setConsent(false); }
       else setProduct(id);
       key.current = crypto.randomUUID();
       await reload();
@@ -320,22 +323,32 @@ export function ProductAvatarPanel({
         <span>АВАТАР С ПРОДУКТ</span>
       </div>
       <p>
-        Качете портрет и снимка на продукта. Създайте няколко композиции и
+        Изберете готов аватар или качете портрет, след това добавете снимка на продукта. Създайте няколко композиции и
         изберете една за говорещото видео.
       </p>
       {(error || loadError) && <Notice>{error || loadError}</Notice>}
       <fieldset
-        disabled={busy || !!active}
+        disabled={busy || picking || !!active}
         onChange={() => {
           key.current = crypto.randomUUID();
         }}
       >
+        <AvatarLibraryPicker selectedId={libraryAvatarId} disabled={busy || !!active} onBusyChange={setPicking} onSelect={async (avatar, file) => {
+          setProgress(0);
+          try {
+            const id = await uploadMedia(file, "portrait", setProgress);
+            setPortrait(id); setLibraryAvatarId(avatar.id); setConsent(false); key.current = crypto.randomUUID();
+            await reload();
+          } finally { setProgress(null); }
+        }}/>
+        <p className="vs-fine">При избор запазваме копие в личните ви файлове. То използва място и се пази според срока на вашия план.</p>
+        <div className="avatar-input-divider">или използвайте свой портрет</div>
         <div className="media-two">
           <label>
             Портрет
             <select
               value={portrait}
-              onChange={(e) => setPortrait(e.target.value)}
+              onChange={(e) => { setPortrait(e.target.value); setLibraryAvatarId(""); setConsent(false); }}
             >
               <option value="">Изберете портрет</option>
               {images
@@ -433,7 +446,7 @@ export function ProductAvatarPanel({
             checked={consent}
             onChange={(e) => setConsent(e.target.checked)}
           />{" "}
-          Имам право да използвам снимките и съгласието на изобразения човек.
+          {libraryAvatarId ? "Имам право да използвам снимката на продукта и ще използвам синтетичния аватар за съдържание, за което имам необходимите права." : "Имам право да използвам снимките и съгласието на изобразения човек."}
         </label>
         <Button
           className="btn primary"

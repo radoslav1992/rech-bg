@@ -1,3 +1,4 @@
+import { avatars, adminAvatars } from "./avatars";
 import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
 import { isStudioVoice, resolveStudioVoice, studioVoiceCatalog, studioVoiceKey, studioVoiceSchema } from "./studio-voices";
 import { Hono } from "hono";
@@ -173,6 +174,7 @@ app.route("/api/billing", billing);
 app.route("/api/videos", videos);
 app.route("/api/video-studio", studio);
 app.route("/api/media", media);
+app.route("/api/avatars", avatars);
 const projectSchema = z.object({
   title: z.string().trim().min(1).max(120),
   mode: z.enum(["tts", "podcast", "voiceover", "studio"]),
@@ -572,6 +574,7 @@ app.use("/api/admin/*", async (c, next) => {
     throw new HTTPException(403, { message: "Нямате достъп." });
   await next();
 });
+app.route("/api/admin/avatars", adminAvatars);
 app.get("/api/admin/messages", async (c) =>
   c.json({
     messages: (
