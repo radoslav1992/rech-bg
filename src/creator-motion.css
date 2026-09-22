@@ -1,0 +1,33 @@
+.motion-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.motion-word { display: inline-block; white-space: nowrap; }
+.motion-char { display: inline-block; transform-origin: center bottom; }
+.motion-image-mask { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(3, 1fr); pointer-events: none; }
+.motion-image-mask i { background: #f0f3fc; clip-path: polygon(100% 100%,100% 100%,100% 100%,100% 100%); }
+.creator-product-visual .motion-image-mask i { background: #fafbfe; }
+.creator-strip { display: flex; align-items: center; padding-inline: 24px; gap: 15px; }
+.creator-marquee { overflow: hidden; flex: 1; min-width: 0; padding-block: 27px; }
+.creator-marquee-track { display: flex; width: max-content; animation: creator-marquee 30s linear infinite; }
+.creator-marquee-content { display: flex; flex-shrink: 0; align-items: center; justify-content: space-around; min-width: calc(100vw - 100px); gap: 70px; padding-right: 70px; }
+.creator-strip .creator-motion-toggle { flex: 0 0 34px; width: 34px; height: 34px; border: 1px solid #e5e7ee; border-radius: 50%; display: grid; place-items: center; background: #fff; color: #5667f5; }
+.creator-landing[data-motion-paused=true] .creator-marquee-track { animation-play-state: paused; }
+.creator-marquee:hover .creator-marquee-track { animation-play-state: paused; }
+@keyframes creator-marquee { to { transform: translateX(-50%); } }
+@keyframes creator-button-wave {
+  0%,100% { transform: translateX(0); opacity: 1; }
+  39% { transform: translateX(35%); opacity: 0; }
+}
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .btn:hover .motion-char { animation: creator-button-wave .36s both; animation-delay: calc(var(--letter) * .04s); }
+}
+@media (max-width: 560px) {
+  .creator-strip { padding-inline: 16px; gap: 10px; }
+  .creator-marquee { padding-block: 22px; }
+  .creator-marquee-content { gap: 35px; padding-right: 35px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .creator-marquee-track { animation: none; width: auto; }
+  .creator-marquee-content { min-width: 0; width: 100%; flex-wrap: wrap; gap: 18px 24px; padding: 0; justify-content: center; }
+  .creator-marquee-content[aria-hidden=true], .creator-strip .creator-motion-toggle { display: none; }
+  .motion-char { animation: none !important; transform: none !important; filter: none !important; }
+  .motion-image-mask { display: none; }
+}

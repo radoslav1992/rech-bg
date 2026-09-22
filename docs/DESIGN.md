@@ -11,6 +11,10 @@ Visual adaptation of the user-provided RUBOZ ThemeForest template, specifically 
 - Shared theme covers public pages, authentication, dashboard and studio controls.
 - Desktop/tablet/mobile breakpoints and reduced-motion support.
 
+## Motion
+
+The Digital Human Creator demo’s letter reveals, 50px blur/slide entrances, staggered cards, diagonal nine-tile image reveal, 30-second marquee and reverse-order button-text waves are reproduced with React, IntersectionObserver and native browser animations. Timings follow the supplied demo. No additional animation framework is loaded. Animations are scoped to marketing content, cancel on unmount and honor changes to reduced-motion preferences. The marquee has a pause control and pauses on hover. Keyboard focus immediately reveals pending interactive content.
+
 ## Assets
 
 The decorative arrow at public/images/theme/creator-arrow.svg comes from the supplied human-creator demo. The commercial template archive is not redistributed in this repository.

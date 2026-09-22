@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { WaveLabel } from "./CreatorMotion";
 import { Link, NavLink, Outlet, useSearchParams } from "react-router-dom";
 import {
   ArrowUpRight,
@@ -49,7 +50,7 @@ export function PublicLayout() {
               className="btn primary small-btn"
               to={user ? "/app/studio" : "/register"}
             >
-              {user ? "Към студиото" : "Опитайте безплатно"}
+              <WaveLabel>{user ? "Към студиото" : "Опитайте безплатно"}</WaveLabel>
               <ArrowUpRight size={16} />
             </Link>
             <button
