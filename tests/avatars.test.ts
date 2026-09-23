@@ -46,7 +46,7 @@ it("requires authentication and administrator permissions for library writes", a
 });
 it("serves bundled JPEGs and rejects forged, oversized and unconfirmed uploads", async () => {
   const list = await (await request("/avatars")).json() as any;
-  expect(list.avatars.map((a:any) => a.id)).toEqual(["mila", "boris", "elena"]);
+  expect(list.avatars.map((a:any) => a.id)).toEqual(["mila", "boris", "elena", "daria", "alexander", "stefan", "yana"]);
   for (const a of list.avatars) {
     const response = await request(`/avatars/${a.id}/image`);
     expect(response.status).toBe(200); expect(response.headers.get("Content-Type")).toBe("image/jpeg");
@@ -69,7 +69,7 @@ it("persists independent additions, edits and tombstones without resetting hidde
   // A new request/environment object reads the persisted per-avatar objects.
   env = {...env};
   const visible = (await (await request("/avatars")).json() as any).avatars;
-  expect(visible).toHaveLength(3); expect(visible.some((a:any)=>a.id==="mila"||a.id===id)).toBe(false);
+  expect(visible).toHaveLength(7); expect(visible.some((a:any)=>a.id==="mila"||a.id===id)).toBe(false);
   expect((await request(`/avatars/${id}/image`)).status).toBe(404);
   const admin = (await (await request("/admin/avatars")).json() as any).avatars;
   expect(admin.find((a:any)=>a.id===id)).toMatchObject({name:"Дария",active:false});

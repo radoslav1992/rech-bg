@@ -7,7 +7,7 @@ import { uid, now, type Env, type ContextVars } from "./types";
 
 const prefix = "config/avatar-library/";
 const key = (id: string) => `${prefix}${id}.json`;
-const validId = (id: string) => /^(mila|boris|elena|avatar-[a-f0-9-]{36})$/.test(id);
+const validId = (id: string) => defaultAvatars.some(a => a.id === id) || /^avatar-[a-f0-9-]{36}$/.test(id);
 const fields = z.object({
   name: z.string().trim().min(1).max(50),
   description: z.string().trim().min(1).max(180),

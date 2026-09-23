@@ -1,6 +1,6 @@
 # Ready-made avatars
 
-Users can choose a synthetic portrait in Video Studio or the product-avatar panel, or continue uploading their own images. The initial library contains Mila, Boris and Elena, generated for Rech BG. Choosing a portrait costs no credits; voice and video generation keep their existing prices. The voice is selected independently.
+Users can choose a synthetic portrait in Video Studio or the product-avatar panel, or continue uploading their own images. The library contains seven fictional presenters generated for Rech BG: Mila, Boris, Elena, Daria, Alexander, Stefan and Yana. Choosing a portrait costs no credits; voice and video generation keep their existing prices. The voice is selected independently.
 
 ## Administration
 
@@ -8,7 +8,7 @@ Open Settings as an administrator, then **Библиотека с аватари
 
 ## Persistence and deployment
 
-No migration, binding or API key is required. The initial JPEGs are bundled static assets in `public/images/avatar-library/`. They are format-converted copies of the existing generated landing-page portraits, compatible with the video providers.
+No migration, binding or API key is required. The JPEGs are bundled static assets in `public/images/avatar-library/`. The first three are format-converted copies of the existing generated landing-page portraits. Four additional vertical portraits are provided for UGC videos. All use provider-compatible JPEG format below the 2 MB upload limit. Generation prompts are recorded in `docs/AVATAR-PROMPTS.md`.
 
 Metadata is stored as independent R2 objects at `config/avatar-library/<id>.json`, and custom images at `library/avatars/<id>`. A hidden default gets a persisted tombstone, so deployment does not restore it. Hidden images are retained for administrative restoration. No shared manifest is overwritten when adding avatars concurrently. These library objects are global, outside user cleanup prefixes and quotas.
 
