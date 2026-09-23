@@ -426,6 +426,11 @@ it("renders every caption preset to ASS with style-specific word emphasis", () =
   expect(banner).toContain("&H006be1ff,&H006be1ff");
   expect(banner).toContain("{\\1a&H70&}две");
   expect(captionAss({ ...defaultCaptions, style: "retro", accent: "#ff5fa2", words })).toMatch(/,&H00a25fff,-1,/);
+  expect(captionAss({ ...defaultCaptions, style: "luxe", words })).toMatch(/Style: Default,Noto Serif,\d+,.*,0,-1,0,0,/);
+  const fade = captionAss({ ...defaultCaptions, style: "fade", words });
+  expect(fade).toContain("Едно {\\1c");
+  expect(fade).toContain("\\t(0,220,\\alpha&H00&)}две");
+  expect(captionAss({ ...defaultCaptions, style: "impact", words }).match(/\\frz3/g)?.length).toBe(2);
 });
 it("accepts chunked uploads beyond the ordinary API body limit and rejects missing parts", async () => {
   const uploads = new Map<string, any>();

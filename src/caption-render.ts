@@ -18,19 +18,21 @@ export function drawCaptions(ctx: CanvasRenderingContext2D, width: number, heigh
   if (!group) return;
   const active = (word: CaptionWord) => time >= word.start && time < word.end;
   const style = document.style, accent = document.accent || captionPresets.find(p => p.id === style)!.accent;
-  let words = style === "pop" ? group.filter(active) : style === "typewriter" ? group.filter(w => time >= w.start) : group;
+  let words = style === "pop" || style === "impact" ? group.filter(active) : style === "typewriter" ? group.filter(w => time >= w.start) : group;
   if (!words.length) return;
   words = words.map(w => ({ ...w, text: document.uppercase ? w.text.toLocaleUpperCase("bg") : w.text }));
   ctx.save();
-  const base = Math.min(width, height), maxWidth = width * (style === "bubble" ? .78 : .84);
-  let size = base * (style === "minimal" ? .045 : style === "pop" ? .09 : .065) * (document.size || 1);
-  if (style === "pop") size *= 1 + .1 * Math.max(0, 1 - (time - words[0].start) / .12);
-  const weight = style === "minimal" || style === "classic" ? 600 : style === "bubble" || style === "underline" ? 800 : 900;
+  const base = Math.min(width, height), maxWidth = width * (style === "bubble" || style === "tiles" ? .78 : .84);
+  let size = base * (style === "minimal" ? .045 : style === "pop" || style === "impact" ? .09 : style === "luxe" ? .07 : .065) * (document.size || 1);
+  if (style === "pop" || style === "impact") size *= 1 + .1 * Math.max(0, 1 - (time - words[0].start) / .12);
+  const weight = style === "minimal" || style === "classic" || style === "luxe" ? 600 : style === "bubble" || style === "underline" ? 800 : 900;
+  const family = style === "luxe" ? `Georgia, "Times New Roman", serif` : "Arial, sans-serif";
   let lines: CaptionWord[][] = [];
-  const lineWidth = (line: CaptionWord[]) => ctx.measureText(line.map(w => w.text).join(" ")).width;
+  const gap = () => style === "tiles" ? size * .24 : 0;
+  const lineWidth = (line: CaptionWord[]) => ctx.measureText(line.map(w => w.text).join(" ")).width + gap() * Math.max(0, line.length - 1);
   // Wrap into at most two lines and shrink long words to stay inside the frame.
   do {
-    ctx.font = `${weight} ${size}px Arial, sans-serif`;
+    ctx.font = `${style === "luxe" ? "italic " : ""}${weight} ${size}px ${family}`;
     lines = [[]];
     for (const word of words) {
       const line = lines.at(-1)!;
@@ -41,7 +43,7 @@ export function drawCaptions(ctx: CanvasRenderingContext2D, width: number, heigh
     size -= 1;
   } while (size > 10);
   const center = height * (document.position === "top" ? .2 : document.position === "middle" ? .5 : .79);
-  const lineHeight = size * 1.4, textColor = document.textColor || "#ffffff", dark = "#121612";
+  const lineHeight = size * (style === "tiles" ? 1.6 : 1.4), textColor = document.textColor || "#ffffff", dark = "#121612";
   ctx.textBaseline = "middle"; ctx.lineJoin = "round";
   ctx.strokeStyle = dark; ctx.lineWidth = size * .12;
   const onAccent = readableOn(accent);
@@ -54,6 +56,7 @@ export function drawCaptions(ctx: CanvasRenderingContext2D, width: number, heigh
     ctx.moveTo(width / 2 - size * .35, bottom - 1); ctx.lineTo(width / 2 - size * .55, bottom + size * .45); ctx.lineTo(width / 2 + size * .2, bottom - 1); ctx.fill();
     ctx.shadowColor = "transparent";
   }
+  let order = 0;
   lines.forEach((line, index) => {
     const total = lineWidth(line), y = top + index * lineHeight;
     let x = (width - total) / 2;
@@ -62,25 +65,45 @@ export function drawCaptions(ctx: CanvasRenderingContext2D, width: number, heigh
       ctx.beginPath(); ctx.roundRect(x - size * .3, y - size * .68, total + size * .6, size * 1.36, size * .16); ctx.fill();
     }
     for (const word of line) {
-      const selected = active(word), wordWidth = ctx.measureText(word.text).width;
+      const selected = active(word), wordWidth = ctx.measureText(word.text).width, n = order++;
       const progress = Math.min(1, Math.max(0, (time - word.start) / Math.max(.05, word.end - word.start)));
+      const advance = () => { x += wordWidth + ctx.measureText(" ").width + gap(); };
+      // Rotate/scale around the word's own centre.
+      const around = (angle: number, scale = 1, dy = 0) => {
+        ctx.translate(x + wordWidth / 2, y + dy); ctx.rotate(angle); ctx.scale(scale, scale); ctx.translate(-(x + wordWidth / 2), -y);
+      };
+      if (style === "fade" && time < word.start) { advance(); continue; }
       ctx.save();
       ctx.fillStyle = textColor;
-      if (selected && ["karaoke", "pop", "neon", "bounce"].includes(style)) ctx.fillStyle = accent;
+      if (selected && ["karaoke", "pop", "neon", "bounce", "wave", "luxe", "fade"].includes(style)) ctx.fillStyle = accent;
       if (style === "highlight" && selected) {
         ctx.fillStyle = accent; ctx.beginPath(); ctx.roundRect(x - size * .1, y - size * .65, wordWidth + size * .2, size * 1.3, size * .12); ctx.fill(); ctx.fillStyle = onAccent;
       } else if (style === "banner") {
         ctx.fillStyle = onAccent; ctx.globalAlpha = selected ? 1 : .55;
       } else if (style === "bubble") {
         ctx.fillStyle = selected ? accent : "#111611";
+      } else if (style === "tiles" || style === "impact") {
+        if (style === "impact") around(-.06, 1);
+        ctx.fillStyle = selected ? accent : "rgba(15,20,16,.85)";
+        ctx.shadowColor = "rgba(0,0,0,.35)"; ctx.shadowBlur = size * .2; ctx.shadowOffsetY = size * .06;
+        ctx.beginPath(); ctx.roundRect(x - size * .14, y - size * .7, wordWidth + size * .28, size * 1.4, size * .18); ctx.fill();
+        ctx.shadowColor = "transparent"; ctx.fillStyle = selected ? onAccent : textColor;
+      } else if (style === "sticker") {
+        if (selected) around(-.07, 1.06);
+        ctx.shadowColor = "rgba(0,0,0,.45)"; ctx.shadowBlur = size * .15; ctx.shadowOffsetY = size * .06;
+        ctx.lineWidth = size * .32; ctx.strokeStyle = "#ffffff"; ctx.strokeText(word.text, x, y);
+        ctx.shadowColor = "transparent"; ctx.fillStyle = selected ? accent : dark;
+      } else if (style === "luxe") {
+        ctx.shadowColor = "rgba(0,0,0,.8)"; ctx.shadowBlur = size * .35; ctx.shadowOffsetY = size * .04;
+        ctx.lineWidth = size * .07; ctx.strokeStyle = "rgba(10,12,10,.7)"; ctx.strokeText(word.text, x, y);
       } else if (style === "outline") {
         // Hollow letters; the spoken word fills with the accent colour.
         ctx.shadowColor = "#000000"; ctx.shadowBlur = size * .12;
         ctx.lineWidth = size * .16; ctx.strokeStyle = dark; ctx.strokeText(word.text, x, y);
         ctx.shadowColor = "transparent";
         if (!selected) { ctx.lineWidth = size * .07; ctx.strokeStyle = textColor; ctx.strokeText(word.text, x, y); }
-        if (!selected) { ctx.restore(); x += wordWidth + ctx.measureText(" ").width; continue; }
-        ctx.shadowColor = "transparent"; ctx.fillStyle = accent;
+        if (!selected) { ctx.restore(); advance(); continue; }
+        ctx.fillStyle = accent;
       } else if (style === "retro") {
         ctx.lineWidth = size * .06; ctx.strokeText(word.text, x, y);
         ctx.shadowColor = selected ? dark : accent; ctx.shadowBlur = 0; ctx.shadowOffsetX = ctx.shadowOffsetY = size * (selected ? .1 : .07);
@@ -91,8 +114,12 @@ export function drawCaptions(ctx: CanvasRenderingContext2D, width: number, heigh
         ctx.shadowOffsetY = size * .03;
         if (style === "bounce" && selected) {
           // Quick lift and settle while the word is spoken.
-          const lift = Math.sin(Math.min(1, (time - word.start) / .18) * Math.PI) * .2 + .05, scale = 1.05;
-          ctx.translate(x + wordWidth / 2, y - size * lift); ctx.scale(scale, scale); ctx.translate(-(x + wordWidth / 2), -y);
+          around(0, 1.05, -size * (Math.sin(Math.min(1, (time - word.start) / .18) * Math.PI) * .2 + .05));
+        }
+        if (style === "wave") ctx.translate(0, Math.sin(time * 5 - n * .9) * size * .09);
+        if (style === "fade") {
+          const appear = Math.min(1, (time - word.start) / .25);
+          ctx.globalAlpha = appear; ctx.translate(0, (1 - appear) * size * .3);
         }
         if (style !== "minimal") ctx.strokeText(word.text, x, y);
       }
@@ -101,7 +128,7 @@ export function drawCaptions(ctx: CanvasRenderingContext2D, width: number, heigh
         ctx.beginPath(); ctx.roundRect(x, y + size * .5, Math.max(size * .3, wordWidth * Math.min(1, progress * 2.5)), size * .18, size * .09); ctx.fill(); ctx.restore();
       }
       ctx.fillText(word.text, x, y); ctx.restore();
-      x += wordWidth + ctx.measureText(" ").width;
+      advance();
     }
   });
   ctx.restore();

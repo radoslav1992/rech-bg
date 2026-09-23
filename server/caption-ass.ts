@@ -33,20 +33,24 @@ export function captionAss(doc: CaptionDocument) {
     );
   // Style-level colours approximate the browser renderer within libass limits.
   const st = doc.style, accent = color(look.accent!);
-  const primary = st === "banner" ? color(readableOn(look.accent!)) : st === "bubble" ? color("#111611") : st === "outline" ? "&HFF" + color(look.textColor!).slice(4) : color(look.textColor!);
-  const outline = st === "banner" ? accent : st === "bubble" ? color("#ffffff") : st === "outline" ? color(look.textColor!) : "&H00111111";
+  const onAccent = color(readableOn(look.accent!));
+  const primary = st === "banner" || st === "impact" ? onAccent : st === "bubble" || st === "sticker" ? color("#111611") : st === "outline" ? "&HFF" + color(look.textColor!).slice(4) : color(look.textColor!);
+  const outline = st === "banner" || st === "impact" ? accent : st === "bubble" || st === "sticker" ? color("#ffffff") : st === "outline" ? color(look.textColor!) : "&H00111111";
   const back = st === "retro" ? accent : "&H99000000";
-  const border = ["classic", "banner", "bubble"].includes(st) ? 3 : 1;
-  const outlineWidth = st === "minimal" ? 1 : st === "outline" || st === "retro" ? 2 : 3;
-  const shadow = st === "neon" ? 4 : st === "retro" ? 4 : 0;
+  const border = ["classic", "banner", "bubble", "tiles", "impact"].includes(st) ? 3 : 1;
+  const outlineWidth = st === "minimal" ? 1 : st === "outline" || st === "retro" ? 2 : st === "sticker" ? 6 : 3;
+  const shadow = st === "neon" || st === "retro" ? 4 : st === "sticker" || st === "luxe" ? 2 : 0;
+  const fontName = st === "luxe" ? "Noto Serif" : "Noto Sans";
   // Override tags for the word being spoken, per style.
   const activeTag: Partial<Record<CaptionDocument["style"], string>> = {
     karaoke: `\\1c${accent}`, highlight: `\\1c${accent}\\bord5\\3c&H00222222`,
     bounce: `\\1c${accent}\\fscx118\\fscy118\\t(0,120,\\fscx108\\fscy108)`,
     outline: `\\1a&H00&\\1c${accent}\\3c&H00121612`, bubble: `\\1c${accent}`,
     retro: `\\1c${accent}\\4c&H00121612`, underline: `\\u1\\1c${accent}`,
+    wave: `\\1c${accent}\\frz3`, sticker: `\\1c${accent}\\frz4\\fscx106\\fscy106`,
+    tiles: `\\1c${onAccent}\\3c${accent}`, luxe: `\\1c${accent}`, fade: `\\1c${accent}\\alpha&HFF&\\t(0,220,\\alpha&H00&)`,
   };
-  let ass = `[Script Info]\nScriptType: v4.00+\nPlayResX: ${width}\nPlayResY: ${height}\nWrapStyle: 0\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Noto Sans,${font},${primary},${accent},${outline},${back},-1,0,0,0,100,100,0,0,${border},${outlineWidth},${shadow},5,${Math.round(width * 0.08)},${Math.round(width * 0.08)},40,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n`;
+  let ass = `[Script Info]\nScriptType: v4.00+\nPlayResX: ${width}\nPlayResY: ${height}\nWrapStyle: 0\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,${fontName},${font},${primary},${accent},${outline},${back},${st === "luxe" ? 0 : -1},${st === "luxe" ? -1 : 0},0,0,100,100,0,0,${border},${outlineWidth},${shadow},5,${Math.round(width * 0.08)},${Math.round(width * 0.08)},40,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n`;
   if (!doc.enabled) return ass;
   const emit = (start: number, end: number, text: string) => {
     if (end > start)
@@ -75,8 +79,10 @@ export function captionAss(doc: CaptionDocument) {
         const line =
           doc.style === "pop"
             ? `{\\1c${color(look.accent!)}\\fscx110\\fscy110\\t(0,100,\\fscx100\\fscy100)}${words[i]}`
-            : doc.style === "typewriter"
-              ? words.slice(0, i + 1).join(" ")
+            : doc.style === "impact"
+              ? `{\\frz3\\fscx112\\fscy112\\t(0,100,\\fscx100\\fscy100)}${words[i]}`
+            : doc.style === "typewriter" || doc.style === "fade"
+              ? [...words.slice(0, i), `{${activeTag[doc.style] || ""}}${words[i]}{\\r}`].join(" ").replace("{}", "")
               : words
                   .map((text, j) =>
                     j === i
