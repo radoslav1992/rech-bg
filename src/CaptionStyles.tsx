@@ -41,7 +41,7 @@ export function CaptionStyles({ document, edit, disabled }: { document: CaptionD
   };
   return <fieldset className="caption-design" disabled={disabled}>
     <div className="caption-tabs" role="group" aria-label="Библиотека с визии">
-      <button type="button" aria-pressed={tab === "presets"} onClick={() => setTab("presets")}>Готови визии <span>8</span></button>
+      <button type="button" aria-pressed={tab === "presets"} onClick={() => setTab("presets")}>Готови визии <span>{captionPresets.length}</span></button>
       <button type="button" aria-pressed={tab === "saved"} onClick={() => setTab("saved")}>Моите шаблони <span>{templates.length}</span></button>
     </div>
     {tab === "presets" ? <div className="caption-presets" role="group" aria-label="Стил на субтитрите">
