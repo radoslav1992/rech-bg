@@ -4,9 +4,13 @@ export const frameSize = (format: CaptionDocument["format"], resolution: Caption
   return format === "9:16" ? [edge, edge * 16 / 9] : format === "1:1" ? [edge, edge] : format === "4:5" ? [edge, edge * 5 / 4] : [edge * 16 / 9, edge];
 };
 export function fitVideo(ctx: CanvasRenderingContext2D, video: HTMLVideoElement, width: number, height: number, fit: CaptionDocument["fit"]) {
-  const scale = (fit === "cover" ? Math.max : Math.min)(width / video.videoWidth, height / video.videoHeight);
-  const dw = video.videoWidth * scale, dh = video.videoHeight * scale;
-  ctx.drawImage(video, (width - dw) / 2, (height - dh) / 2, dw, dh);
+  fitSource(ctx, video, video.videoWidth, video.videoHeight, width, height, fit);
+}
+export function fitSource(ctx: CanvasRenderingContext2D, source: CanvasImageSource, sourceWidth: number, sourceHeight: number, width: number, height: number, fit: CaptionDocument["fit"]) {
+  if (!sourceWidth || !sourceHeight) return;
+  const scale = (fit === "cover" ? Math.max : Math.min)(width / sourceWidth, height / sourceHeight);
+  const dw = sourceWidth * scale, dh = sourceHeight * scale;
+  ctx.drawImage(source, (width - dw) / 2, (height - dh) / 2, dw, dh);
 }
 export function drawCaptions(ctx: CanvasRenderingContext2D, width: number, height: number, time: number, document: CaptionDocument, groups = captionGroups(document.words)) {
   if (!document.enabled) return;
