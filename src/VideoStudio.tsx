@@ -9,7 +9,8 @@ import { StudioVoicePicker } from "./StudioVoicePicker";
 import type { StudioVoice } from "../shared/studio";
 import { VideoPanel } from "./VideoPanel";
 import { mergeJobs } from "./job-state";
-import { CaptionEditor } from "./CaptionEditor";
+import { TimelineEditor } from "./TimelineEditor";
+import { readLocalFile, writeLocalFile } from "./timeline";
 import "./video-studio.css";
 
 export function VideoStudio() {
@@ -32,7 +33,12 @@ export function VideoStudio() {
   const video = videoJobs.find(j => j.id === selectedVideo) || videoJobs[0] || null;
   const activeJob = mergeJobs(localJobs.filter(j => j.project_id === id), allJobs).find(j => ["queued", "running"].includes(j.status)) || null;
   const active = !!activeJob;
-  const sourceId = video?.status === "completed" ? video.source_job_id : audio?.status === "completed" ? audio.id : undefined;
+  // The timeline edits one voice version; its completed avatar video replaces the portrait preview.
+  const explicitVideo = videoJobs.find(j => j.id === selectedVideo && j.status === "completed");
+  const timelineAudio = (explicitVideo && audioJobs.find(j => j.id === explicitVideo.source_job_id && j.status === "completed")) || (audio?.status === "completed" ? audio : null);
+  const timelineVideo = timelineAudio ? (explicitVideo?.source_job_id === timelineAudio.id ? explicitVideo : videoJobs.find(j => j.source_job_id === timelineAudio.id && j.status === "completed")) || null : null;
+  const timelinePending = timelineAudio ? videoJobs.find(j => j.source_job_id === timelineAudio.id && ["queued", "running"].includes(j.status)) || null : null;
+  const [portrait, setPortrait] = useState<Blob | string | null>(null), [portraitUrl, setPortraitUrl] = useState("");
   const remaining = Math.max(0, (user?.limit || 0) - (user?.used || 0));
   let cost = script.length * 3, scriptError = "";
   try { cost = validateStudioScript(script); } catch (e) { scriptError = (e as Error).message; }
@@ -52,6 +58,27 @@ export function VideoStudio() {
     return () => { catalogRequest.current++; window.removeEventListener("focus", refreshVoices); window.removeEventListener("rech:studio-voices-changed", refreshVoices); };
   }, []);
   useEffect(() => { if (!id && !voice && voices.length) setVoice(voices[0].id); }, [id, voice, voices]);
+  // The chosen portrait is remembered in this browser so the timeline can show it after a reload.
+  const portraitProject = useRef(id);
+  useEffect(() => {
+    let live = true;
+    const previous = portraitProject.current; portraitProject.current = id;
+    if (previous && previous !== id) setPortrait(null);
+    // A new project keeps the portrait picked before its first save.
+    else if (!previous && id && user && portrait) void writeLocalFile(`portrait:${user.id}:${id}`, portrait);
+    if (id && user) readLocalFile(`portrait:${user.id}:${id}`).then(p => { if (live && p) setPortrait(current => current ?? p); });
+    return () => { live = false; };
+  }, [id, user?.id]);
+  useEffect(() => {
+    if (!portrait) { setPortraitUrl(""); return; }
+    if (typeof portrait === "string") { setPortraitUrl(portrait); return; }
+    const url = URL.createObjectURL(portrait); setPortraitUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [portrait]);
+  const choosePortrait = (p: Blob | string | null) => {
+    setPortrait(p);
+    if (p && projectId.current && user) void writeLocalFile(`portrait:${user.id}:${projectId.current}`, p);
+  };
   useEffect(() => {
     let live = true;
     if (projectId.current !== id) setVideoFormKey(crypto.randomUUID());
@@ -106,7 +133,7 @@ export function VideoStudio() {
   if (loading) return <p>Зареждане на видео студиото…</p>;
   return <div className="video-studio">
     <header className="vs-heading"><div><span className="eyebrow">ОТ СЦЕНАРИЙ ДО ПУБЛИКУВАНЕ</span><h1>Вашето видео студио.</h1><p>Глас с характер. Лице за историята. Думи, които се виждат.</p></div><Link className="btn" to="/app/studio"><Mic size={17} /> Само аудио</Link></header>
-    <div className="vs-steps"><span><b>01</b> Сценарий и глас</span><ArrowRight size={18} /><span><b>02</b> Одобрение и видео</span><ArrowRight size={18} /><span><b>03</b> Субтитри и експорт</span></div>
+    <div className="vs-steps"><span><b>01</b> Сценарий и глас</span><ArrowRight size={18} /><span><b>02</b> Одобрение и видео</span><ArrowRight size={18} /><span><b>03</b> Монтаж и експорт</span></div>
     {error && <Notice>{error}</Notice>}{pollingError && <Notice>{pollingError}</Notice>}
     {!enabled && <Notice>Видео студиото е подготвено. Премиум озвучаването ще бъде достъпно след активиране.</Notice>}
     <div className="vs-layout"><section className="vs-card vs-script"><div className="sub-heading"><h2><Film size={23} /> Дайте начало на историята</h2><span>01 / СЦЕНАРИЙ</span></div>
@@ -127,7 +154,7 @@ export function VideoStudio() {
       {cost > remaining && <p>Нужни са още {number(cost - remaining)} кредита. <Link to="/app/billing">Вижте плановете</Link></p>}
       <p className="vs-fine">3 кредита за символ, включително таговете. Всяко ново озвучаване се заплаща. Видеото се таксува отделно след одобрението ви. За видео целете 5–60 секунди — обикновено около 50–120 думи.</p>
     </section><aside className="vs-card vs-review"><span className="eyebrow">02 / ПРОСЛУШАЙТЕ</span><h2>Първо чуйте. После покажете.</h2><p>Проверете произношението и емоцията, преди да създадете видео.</p>
-      {audioJobs.length > 0 && <label>Версия на гласа<select value={audio?.id || ""} onChange={e => { setSelectedAudio(e.target.value); setApproved(""); }}>{audioJobs.map(j => <option key={j.id} value={j.id}>{new Date(j.created_at * 1000).toLocaleString("bg")} · {jobStatus(j)}</option>)}</select></label>}
+      {audioJobs.length > 0 && <label>Версия на гласа<select value={audio?.id || ""} onChange={e => { setSelectedAudio(e.target.value); setSelectedVideo(""); setApproved(""); }}>{audioJobs.map(j => <option key={j.id} value={j.id}>{new Date(j.created_at * 1000).toLocaleString("bg")} · {jobStatus(j)}</option>)}</select></label>}
       {!audio && <div className="vs-audio-empty"><Mic size={35} /><p>Вашият глас ще се появи тук.</p></div>}
       {audio?.status === "failed" && <Notice>{audio.error}</Notice>}
       {audio && ["queued", "running"].includes(audio.status) && <Notice>Гласът се създава във фонов режим. Можете да напуснете страницата и да се върнете в проекта.</Notice>}
@@ -136,8 +163,8 @@ export function VideoStudio() {
     </aside></div>
     <details className="vs-card"><summary>Създайте аватар с ваш продукт</summary><ProductAvatarPanel onSelect={id => {setProductAvatar(id); document.getElementById("video-avatar")?.scrollIntoView({behavior:"smooth"});}} /></details>
     <div id="video-avatar" />
-    <VideoPanel selectedAsset={productAvatar} onClearAsset={() => setProductAvatar("")} key={videoFormKey} jobs={audio ? [audio] : []} approved={!!audio && audio.id === approved} activeJob={activeJob} submissionBlocked={busy} onCreated={j => { setLocalJobs(list => mergeJobs(list, [j])); setSelectedVideo(j.id); jobsChanged(); }} />
-    {videoJobs.length > 0 && <section className="vs-card"><h2>Вашите видеа</h2><select aria-label="Версия на видеото" value={video?.id || ""} onChange={e => setSelectedVideo(e.target.value)}>{videoJobs.map(j => <option key={j.id} value={j.id}>{new Date(j.created_at * 1000).toLocaleString("bg")} · {jobStatus(j)}</option>)}</select>{video?.status === "failed" && <Notice>{video.error}</Notice>}{video && ["queued", "running"].includes(video.status) && <Notice>{jobStatus(video)}. Продължаваме във фонов режим. Готовото видео ще се появи в този проект.</Notice>}</section>}
-    {sourceId && <CaptionEditor key={sourceId} audioId={sourceId} video={video?.status === "completed" ? video : null} />}
+    <VideoPanel onPortraitChange={choosePortrait} selectedAsset={productAvatar} onClearAsset={() => setProductAvatar("")} key={videoFormKey} jobs={audio ? [audio] : []} approved={!!audio && audio.id === approved} activeJob={activeJob} submissionBlocked={busy} onCreated={j => { setLocalJobs(list => mergeJobs(list, [j])); setSelectedVideo(j.id); jobsChanged(); }} />
+    {videoJobs.length > 0 && <section className="vs-card"><h2>Вашите видеа</h2><select aria-label="Версия на видеото" value={video?.id || ""} onChange={e => { const next = videoJobs.find(j => j.id === e.target.value); setSelectedVideo(e.target.value); if (next?.source_job_id) setSelectedAudio(next.source_job_id); }}>{videoJobs.map(j => <option key={j.id} value={j.id}>{new Date(j.created_at * 1000).toLocaleString("bg")} · {jobStatus(j)}</option>)}</select>{video?.status === "failed" && <Notice>{video.error}</Notice>}{video && ["queued", "running"].includes(video.status) && <Notice>{jobStatus(video)}. Продължаваме във фонов режим. Готовото видео ще се появи в този проект.</Notice>}</section>}
+    {timelineAudio && <TimelineEditor key={timelineAudio.id} audio={timelineAudio} video={timelineVideo} pendingVideo={timelinePending} portraitUrl={portraitUrl} />}
   </div>;
 }

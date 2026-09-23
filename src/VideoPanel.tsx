@@ -6,7 +6,7 @@ import { Film, Sparkles, ImagePlus } from "lucide-react";
 import { videoTiers, videoCredits, type VideoTier } from "../shared/video";
 import { api, Button, Notice, number, useAuth, type Job } from "./lib";
 import { jobLink, jobStatus } from "./JobActivity";
-export function VideoPanel({ jobs, approved, activeJob, submissionBlocked, onCreated, selectedAsset = "", onClearAsset }: { selectedAsset?: string; onClearAsset?: () => void; jobs: Job[]; approved: boolean; activeJob: Job | null; submissionBlocked: boolean; onCreated: (job: Job) => void }) {
+export function VideoPanel({ jobs, approved, activeJob, submissionBlocked, onCreated, selectedAsset = "", onClearAsset, onPortraitChange }: { selectedAsset?: string; onClearAsset?: () => void; jobs: Job[]; approved: boolean; activeJob: Job | null; submissionBlocked: boolean; onCreated: (job: Job) => void; onPortraitChange?: (portrait: Blob | string | null) => void }) {
   const { user, refresh } = useAuth();
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [tier, setTier] = useState<VideoTier>("medium");
@@ -49,6 +49,8 @@ export function VideoPanel({ jobs, approved, activeJob, submissionBlocked, onCre
     return () => URL.revokeObjectURL(url);
   }, [image]);
   useEffect(() => { key.current = crypto.randomUUID(); setConsent(false); if (selectedAsset) { setImage(null); setLibraryAvatar(null); } }, [selectedAsset]);
+  // The timeline previews the chosen portrait until the avatar video exists.
+  useEffect(() => { if (selectedAsset) onPortraitChange?.(`/api/media/assets/${selectedAsset}/file`); else if (image) onPortraitChange?.(image); }, [image, selectedAsset]);
   const edit = (fn: () => void) => { setError(""); fn(); key.current = crypto.randomUUID(); };
   const generate = async () => {
     if (submitting.current || picking || !source || !cost || !approved || submissionBlocked || activeJob || !enabled || !available[tier] || (!image && !selectedAsset) || !consent || !user?.verified || cost > remaining) return;
