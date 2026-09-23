@@ -13,7 +13,7 @@ import { MediaGeneration, failMedia } from "../server/media-workflow";
 import { maintainMedia } from "../server/media-maintenance";
 import { mediaCredits, MB } from "../shared/media";
 import { captionAss, renderDimensions } from "../server/caption-ass";
-import { defaultCaptions } from "../shared/captions";
+import { captionPresets, defaultCaptions } from "../shared/captions";
 let sqlite: ReturnType<typeof database>["sqlite"], env: any, user: any;
 const step: any = {
   do: async (_name: string, ...args: any[]) => args.at(-1)(),
@@ -411,6 +411,26 @@ it("validates caption ranges and escapes subtitle control syntax", () => {
   expect(ass).not.toContain("{\\p1}");
   expect(ass).toContain("Здравей");
   expect(renderDimensions(doc)).toEqual([1080, 1920]);
+});
+it("renders every caption preset to ASS with style-specific word emphasis", () => {
+  const words = [{ text: "Едно", start: 0, end: .4 }, { text: "две", start: .5, end: .9 }];
+  for (const preset of captionPresets) {
+    const ass = captionAss({ ...defaultCaptions, style: preset.id, accent: preset.accent, words });
+    expect(ass.match(/^Dialogue:/gm)?.length).toBeGreaterThan(0);
+    expect(ass).not.toContain("{}");
+  }
+  const outline = captionAss({ ...defaultCaptions, style: "outline", words });
+  expect(outline).toMatch(/Style: Default,Noto Sans,\d+,&HFF/);
+  expect(outline).toContain("\\1a&H00&");
+  const banner = captionAss({ ...defaultCaptions, style: "banner", accent: "#ffe16b", words });
+  expect(banner).toContain("&H006be1ff,&H006be1ff");
+  expect(banner).toContain("{\\1a&H70&}две");
+  expect(captionAss({ ...defaultCaptions, style: "retro", accent: "#ff5fa2", words })).toMatch(/,&H00a25fff,-1,/);
+  expect(captionAss({ ...defaultCaptions, style: "luxe", words })).toMatch(/Style: Default,Noto Serif,\d+,.*,0,-1,0,0,/);
+  const fade = captionAss({ ...defaultCaptions, style: "fade", words });
+  expect(fade).toContain("Едно {\\1c");
+  expect(fade).toContain("\\t(0,220,\\alpha&H00&)}две");
+  expect(captionAss({ ...defaultCaptions, style: "impact", words }).match(/\\frz3/g)?.length).toBe(2);
 });
 it("accepts chunked uploads beyond the ordinary API body limit and rejects missing parts", async () => {
   const uploads = new Map<string, any>();

@@ -1,5 +1,5 @@
 export type CaptionWord = { text: string; start: number; end: number };
-export const captionStyles = ["classic", "bold", "karaoke", "highlight", "pop", "minimal", "neon", "typewriter"] as const;
+export const captionStyles = ["classic", "bold", "karaoke", "highlight", "pop", "minimal", "neon", "typewriter", "bounce", "outline", "banner", "retro", "underline", "bubble", "wave", "sticker", "fade", "tiles", "luxe", "impact"] as const;
 export type CaptionStyle = typeof captionStyles[number];
 export type CaptionFormat = "9:16" | "1:1" | "16:9" | "4:5";
 export type CaptionDocument = {
@@ -18,7 +18,24 @@ export const captionPresets: { id: CaptionStyle; name: string; description: stri
   { id: "minimal", name: "Чисто", description: "Дискретен текст, повече картина", accent: "#c8f560", uppercase: false },
   { id: "neon", name: "Неон", description: "Цветен акцент с меко сияние", accent: "#73e8ec", uppercase: true },
   { id: "typewriter", name: "Разкриване", description: "Думите се появяват с разказа", accent: "#c8f560", uppercase: false },
+  { id: "bounce", name: "Скок", description: "Активната дума подскача", accent: "#ffd84d", uppercase: true },
+  { id: "outline", name: "Контур", description: "Кухи букви, които гласът изпълва", accent: "#c8f560", uppercase: true },
+  { id: "banner", name: "Лента", description: "Цветна лента през кадъра", accent: "#ffe16b", uppercase: true },
+  { id: "retro", name: "Ретро", description: "Твърда цветна сянка", accent: "#ff5fa2", uppercase: true },
+  { id: "underline", name: "Подчертаване", description: "Линия следва всяка дума", accent: "#73e8ec", uppercase: false },
+  { id: "bubble", name: "Балон", description: "Текст като в комикс", accent: "#5667f5", uppercase: false },
+  { id: "wave", name: "Вълна", description: "Думите се полюшват в ритъм", accent: "#7cf5c4", uppercase: true },
+  { id: "sticker", name: "Стикер", description: "Изрязани думи с бял кант", accent: "#ff4d4d", uppercase: true },
+  { id: "fade", name: "Плавно", description: "Думите изплуват една по една", accent: "#ffffff", uppercase: false },
+  { id: "tiles", name: "Плочки", description: "Всяка дума в своя плочка", accent: "#c8f560", uppercase: true },
+  { id: "luxe", name: "Лукс", description: "Елегантен курсив със златен акцент", accent: "#e8c170", uppercase: false },
+  { id: "impact", name: "Удар", description: "Една дума върху наклонен етикет", accent: "#ff3b30", uppercase: true },
 ];
+// Dark or white text, whichever reads better on the given colour.
+export function readableOn(hex: string) {
+  const [r, g, b] = hex.slice(1).match(/.{2}/g)!.map(v => parseInt(v, 16));
+  return r * .299 + g * .587 + b * .114 > 150 ? "#111611" : "#ffffff";
+}
 export const defaultCaptions: CaptionDocument = { words: [], style: "karaoke", format: "9:16", position: "bottom", enabled: true };
 export const demoWords: CaptionWord[] = [
   { text: "Всяка", start: 0, end: .65 }, { text: "история", start: .65, end: 1.3 },
