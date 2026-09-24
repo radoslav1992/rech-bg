@@ -22,3 +22,8 @@ STRIPE_PRICE_STUDIO=
 
 # fal.ai API scope key for avatar videos. Never commit real credentials.
 FAL_KEY=
+# Optional: fal (default; WaveSpeed Low + fal Medium/High), or heygen (High only).
+VIDEO_PROVIDER=fal
+WAVESPEED_API_KEY=
+# Set as a Cloudflare secret in production, never a plain-text variable.
+HEYGEN_API_KEY=

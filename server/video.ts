@@ -8,6 +8,7 @@ import { now, uid } from "./types";
 import { allowance } from "./billing";
 import { rate, token, safeEqual } from "./security";
 import { videoTiers, videoCredits, type VideoTier } from "../shared/video";
+import { configuredVideoProvider, hasVideoCredential, type VideoProvider } from "./video-provider";
 
 export const avatarMap: Record<string, string> = {
   mia: "Mia outdoor (UGC)", lara: "Lara (Masterclass)", ines: "Ines (UGC)",
@@ -23,7 +24,7 @@ export const videoModels = {
   standard: "argil/avatars/audio-to-video",
   quality: "fal-ai/kling-video/ai-avatar/v2/pro",
 } as const;
-export type VideoMeta = { tier?: VideoTier; avatar: string; imageKey?: string; imageMime?: string; token: string; consent: boolean; notifyEmail?: boolean };
+export type VideoMeta = { tier?: VideoTier; provider?: VideoProvider; avatar: string; imageKey?: string; imageMime?: string; token: string; consent: boolean; notifyEmail?: boolean };
 export function jobVideoTier(job: { video_meta: string; video_tier: string }): keyof typeof videoModels {
   const meta = JSON.parse(job.video_meta) as VideoMeta;
   const tier = meta.tier ?? job.video_tier;
@@ -37,7 +38,7 @@ export async function failVideo(env: Env, id: string, message = "Видеото 
 }
 export const videos = new Hono<{ Bindings: Env; Variables: ContextVars }>();
 videos.get("/config", (c) => {
-  const available = { low: !!c.env.WAVESPEED_API_KEY?.trim(), medium: !!c.env.FAL_KEY?.trim(), high: !!c.env.FAL_KEY?.trim() };
+  const available = Object.fromEntries((Object.keys(videoTiers) as VideoTier[]).map(tier => [tier, hasVideoCredential(c.env, configuredVideoProvider(c.env, tier))]));
   return c.json({ enabled: !!c.env.VIDEO_GENERATION && Object.values(available).some(Boolean), emailNotifications: !!c.env.EMAIL,
     tiers: Object.fromEntries(Object.entries(videoTiers).map(([id, tier]) => [id, { ...tier, enabled: !!c.env.VIDEO_GENERATION && available[id as VideoTier] }])) });
 });
@@ -54,7 +55,8 @@ videos.post("/", async (c) => {
     if (previous.kind !== "video") throw new HTTPException(409, { message: "Невалидна заявка. Обновете страницата." });
     return c.json({ id: previous.id });
   }
-  if (!(d.tier === "low" ? c.env.WAVESPEED_API_KEY?.trim() : c.env.FAL_KEY?.trim()))
+  const provider = configuredVideoProvider(c.env, d.tier);
+  if (!provider || !hasVideoCredential(c.env, provider))
     throw new HTTPException(503, { message: "Избраното качество временно не е налично. Изберете друго." });
   const source = await c.env.DB.prepare("SELECT * FROM jobs WHERE id=? AND user_id=? AND status='completed'").bind(d.sourceId, user.id).first<any>();
   if (!source || source.kind === "video" || !source.audio_key) throw new HTTPException(404, { message: "Изберете готов аудиозапис." });
@@ -65,7 +67,7 @@ videos.post("/", async (c) => {
   if (credits !== d.credits) throw new HTTPException(409, { message: "Цената е променена. Обновете страницата и потвърдете отново." });
   if (!(await c.env.AUDIO.head(source.audio_key))) throw new HTTPException(404, { message: "Аудиозаписът вече не е наличен." });
   const id = uid();
-  const meta: VideoMeta = { tier: d.tier, avatar: "", token: token(), consent: form.get("consent") === "true", notifyEmail: !!c.env.EMAIL && form.get("notifyEmail") === "true" };
+  const meta: VideoMeta = { tier: d.tier, provider, avatar: "", token: token(), consent: form.get("consent") === "true", notifyEmail: !!c.env.EMAIL && form.get("notifyEmail") === "true" };
   let image: Uint8Array | undefined;
   {
     if (!meta.consent) throw new HTTPException(400, { message: "Потвърдете правото си да използвате изображението." });

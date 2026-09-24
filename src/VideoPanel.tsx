@@ -72,7 +72,7 @@ export function VideoPanel({ jobs, approved, activeJob, submissionBlocked, onCre
   };
   return <section className="output-panel avatar-panel">
     <div className="sub-heading"><h2><Film size={22} /> Дайте лице на гласа</h2><span>ВИДЕО АВАТАР</span></div>
-    <p>Превърнете готовия си аудиозапис в говорещо видео. Изберете готов аватар или качете портрет и задайте едно от трите нива на качество.</p>
+    <p>Превърнете готовия си аудиозапис в говорещо видео. Изберете готов аватар или качете портрет и задайте налично ниво на качество.</p>
     <div aria-live="polite">
       {activeJob && <Notice>„{activeJob.title}“ — {jobStatus(activeJob).toLowerCase()}. Можете да подготвите следващото видео. Генерирането ще се отключи след завършване на текущата заявка. <Link to={jobLink(activeJob)}>Проследете заявката</Link></Notice>}
       {enabled === null && <p>Проверка на наличните нива на качество…</p>}

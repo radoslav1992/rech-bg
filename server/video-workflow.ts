@@ -5,11 +5,13 @@ import { now } from "./types";
 import { withDefaults } from "./config";
 import { avatarMap, failVideo, videoModels, jobVideoTier, type VideoMeta } from "./video";
 import { submitWaveVideo, getWaveVideo, type WaveTicket } from "./video-wavespeed";
+import { submitHeyGenVideo, getHeyGenVideo, type HeyGenTicket } from "./video-heygen";
+import { hasVideoCredential, savedVideoProvider, type VideoProvider } from "./video-provider";
 import { providerFailure, VideoFailure, videoFailureMessage, type VideoStage } from "./video-errors";
 import { videoFetch } from "./video-http";
 import { notifyVideo } from "./video-notifications";
 
-type Ticket = { provider?: "fal" | "wavespeed"; request_id: string; status_url: string; response_url: string; cancel_url?: string };
+type Ticket = { provider?: VideoProvider; request_id: string; status_url: string; response_url: string; cancel_url?: string };
 export function queueUrl(value: string) {
   const url = new URL(value);
   if (url.origin !== "https://queue.fal.run" || url.username || url.password || !url.pathname.includes("/requests/")) throw new Error("Invalid queue URL");
@@ -17,7 +19,7 @@ export function queueUrl(value: string) {
 }
 export function outputUrl(value: string) {
   const url = new URL(value);
-  const allowed = ["fal.media", "falserverless.io", "amazonaws.com", "storage.googleapis.com", "wavespeed.ai", "cloudfront.net"];
+  const allowed = ["fal.media", "falserverless.io", "amazonaws.com", "storage.googleapis.com", "wavespeed.ai", "cloudfront.net", "heygen.ai"];
   if (url.protocol !== "https:" || url.username || url.password || (url.port && url.port !== "443") || !allowed.some(h => url.hostname === h || url.hostname.endsWith("." + h)))
     throw new Error("Invalid video host");
   return url.href;
@@ -26,6 +28,12 @@ async function queueGet(env: Env, url: string, stage: VideoStage) {
   const r = await videoFetch(queueUrl(url), { headers: { Authorization: `Key ${env.FAL_KEY?.trim()}` }, signal: AbortSignal.timeout(45000) });
   if (!r.ok) throw await providerFailure(r, stage);
   return r.json() as Promise<any>;
+}
+async function getVideo(env: Env, ticket: Ticket, stage: "STATUS" | "RESULT") {
+  if (ticket.provider === "heygen") return getHeyGenVideo(env, ticket as HeyGenTicket, stage);
+  if (ticket.provider === "wavespeed") return getWaveVideo(env, ticket as WaveTicket);
+  if (ticket.provider != null && ticket.provider !== "fal") throw new VideoFailure(stage, "INTERNAL");
+  return queueGet(env, stage === "STATUS" ? ticket.status_url : ticket.response_url, stage);
 }
 // Multipart upload bounds memory and accepts CDN responses without Content-Length.
 export async function storeVideo(env: Env, key: string, url: string) {
@@ -79,8 +87,9 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> 
         const row = await this.env.DB.prepare("SELECT provider_request,submitted_at FROM jobs WHERE id=?").bind(id).first<any>();
         if (row?.provider_request) return JSON.parse(row.provider_request) as Ticket;
         const tier = jobVideoTier(job);
-        if (!(tier === "low" ? this.env.WAVESPEED_API_KEY?.trim() : this.env.FAL_KEY?.trim())) throw new VideoFailure("SUBMIT", "AUTH");
         const meta: VideoMeta = JSON.parse(job.video_meta);
+        const provider = savedVideoProvider(meta.provider, tier);
+        if (!hasVideoCredential(this.env, provider)) throw new VideoFailure("SUBMIT", "AUTH");
         const source = await this.env.DB.prepare("SELECT audio_key FROM jobs WHERE id=? AND user_id=? AND status='completed'").bind(job.source_job_id, job.user_id).first<any>();
         if (!source?.audio_key || !(await this.env.AUDIO.head(source.audio_key))) throw new Error("Missing audio");
         if (tier !== "standard" && (!meta.imageKey || !(await this.env.AUDIO.head(meta.imageKey)))) throw new Error("Missing portrait");
@@ -92,8 +101,10 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> 
         // Never repeat an ambiguous external submission: it may already be billable.
         const claim = await this.env.DB.prepare("UPDATE jobs SET submitted_at=? WHERE id=? AND submitted_at IS NULL").bind(now(), id).run();
         if (!claim.meta.changes) throw new Error("Submission requires reconciliation");
-        if (tier === "low") {
-          const t = await submitWaveVideo(this.env, `${base}/image?token=${meta.token}`, audio_url);
+        if (provider === "heygen" || provider === "wavespeed") {
+          const t = provider === "heygen"
+            ? await submitHeyGenVideo(this.env, id, `${base}/image?token=${meta.token}`, audio_url)
+            : await submitWaveVideo(this.env, `${base}/image?token=${meta.token}`, audio_url);
           await this.env.DB.prepare("UPDATE jobs SET provider_request=?,updated_at=? WHERE id=?").bind(JSON.stringify(t), now(), id).run();
           return t;
         }
@@ -106,6 +117,7 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> 
         if (!t.request_id || typeof t.request_id !== "string") throw new Error("Missing request ID");
         queueUrl(t.status_url); queueUrl(t.response_url);
         if (t.cancel_url) queueUrl(t.cancel_url);
+        t.provider = "fal";
         await this.env.DB.prepare("UPDATE jobs SET provider_request=?,updated_at=? WHERE id=?").bind(JSON.stringify(t), now(), id).run();
         return t;
       });
@@ -113,7 +125,7 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> 
       stage = "STATUS";
       for (let i = 0; i < 180; i++) {
         const status = await step.do(`video-status-${i}`, { retries: { limit: 2, delay: "10 seconds" }, timeout: "2 minutes" }, async () => {
-          const s = ticket!.provider === "wavespeed" ? await getWaveVideo(this.env, ticket! as WaveTicket) : await queueGet(this.env, ticket!.status_url, "STATUS");
+          const s = await getVideo(this.env, ticket!, "STATUS");
           await this.env.DB.prepare("UPDATE jobs SET updated_at=? WHERE id=?").bind(now(), id).run();
           if (!["IN_QUEUE", "IN_PROGRESS", "COMPLETED"].includes(s.status)) throw new Error("Unexpected video status");
           await this.env.DB.prepare("UPDATE jobs SET video_meta=json_set(video_meta,'$.phase',?) WHERE id=?")
@@ -128,7 +140,7 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> 
       await step.do("save-video", { retries: { limit: 2, delay: "15 seconds" }, timeout: "5 minutes" }, async () => {
         const key = `audio/${job.user_id}/${id}.mp4`;
         if (!(await this.env.AUDIO.head(key))) {
-          const result = ticket!.provider === "wavespeed" ? await getWaveVideo(this.env, ticket! as WaveTicket) : await queueGet(this.env, ticket!.response_url, "RESULT");
+          const result = await getVideo(this.env, ticket!, "RESULT");
           if (result.moderation_flagged) throw new VideoFailure("RESULT", "CONTENT");
           if (result.moderation_error || !result.video?.url) throw new VideoFailure("RESULT", "PROVIDER");
           await storeVideo(this.env, key, result.video.url);
@@ -149,7 +161,7 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> 
         await this.env.DB.prepare("INSERT OR IGNORE INTO cleanup_tasks(prefix,created_at) SELECT 'segments/'||user_id||'/'||id||'/',? FROM jobs WHERE id=?").bind(now(), id).run();
         await failVideo(this.env, id, failure.message);
       });
-      if (ticket?.cancel_url && ticket.provider !== "wavespeed") {
+      if (ticket?.cancel_url && (ticket.provider == null || ticket.provider === "fal")) {
         try { await videoFetch(queueUrl(ticket.cancel_url), { method: "PUT", headers: { Authorization: `Key ${this.env.FAL_KEY?.trim()}` }, signal: AbortSignal.timeout(15000) }); } catch { /* Best effort cancellation; never resubmit. */ }
       }
       throw new Error(failure.code);

@@ -14,6 +14,8 @@ export interface Env {
   STUDIO_SCRIPT_MODEL?: string;
   FAL_KEY?: string;
   WAVESPEED_API_KEY?: string;
+  VIDEO_PROVIDER?: string;
+  HEYGEN_API_KEY?: string;
   ASSETS: Fetcher;
   SITE_URL?: string;
   APP_ENV?: string;

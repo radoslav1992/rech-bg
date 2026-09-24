@@ -1,6 +1,25 @@
 # Video Studio
 
-The dedicated Bulgarian video workspace is `/app/video-studio`. Existing audio projects remain at `/app/studio`; video generation keeps the currently configured WaveSpeed/fal providers and quality tiers.
+The dedicated Bulgarian video workspace is `/app/video-studio`. Existing audio projects remain at `/app/studio`; video generation defaults to the existing WaveSpeed/fal stack and can be switched to HeyGen using a server variable.
+
+## Choose the video provider
+
+In Cloudflare → Workers & Pages → `rech-bg` → Settings → Variables and Secrets, set the text variable **`VIDEO_PROVIDER`**:
+
+| Value | New video jobs | Required secrets |
+| --- | --- | --- |
+| `fal` (default when absent/blank; `fal.ai` also accepted) | Low: InfiniteTalk Fast through WaveSpeed; Medium: Kling Standard through fal; High: Kling Pro through fal | `WAVESPEED_API_KEY` for Low; `FAL_KEY` for Medium/High |
+| `heygen` | High: Avatar IV from the uploaded/library portrait, 1080p, preserving its aspect ratio. Low/Medium are unavailable; the studio automatically selects High. | `HEYGEN_API_KEY` |
+
+Save and deploy the variables, then refresh the studio. Unknown values disable new video generation rather than silently choosing another paid provider. A missing HeyGen key does not fall back to fal. Keys are server-only **secrets**, without a `VITE_` prefix, authorization prefix or surrounding quotes. No D1 migration or additional binding is required. `keep_vars: true` retains dashboard variables across GitHub deployments; no provider setting is forced in Wrangler.
+
+The existing High rate stays **1,800 credits per started second** (54,000 for 30 seconds), plus the separately approved audio. The same Avatar IV output is not sold under three different quality labels. Audio, voice samples, product-placement images and caption/export processing are unaffected by this video-only switch. Other features can still require their existing fal/ElevenLabs keys.
+
+The provider is saved in `video_meta.provider` when each new job is accepted. Keep previous provider secrets while their jobs finish: switching the variable affects only new jobs. Older jobs without a snapshot keep historical tier-based routing; saved provider tickets determine status/result polling. There is no automatic cross-provider fallback or paid POST retry. The workflow runs in the background, saves MP4 to private R2, and retains existing credit refunds and optional email notifications.
+
+HeyGen integration uses `POST https://api.heygen.com/v3/videos` with `type: image`, `image: { type: url, url: ... }`, the approved `audio_url`, `resolution: 1080p`, `aspect_ratio: auto`, and an `Idempotency-Key` equal to the job ID. The raw-image schema uses Avatar IV by default and does not accept an `engine` field. Status/results use authenticated `GET /v3/videos/{video_id}`. Input URLs are temporary capabilities; the output is copied to R2 without forwarding the API key. HeyGen account activity titles use `Rech BG {jobId}` for reconciliation. API billing is separate from a regular HeyGen web subscription.
+
+References: [Create video](https://developers.heygen.com/reference/create-video), [Get video](https://developers.heygen.com/reference/get-video), [API billing](https://help.heygen.com/en/articles/10060327-heygen-api-pricing-explained). Automated checks use mocked providers; after setup, verify a short video and its matching API account charge.
 
 ## Activate
 
