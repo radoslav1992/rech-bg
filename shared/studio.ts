@@ -23,8 +23,12 @@ export function validateStudioScript(text: string) {
   return text.length * studioCreditsPerChar;
 }
 export function validateSuggestedDelivery(original: string, suggestion: string) {
+  const plain = stripTags(original);
   validateStudioScript(suggestion);
-  if (stripTags(suggestion) !== stripTags(original))
+  if (stripTags(suggestion) !== plain)
     throw new Error("Предложението промени думите. Опитайте отново или добавете емоциите ръчно.");
+  const tags = [...suggestion.matchAll(/\[([^\]]+)\]/g)];
+  if (!tags.length || tags.length > 6)
+    throw new Error("Не получихме подходящо предложение за емоции. Опитайте отново или добавете тагове ръчно.");
   return suggestion;
 }

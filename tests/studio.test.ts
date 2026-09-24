@@ -6,6 +6,7 @@ import { sha } from "../server/security";
 import { now } from "../server/types";
 import { alignmentWords, captionStyles, subtitleFile } from "../shared/captions";
 import { validateStudioScript, validateSuggestedDelivery } from "../shared/studio";
+import { applyDeliveryTags, suggestDelivery } from "../server/studio-delivery";
 
 let env: any, sqlite: ReturnType<typeof database>["sqlite"];
 const projectId = "c2c73a21-e858-4cc0-b1bf-dcda90777001";
@@ -86,14 +87,101 @@ it("prevents cheap audio mode from selecting a premium voice", async () => {
   const result = await request("/projects", { title: "Cheap", mode: "tts", script: "Text", voice: "studio-boris", second_voice: "boris" });
   expect(result.status).toBe(400);
 });
-it("limits delivery assistance and rejects script rewriting", async () => {
-  env.AI.run.mockResolvedValue({ output_text: "[excited]Здравей свят!" });
+const delivery = { text: "Здравей свят!", tone: "ad" };
+const tagPlan = JSON.stringify({ tags: [{ before_word: 0, tag: "excited" }] });
+it("counts only successful suggestions and releases the legacy failed-attempt allowance", async () => {
+  const legacyKey = await sha(`studio-delivery:u:${Math.floor(now() / 86400)}`);
+  sqlite.prepare("INSERT INTO rate_limits VALUES(?,99,?)").run(legacyKey, now() + 86400);
+  env.AI.run.mockResolvedValue({ output_text: tagPlan });
   const result = await request("/video-studio/delivery", { text: "Здравей свят!", tone: "ad" });
   expect(await result.json()).toEqual({ text: "[excited]Здравей свят!" });
   env.AI.run.mockResolvedValue({ output_text: "Купете сега!" });
-  expect((await request("/video-studio/delivery", { text: "Здравей свят!", tone: "ad" })).status).toBe(422);
-  for (let i = 0; i < 3; i++) await request("/video-studio/delivery", { text: "Здравей свят!", tone: "ad" });
-  expect((await request("/video-studio/delivery", { text: "Здравей свят!", tone: "ad" })).status).toBe(429);
+  for (let i = 0; i < 5; i++) expect((await request("/video-studio/delivery", delivery)).status).toBe(422);
+  env.AI.run.mockResolvedValue({ output_text: tagPlan });
+  for (let i = 0; i < 4; i++) expect((await request("/video-studio/delivery", delivery)).status).toBe(200);
+  const exhausted = await request("/video-studio/delivery", delivery);
+  expect(exhausted.status).toBe(429);
+  expect((await exhausted.json() as any).error).toContain("5 предложения");
+  expect(env.AI.run).toHaveBeenCalledTimes(10);
+});
+it("inserts tags into exact original slices instead of asking the model to rewrite the words", async () => {
+  const text = "  [calm]Здравей,\n\tсвят!  Историята — започва.\n";
+  env.AI.run.mockResolvedValue({ status: "completed", output: [
+    { type: "reasoning", summary: [] },
+    { type: "message", content: [{ type: "output_text", text: JSON.stringify({ tags: [{ before_word: 2, tag: "curious" }, { before_word: 0, tag: "excited" }] }) }] },
+  ] });
+  const result = await request("/video-studio/delivery", { text, tone: "story" });
+  expect(await result.json()).toEqual({ text: "  [excited]Здравей,\n\tсвят!  [curious]Историята — започва.\n" });
+  const [model, input] = env.AI.run.mock.calls[0];
+  expect(model).toBe("openai/gpt-5.6-luna");
+  expect(JSON.parse(input.input).words[2]).toEqual({ index: 2, text: "Историята" });
+  expect(input.instructions).toContain("Do not return or rewrite the script");
+  expect(input.text.format).toMatchObject({ type: "json_schema", name: "delivery_tags", strict: true });
+});
+it.each([
+  { tags: [] }, { tags: [{ before_word: 10, tag: "excited" }] },
+  { tags: [{ before_word: 0, tag: "unknown" }] },
+  { tags: [{ before_word: 0, tag: "excited", text: "Changed words" }] },
+  { tags: [{ before_word: 0, tag: "excited" }, { before_word: 0, tag: "sad" }] },
+])("rejects invalid tag plans without returning changed text: %j", value => {
+  expect(() => applyDeliveryTags("Здравей свят!", value)).toThrow();
+});
+it("handles malformed, empty, incomplete and unavailable AI responses without consuming the daily allowance", async () => {
+  for (const response of [null, { output: "bad" }, { output_text: "" }, { status: "incomplete", output_text: tagPlan }]) {
+    env.AI.run.mockResolvedValue(response);
+    const result = await request("/video-studio/delivery", delivery);
+    expect(result.status).toBe(502);
+    expect((await result.json() as any).error).toContain("DELIVERY_");
+  }
+  env.AI.run.mockRejectedValue(new Error("Private provider failure"));
+  const result = await request("/video-studio/delivery", delivery);
+  expect(result.status).toBe(503);
+  expect(await result.text()).not.toContain("Private provider failure");
+  env.AI.run.mockResolvedValue({ output_text: tagPlan });
+  for (let i = 0; i < 5; i++) expect((await request("/video-studio/delivery", delivery)).status).toBe(200);
+});
+it("bounds repeated failed provider calls separately from successful suggestions", async () => {
+  env.AI.run.mockRejectedValue(new Error("Unavailable"));
+  for (let i = 0; i < 20; i++) expect((await request("/video-studio/delivery", delivery)).status).toBe(503);
+  expect((await request("/video-studio/delivery", delivery)).status).toBe(429);
+  expect(env.AI.run).toHaveBeenCalledTimes(20);
+});
+it("reserves daily allowance atomically while AI requests are pending", async () => {
+  let resolve!: (value: unknown) => void;
+  env.AI.run.mockReturnValue(new Promise(r => { resolve = r; }));
+  const pending = Array.from({ length: 5 }, () => request("/video-studio/delivery", delivery));
+  await vi.waitFor(() => expect(env.AI.run).toHaveBeenCalledTimes(5));
+  expect((await request("/video-studio/delivery", delivery)).status).toBe(429);
+  resolve({ output_text: tagPlan });
+  expect((await Promise.all(pending)).every(r => r.status === 200)).toBe(true);
+});
+it("times out a stalled provider and refunds the failed daily reservation", async () => {
+  env.AI.run.mockReturnValue(new Promise(() => {}));
+  vi.useFakeTimers();
+  try {
+    const pending = request("/video-studio/delivery", delivery);
+    await vi.waitFor(() => expect(env.AI.run).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(35000);
+    const result = await pending;
+    expect(result.status).toBe(504);
+    expect((await result.json() as any).error).toContain("DELIVERY_TIMEOUT");
+    const quotaKey = await sha(`studio-delivery-success-v2:u:${Math.floor(now() / 86400)}`);
+    expect(sqlite.prepare("SELECT hits FROM rate_limits WHERE key=?").get(quotaKey)!.hits).toBe(0);
+  } finally { vi.useRealTimers(); }
+});
+it("rejects empty scripts, insufficient tag space and unverified users before calling AI", async () => {
+  for (const text of ["", "[calm]", "я".repeat(1496)]) expect((await request("/video-studio/delivery", { ...delivery, text })).status).toBe(400);
+  sqlite.exec("UPDATE users SET verified=0 WHERE id='u'");
+  expect((await request("/video-studio/delivery", delivery)).status).toBe(403);
+  expect(env.AI.run).not.toHaveBeenCalled();
+});
+it("accepts a fenced tag plan with a custom model and preserves the character limit", async () => {
+  env.STUDIO_SCRIPT_MODEL = " custom/model ";
+  env.AI.run.mockResolvedValue({ output_text: "```json\n" + tagPlan + "\n```" });
+  expect(await suggestDelivery(env, "Здравей свят!", "ad")).toBe("[excited]Здравей свят!");
+  expect(env.AI.run.mock.calls[0][0]).toBe("custom/model");
+  expect(() => applyDeliveryTags("я".repeat(1495), { tags: [{ before_word: 0, tag: "sad" }] })).not.toThrow();
+  expect(() => applyDeliveryTags("я".repeat(1495), { tags: [{ before_word: 0, tag: "excited" }] })).toThrow();
 });
 it("protects caption ownership and validates edited timings", async () => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(speech())));
