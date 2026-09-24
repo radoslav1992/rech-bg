@@ -245,7 +245,7 @@ describe("Configurable video providers", () => {
   it("offers Medium/High in HeyGen mode, never falls back, and rejects invalid configuration", async () => {
     env.VIDEO_PROVIDER = " HEYGEN ";
     env.WAVESPEED_API_KEY = "wave-secret";
-    expect((await (await request("/videos/config")).json() as any).enabled).toBe(false);
+    expect((await (await request("/videos/config")).json() as any).tiers.medium.enabled).toBe(true);
     expect((await request("/videos", { method: "POST", body: form("high") })).status).toBe(503);
     env.HEYGEN_API_KEY = "heygen-secret";
     const config = await (await request("/videos/config")).json() as any;
@@ -255,6 +255,12 @@ describe("Configurable video providers", () => {
     expect(config.tiers.medium).toMatchObject({ enabled: true, creditsPerSecond: 900 });
     expect(JSON.stringify(config)).not.toMatch(/heygen|secret|\bfal\b/i);
     expect((await request("/videos", { method: "POST", body: form("low") })).status).toBe(503);
+    delete env.FAL_KEY;
+    const noFal = await (await request("/videos/config")).json() as any;
+    expect(noFal.tiers.medium.enabled).toBe(false);
+    expect(noFal.tiers.high.enabled).toBe(true);
+    expect((await request("/videos", { method: "POST", body: form() })).status).toBe(503);
+    env.FAL_KEY = "test-secret";
     env.VIDEO_PROVIDER = "typo";
     expect((await (await request("/videos/config")).json() as any).enabled).toBe(false);
     expect((await request("/videos", { method: "POST", body: form("high") })).status).toBe(503);
@@ -357,6 +363,29 @@ describe("Configurable video providers", () => {
     expect(() => outputUrl("https://files.heygen.ai.evil.invalid/video.mp4")).toThrow();
     expect(() => outputUrl("https://user:secret@files.heygen.ai/video.mp4")).toThrow();
   });
+  it.each(["fal", "heygen"])("routes new Medium jobs through Kling Standard in %s mode without creating a photo avatar", async mode => {
+    env.VIDEO_PROVIDER = mode; env.HEYGEN_API_KEY = "heygen-secret";
+    const id = await create(); const mock = mockProvider();
+    const meta = JSON.parse(sqlite.prepare("SELECT video_meta FROM jobs WHERE id=?").get(id)!.video_meta as string);
+    expect(meta.provider).toBe("fal");
+    await new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step);
+    const posts = mock.mock.calls.filter(c => c[1]?.method === "POST");
+    expect(posts).toHaveLength(1);
+    expect(posts[0][0]).toBe("https://queue.fal.run/fal-ai/kling-video/ai-avatar/v2/standard");
+    expect(mock.mock.calls.some(c => c[0].includes("heygen.com"))).toBe(false);
+    expect(sqlite.prepare("SELECT * FROM cleanup_tasks WHERE prefix LIKE 'heygen-avatar/%'").all()).toHaveLength(0);
+    expect(sqlite.prepare("SELECT status FROM jobs WHERE id=?").get(id)!.status).toBe("completed");
+    expect(used()).toBe(27100);
+  });
+  // Simulate a job accepted by the previous release. New requests no longer use III.
+  async function legacyMedium() {
+    const key = env.FAL_KEY;
+    env.FAL_KEY ||= "test-secret";
+    const id = await create();
+    env.FAL_KEY = key;
+    sqlite.prepare("UPDATE jobs SET video_meta=json_set(video_meta,'$.provider','heygen') WHERE id=?").run(id);
+    return id;
+  }
   function photoMock(id: string, lookResult?: Record<string, unknown>) {
     const mock = heygenMock();
     const video = mock.getMockImplementation()!;
@@ -387,9 +416,9 @@ describe("Configurable video providers", () => {
     });
     return mock;
   }
-  it("prepares a photo for Medium, uses Avatar III with original audio, and removes the temporary group", async () => {
+  it("preserves an already-queued Avatar III job, uses Avatar III with original audio, and removes the temporary group", async () => {
     env.VIDEO_PROVIDER = "heygen"; env.HEYGEN_API_KEY = "heygen-secret"; delete env.FAL_KEY;
-    const id = await create();
+    const id = await legacyMedium();
     env.VIDEO_PROVIDER = "fal";
     const mock = photoMock(id);
     const workflowStep = { ...step, sleep: vi.fn(async () => {}) };
@@ -413,7 +442,7 @@ describe("Configurable video providers", () => {
   });
   it("recovers a saved photo avatar without another avatar POST", async () => {
     env.VIDEO_PROVIDER = "heygen"; env.HEYGEN_API_KEY = "heygen-secret";
-    const id = await create(); const mock = photoMock(id);
+    const id = await legacyMedium(); const mock = photoMock(id);
     await prepareHeyGenAvatar(env, id);
     await new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step);
     expect(mock.mock.calls.filter(c => c[0].endsWith("/avatars") && c[1]?.method === "POST")).toHaveLength(1);
@@ -421,7 +450,7 @@ describe("Configurable video providers", () => {
   });
   it("resumes Medium video polling without preparing an avatar again", async () => {
     env.VIDEO_PROVIDER = "heygen"; env.HEYGEN_API_KEY = "heygen-secret";
-    const id = await create();
+    const id = await legacyMedium();
     sqlite.prepare("UPDATE jobs SET submitted_at=?,provider_request=? WHERE id=?").run(now(), JSON.stringify({ provider: "heygen", request_id: "v_video1" }), id);
     const mock = heygenMock();
     await new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step);
@@ -430,7 +459,7 @@ describe("Configurable video providers", () => {
   });
   it("never repeats an ambiguous avatar creation or submits a video afterward", async () => {
     env.VIDEO_PROVIDER = "heygen"; env.HEYGEN_API_KEY = "heygen-secret";
-    const id = await create(); const mock = vi.fn().mockRejectedValue(new Error("network interrupted")); vi.stubGlobal("fetch", mock);
+    const id = await legacyMedium(); const mock = vi.fn().mockRejectedValue(new Error("network interrupted")); vi.stubGlobal("fetch", mock);
     await expect(prepareHeyGenAvatar(env, id)).rejects.toThrow();
     await expect(new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step)).rejects.toThrow("VIDEO_SUBMIT_INTERNAL_0");
     expect(mock).toHaveBeenCalledTimes(1); expect(used()).toBe(100);
@@ -443,7 +472,7 @@ describe("Configurable video providers", () => {
     [{ status: "processing" }, "TIMEOUT"],
   ])("refunds once and cleans up when photo preparation cannot finish (%j)", async (look, code) => {
     env.VIDEO_PROVIDER = "heygen"; env.HEYGEN_API_KEY = "heygen-secret";
-    const id = await create(); const mock = photoMock(id, look);
+    const id = await legacyMedium(); const mock = photoMock(id, look);
     const flow = new (VideoGeneration as any)({}, env);
     await expect(flow.run({ payload: { jobId: id } }, step)).rejects.toThrow(`VIDEO_STATUS_${code}_0`);
     await expect(flow.run({ payload: { jobId: id } }, step)).rejects.toThrow();
@@ -454,7 +483,7 @@ describe("Configurable video providers", () => {
   });
   it("retries avatar cleanup in maintenance without changing a completed video or its credits", async () => {
     env.VIDEO_PROVIDER = "heygen"; env.HEYGEN_API_KEY = "heygen-secret";
-    const id = await create(); const mock = photoMock(id); const normal = mock.getMockImplementation()!;
+    const id = await legacyMedium(); const mock = photoMock(id); const normal = mock.getMockImplementation()!;
     mock.mockImplementation(async (url, init) => init?.method === "DELETE" ? Response.json({ error: {} }, { status: 503 }) : normal(url, init));
     await new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step);
     expect(sqlite.prepare("SELECT * FROM cleanup_tasks WHERE prefix LIKE 'heygen-avatar/%'").all()).toHaveLength(1);
@@ -468,7 +497,7 @@ describe("Configurable video providers", () => {
   });
   it("preserves active avatar cleanup tasks and cleans up even after the job is deleted", async () => {
     env.VIDEO_PROVIDER = "heygen"; env.HEYGEN_API_KEY = "heygen-secret";
-    const id = await create(); const mock = photoMock(id);
+    const id = await legacyMedium(); const mock = photoMock(id);
     await prepareHeyGenAvatar(env, id);
     await maintenance(env);
     expect(mock.mock.calls.some(c => c[1]?.method === "DELETE")).toBe(false);
