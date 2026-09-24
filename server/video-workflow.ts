@@ -5,7 +5,8 @@ import { now } from "./types";
 import { withDefaults } from "./config";
 import { avatarMap, failVideo, videoModels, jobVideoTier, type VideoMeta } from "./video";
 import { submitWaveVideo, getWaveVideo, type WaveTicket } from "./video-wavespeed";
-import { submitHeyGenVideo, getHeyGenVideo, type HeyGenTicket } from "./video-heygen";
+import { submitHeyGenVideo, getHeyGenVideo, getHeyGenAvatarStatus, type HeyGenTicket, type HeyGenAvatar } from "./video-heygen";
+import { prepareHeyGenAvatar, cleanupHeyGenAvatars } from "./video-heygen-avatar";
 import { hasVideoCredential, savedVideoProvider, type VideoProvider } from "./video-provider";
 import { providerFailure, VideoFailure, videoFailureMessage, type VideoStage } from "./video-errors";
 import { videoFetch } from "./video-http";
@@ -83,6 +84,25 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> 
         return row;
       });
       stage = "SUBMIT";
+      let avatar: HeyGenAvatar | null = null;
+      const jobTier = jobVideoTier(job);
+      if (savedVideoProvider(JSON.parse(job.video_meta).provider, jobTier) === "heygen" && jobTier === "medium") {
+        avatar = await step.do("create-photo-avatar-once", { retries: { limit: 0, delay: "1 second" }, timeout: "2 minutes" },
+          () => prepareHeyGenAvatar(this.env, id));
+        if (avatar) {
+          let ready = false;
+          for (let i = 0; i < 60; i++) {
+            const status = await step.do(`photo-avatar-status-${i}`, { retries: { limit: 2, delay: "10 seconds" }, timeout: "2 minutes" }, async () => {
+              const status = await getHeyGenAvatarStatus(this.env, avatar!);
+              await this.env.DB.prepare("UPDATE jobs SET updated_at=? WHERE id=?").bind(now(), id).run();
+              return status;
+            });
+            if (status === "completed") { ready = true; break; }
+            await step.sleep(`photo-avatar-wait-${i}`, "10 seconds");
+          }
+          if (!ready) throw new VideoFailure("STATUS", "TIMEOUT");
+        }
+      }
       ticket = await step.do("submit-video-once", { retries: { limit: 0, delay: "1 second" }, timeout: "2 minutes" }, async () => {
         const row = await this.env.DB.prepare("SELECT provider_request,submitted_at FROM jobs WHERE id=?").bind(id).first<any>();
         if (row?.provider_request) return JSON.parse(row.provider_request) as Ticket;
@@ -90,6 +110,7 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> 
         const meta: VideoMeta = JSON.parse(job.video_meta);
         const provider = savedVideoProvider(meta.provider, tier);
         if (!hasVideoCredential(this.env, provider)) throw new VideoFailure("SUBMIT", "AUTH");
+        if (provider === "heygen" && tier === "medium" && !avatar) throw new VideoFailure("SUBMIT", "INTERNAL");
         const source = await this.env.DB.prepare("SELECT audio_key FROM jobs WHERE id=? AND user_id=? AND status='completed'").bind(job.source_job_id, job.user_id).first<any>();
         if (!source?.audio_key || !(await this.env.AUDIO.head(source.audio_key))) throw new Error("Missing audio");
         if (tier !== "standard" && (!meta.imageKey || !(await this.env.AUDIO.head(meta.imageKey)))) throw new Error("Missing portrait");
@@ -103,7 +124,7 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> 
         if (!claim.meta.changes) throw new Error("Submission requires reconciliation");
         if (provider === "heygen" || provider === "wavespeed") {
           const t = provider === "heygen"
-            ? await submitHeyGenVideo(this.env, id, `${base}/image?token=${meta.token}`, audio_url)
+            ? await submitHeyGenVideo(this.env, id, `${base}/image?token=${meta.token}`, audio_url, avatar || undefined)
             : await submitWaveVideo(this.env, `${base}/image?token=${meta.token}`, audio_url);
           await this.env.DB.prepare("UPDATE jobs SET provider_request=?,updated_at=? WHERE id=?").bind(JSON.stringify(t), now(), id).run();
           return t;
@@ -169,6 +190,9 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> 
       try {
         await step.do("notify-video", { retries: { limit: 2, delay: "1 minute" }, timeout: "1 minute" }, () => notifyVideo(this.env, id));
       } catch { console.error("Video notification requires reconciliation", { jobId: id }); }
+      try {
+        await step.do("clean-photo-avatar", { retries: { limit: 2, delay: "1 minute" }, timeout: "1 minute" }, () => cleanupHeyGenAvatars(this.env, id));
+      } catch { console.error("Temporary video avatar cleanup requires reconciliation", { jobId: id }); }
     }
   }
 }

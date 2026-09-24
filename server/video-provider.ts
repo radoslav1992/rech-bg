@@ -7,7 +7,7 @@ export type VideoProvider = "fal" | "wavespeed" | "heygen";
 // An unknown setting disables new generation instead of silently billing a fallback.
 export function configuredVideoProvider(env: Env, tier: VideoTier): VideoProvider | null {
   const mode = env.VIDEO_PROVIDER?.trim().toLowerCase() || "fal";
-  if (mode === "heygen") return tier === "high" ? "heygen" : null;
+  if (mode === "heygen") return tier === "medium" || tier === "high" ? "heygen" : null;
   if (mode === "fal" || mode === "fal.ai") return tier === "low" ? "wavespeed" : "fal";
   return null;
 }

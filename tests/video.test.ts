@@ -7,6 +7,7 @@ import { videoCredits } from "../shared/video";
 import { videoFailureMessage } from "../server/video-errors";
 import { notifyVideo } from "../server/video-notifications";
 import { getHeyGenVideo } from "../server/video-heygen";
+import { prepareHeyGenAvatar, cleanupHeyGenAvatars } from "../server/video-heygen-avatar";
 import { database, bucket } from "./helpers";
 const ticket = { request_id: "remote-1", status_url: "https://queue.fal.run/fal-ai/kling-video/requests/remote-1/status", response_url: "https://queue.fal.run/fal-ai/kling-video/requests/remote-1", cancel_url: "https://queue.fal.run/fal-ai/kling-video/requests/remote-1/cancel" };
 const videoUrl = "https://v3.fal.media/files/test.mp4";
@@ -241,7 +242,7 @@ describe("Configurable video providers", () => {
     vi.stubGlobal("fetch", mock);
     return mock;
   }
-  it("offers only High in HeyGen mode, never falls back, and rejects invalid configuration", async () => {
+  it("offers Medium/High in HeyGen mode, never falls back, and rejects invalid configuration", async () => {
     env.VIDEO_PROVIDER = " HEYGEN ";
     env.WAVESPEED_API_KEY = "wave-secret";
     expect((await (await request("/videos/config")).json() as any).enabled).toBe(false);
@@ -251,9 +252,9 @@ describe("Configurable video providers", () => {
     expect(config.enabled).toBe(true);
     expect(config.tiers.high).toMatchObject({ enabled: true, creditsPerSecond: 1800 });
     expect(config.tiers.low.enabled).toBe(false);
-    expect(config.tiers.medium.enabled).toBe(false);
+    expect(config.tiers.medium).toMatchObject({ enabled: true, creditsPerSecond: 900 });
     expect(JSON.stringify(config)).not.toMatch(/heygen|secret|\bfal\b/i);
-    for (const tier of ["low", "medium"]) expect((await request("/videos", { method: "POST", body: form(tier) })).status).toBe(503);
+    expect((await request("/videos", { method: "POST", body: form("low") })).status).toBe(503);
     env.VIDEO_PROVIDER = "typo";
     expect((await (await request("/videos/config")).json() as any).enabled).toBe(false);
     expect((await request("/videos", { method: "POST", body: form("high") })).status).toBe(503);
@@ -355,6 +356,127 @@ describe("Configurable video providers", () => {
     expect(outputUrl(output)).toBe(output);
     expect(() => outputUrl("https://files.heygen.ai.evil.invalid/video.mp4")).toThrow();
     expect(() => outputUrl("https://user:secret@files.heygen.ai/video.mp4")).toThrow();
+  });
+  function photoMock(id: string, lookResult?: Record<string, unknown>) {
+    const mock = heygenMock();
+    const video = mock.getMockImplementation()!;
+    let checks = 0;
+    mock.mockImplementation(async (url, init) => {
+      if (!url.startsWith("https://api.heygen.com/v3/avatars")) return video(url, init);
+      expect((init?.headers as any)["x-api-key"]).toBe("heygen-secret");
+      expect(init?.redirect).toBe("manual");
+      if (init?.method === "POST") {
+        expect(url).toBe("https://api.heygen.com/v3/avatars");
+        expect((init?.headers as any)["Idempotency-Key"]).toBe(`avatar:${id}`);
+        const input = JSON.parse(init.body as string);
+        expect(Object.keys(input).sort()).toEqual(["file", "name", "type"]);
+        expect(input).toMatchObject({ type: "photo", name: `Rech BG ${id}`, file: { type: "url" } });
+        const u = new URL(input.file.url);
+        expect(u.pathname).toBe(`/api/video-inputs/${id}/image`);
+        expect((await request(u.pathname.replace("/api", "") + u.search, {}, false)).status).toBe(200);
+        return Response.json({ data: { avatar_item: { id: "look_photo1" }, avatar_group: { id: "group_photo1" } } });
+      }
+      if (init?.method === "DELETE") {
+        expect(url).toBe("https://api.heygen.com/v3/avatars/group_photo1");
+        return Response.json({ data: { id: "group_photo1" } });
+      }
+      expect(url).toBe("https://api.heygen.com/v3/avatars/looks/look_photo1");
+      expect((await (await request(`/jobs/${id}`)).json() as any).job.video_phase).toBe("preparing");
+      return Response.json({ data: { id: "look_photo1", avatar_type: "photo_avatar", supported_api_engines: ["avatar_iii", "avatar_iv"],
+        status: ++checks === 1 ? "processing" : "completed", ...lookResult } });
+    });
+    return mock;
+  }
+  it("prepares a photo for Medium, uses Avatar III with original audio, and removes the temporary group", async () => {
+    env.VIDEO_PROVIDER = "heygen"; env.HEYGEN_API_KEY = "heygen-secret"; delete env.FAL_KEY;
+    const id = await create();
+    env.VIDEO_PROVIDER = "fal";
+    const mock = photoMock(id);
+    const workflowStep = { ...step, sleep: vi.fn(async () => {}) };
+    await new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, workflowStep);
+    const posts = mock.mock.calls.filter(c => c[1]?.method === "POST");
+    expect(posts).toHaveLength(2);
+    expect(posts[0][0]).toBe("https://api.heygen.com/v3/avatars");
+    expect(posts[1][0]).toBe(heygenUrl);
+    expect(JSON.parse(posts[1][1]!.body as string)).toEqual({
+      type: "avatar", avatar_id: "look_photo1", engine: { type: "avatar_iii" },
+      audio_url: expect.stringContaining(`/api/video-inputs/${id}/audio?token=`),
+      title: `Rech BG ${id}`, resolution: "1080p", aspect_ratio: "auto", output_format: "mp4",
+    });
+    expect(workflowStep.sleep).toHaveBeenCalledWith("photo-avatar-wait-0", "10 seconds");
+    const row = sqlite.prepare("SELECT * FROM jobs WHERE id=?").get(id)!;
+    expect(row.status).toBe("completed"); expect(used()).toBe(27100);
+    expect(JSON.parse(row.video_meta as string).heygenAvatar).toEqual({ lookId: "look_photo1", groupId: "group_photo1" });
+    expect(mock.mock.calls.filter(c => c[1]?.method === "DELETE")).toHaveLength(1);
+    expect(sqlite.prepare("SELECT * FROM cleanup_tasks WHERE prefix LIKE 'heygen-avatar/%'").all()).toHaveLength(0);
+    expect(await (await request(`/jobs/${id}`)).text()).not.toMatch(/look_photo1|group_photo1|heygenAvatar/);
+  });
+  it("recovers a saved photo avatar without another avatar POST", async () => {
+    env.VIDEO_PROVIDER = "heygen"; env.HEYGEN_API_KEY = "heygen-secret";
+    const id = await create(); const mock = photoMock(id);
+    await prepareHeyGenAvatar(env, id);
+    await new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step);
+    expect(mock.mock.calls.filter(c => c[0].endsWith("/avatars") && c[1]?.method === "POST")).toHaveLength(1);
+    expect(mock.mock.calls.filter(c => c[0] === heygenUrl && c[1]?.method === "POST")).toHaveLength(1);
+  });
+  it("resumes Medium video polling without preparing an avatar again", async () => {
+    env.VIDEO_PROVIDER = "heygen"; env.HEYGEN_API_KEY = "heygen-secret";
+    const id = await create();
+    sqlite.prepare("UPDATE jobs SET submitted_at=?,provider_request=? WHERE id=?").run(now(), JSON.stringify({ provider: "heygen", request_id: "v_video1" }), id);
+    const mock = heygenMock();
+    await new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step);
+    expect(mock.mock.calls.some(c => c[1]?.method === "POST" || c[0].includes("/avatars"))).toBe(false);
+    expect(sqlite.prepare("SELECT status FROM jobs WHERE id=?").get(id)!.status).toBe("completed");
+  });
+  it("never repeats an ambiguous avatar creation or submits a video afterward", async () => {
+    env.VIDEO_PROVIDER = "heygen"; env.HEYGEN_API_KEY = "heygen-secret";
+    const id = await create(); const mock = vi.fn().mockRejectedValue(new Error("network interrupted")); vi.stubGlobal("fetch", mock);
+    await expect(prepareHeyGenAvatar(env, id)).rejects.toThrow();
+    await expect(new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step)).rejects.toThrow("VIDEO_SUBMIT_INTERNAL_0");
+    expect(mock).toHaveBeenCalledTimes(1); expect(used()).toBe(100);
+    expect(mock.mock.calls[0][0]).toBe("https://api.heygen.com/v3/avatars");
+    expect(sqlite.prepare("SELECT submitted_at FROM jobs WHERE id=?").get(id)!.submitted_at).toBeNull();
+  });
+  it.each([
+    [{ status: "failed", error: { code: "moderation_failed", message: "private details" } }, "CONTENT"],
+    [{ status: "completed", supported_api_engines: ["avatar_iv"] }, "ACCESS"],
+    [{ status: "processing" }, "TIMEOUT"],
+  ])("refunds once and cleans up when photo preparation cannot finish (%j)", async (look, code) => {
+    env.VIDEO_PROVIDER = "heygen"; env.HEYGEN_API_KEY = "heygen-secret";
+    const id = await create(); const mock = photoMock(id, look);
+    const flow = new (VideoGeneration as any)({}, env);
+    await expect(flow.run({ payload: { jobId: id } }, step)).rejects.toThrow(`VIDEO_STATUS_${code}_0`);
+    await expect(flow.run({ payload: { jobId: id } }, step)).rejects.toThrow();
+    expect(used()).toBe(100);
+    expect(mock.mock.calls.filter(c => c[1]?.method === "POST")).toHaveLength(1);
+    expect(mock.mock.calls.filter(c => c[1]?.method === "DELETE")).toHaveLength(1);
+    expect(await (await request(`/jobs/${id}`)).text()).not.toContain("private details");
+  });
+  it("retries avatar cleanup in maintenance without changing a completed video or its credits", async () => {
+    env.VIDEO_PROVIDER = "heygen"; env.HEYGEN_API_KEY = "heygen-secret";
+    const id = await create(); const mock = photoMock(id); const normal = mock.getMockImplementation()!;
+    mock.mockImplementation(async (url, init) => init?.method === "DELETE" ? Response.json({ error: {} }, { status: 503 }) : normal(url, init));
+    await new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step);
+    expect(sqlite.prepare("SELECT * FROM cleanup_tasks WHERE prefix LIKE 'heygen-avatar/%'").all()).toHaveLength(1);
+    expect(sqlite.prepare("SELECT status FROM jobs WHERE id=?").get(id)!.status).toBe("completed");
+    expect(used()).toBe(27100);
+    mock.mockImplementation(normal);
+    await maintenance(env);
+    expect(mock.mock.calls.filter(c => c[1]?.method === "DELETE")).toHaveLength(2);
+    expect(sqlite.prepare("SELECT * FROM cleanup_tasks WHERE prefix LIKE 'heygen-avatar/%'").all()).toHaveLength(0);
+    expect(used()).toBe(27100);
+  });
+  it("preserves active avatar cleanup tasks and cleans up even after the job is deleted", async () => {
+    env.VIDEO_PROVIDER = "heygen"; env.HEYGEN_API_KEY = "heygen-secret";
+    const id = await create(); const mock = photoMock(id);
+    await prepareHeyGenAvatar(env, id);
+    await maintenance(env);
+    expect(mock.mock.calls.some(c => c[1]?.method === "DELETE")).toBe(false);
+    expect(sqlite.prepare("SELECT * FROM cleanup_tasks WHERE prefix LIKE 'heygen-avatar/%'").all()).toHaveLength(1);
+    sqlite.prepare("DELETE FROM jobs WHERE id=?").run(id);
+    await cleanupHeyGenAvatars(env);
+    expect(mock.mock.calls.filter(c => c[1]?.method === "DELETE")).toHaveLength(1);
+    expect(sqlite.prepare("SELECT * FROM cleanup_tasks WHERE prefix LIKE 'heygen-avatar/%'").all()).toHaveLength(0);
   });
 });
 describe("Video workflow and private assets", () => {

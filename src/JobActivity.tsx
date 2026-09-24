@@ -10,6 +10,7 @@ export const jobLink = (j: Job) => `/app/${j.mode === "studio" ? "video-studio" 
 export function jobStatus(j: Job) {
   if (j.status === "completed") return "Готово";
   if (j.status === "failed") return "Неуспешно";
+  if (j.video_phase === "preparing") return "Подготовка на аватара";
   if (j.status === "queued" || j.video_phase === "queued") return "На опашка";
   if (j.video_phase === "saving") return "Запазване на видеото";
   return "Създава се";

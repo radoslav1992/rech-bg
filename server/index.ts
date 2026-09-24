@@ -19,6 +19,7 @@ import { studio } from "./studio";
 import { validateStudioScript } from "../shared/studio";
 import { videos, videoInputs } from "./video";
 import { notifyVideo } from "./video-notifications";
+import { cleanupHeyGenAvatars } from "./video-heygen-avatar";
 import { jobStorage } from './media-storage';
 import { mediaError } from './media';
 import { media, mediaInputs } from './media';
@@ -379,7 +380,7 @@ const publicJob = (j: any) => {
   chars: j.chars, duration: j.duration, created_at: j.created_at, error: j.error,
   kind: j.kind || "audio", video_tier: ["low", "medium", "high"].includes(meta.tier) ? meta.tier : j.video_tier || null,
   source_job_id: j.source_job_id || null, mode: j.mode,
-  video_phase: ["queued", "processing", "saving"].includes(meta.phase) ? meta.phase : null,
+  video_phase: ["preparing", "queued", "processing", "saving"].includes(meta.phase) ? meta.phase : null,
   notify_email: meta.notifyEmail === true,
   email_status: ["sending", "sent", "failed"].includes(meta.emailStatus) ? meta.emailStatus : null,
 });
@@ -774,7 +775,7 @@ async function deletePrefix(e: Env, prefix: string) {
 async function drainCleanup(e: Env) {
   const tasks = (
     await e.DB.prepare(
-      "SELECT prefix FROM cleanup_tasks ORDER BY created_at LIMIT 100",
+      "SELECT prefix FROM cleanup_tasks WHERE prefix NOT LIKE 'heygen-avatar/%' ORDER BY created_at LIMIT 100",
     ).all<{ prefix: string }>()
   ).results;
   for (const task of tasks) {
@@ -850,6 +851,7 @@ export async function maintenance(e: Env) {
     try { await notifyVideo(e, j.id); }
     catch { console.error("Video notification reconciliation failed", { jobId: j.id }); }
   }
+  await cleanupHeyGenAvatars(e);
 }
 export default {
   fetch: (request: Request, env: Env, ctx: ExecutionContext) =>
