@@ -51,7 +51,7 @@ const Projects = lazy(() => import("./Dashboard").then(m => ({ default: m.Projec
 const Studio = lazy(() => import("./Studio").then(m => ({ default: m.Studio })));
 const SettingsPage = lazy(() => import("./Settings").then(m => ({ default: m.SettingsPage })));
 const MediaTools = lazy(() => import("./MediaTools").then(m => ({default:m.MediaTools})));
-const VideoStudio = lazy(() => import("./VideoStudio").then(m => ({ default: m.VideoStudio })));
+const StudioEditor = lazy(() => import("./studio/StudioEditor").then(m => ({ default: m.StudioEditor })));
 const loading = <p className="loading-page" role="status">Зареждане…</p>;
 /** Keeps the title and description current, and moves focus to the new page for screen readers. */
 function RouteChange() {
@@ -272,8 +272,8 @@ export function App() {
           <Route index element={<Dashboard />} />
           <Route path="studio" element={<Studio />} />
           <Route path="studio/:id" element={<Studio />} />
-          <Route path="video-studio" element={<VideoStudio />} />
-          <Route path="video-studio/:id" element={<VideoStudio />} />
+          <Route path="video-studio" element={<StudioEditor />} />
+          <Route path="video-studio/:id" element={<StudioEditor />} />
           <Route path="media" element={<MediaTools />} />
           <Route path="projects" element={<Projects />} />
           <Route path="voices" element={<Voices inApp />} />

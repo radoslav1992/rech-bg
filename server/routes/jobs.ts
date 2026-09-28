@@ -123,12 +123,13 @@ export const publicJob = (j: any) => {
 });
 };
 jobs.get("/api/jobs", async (c) => {
+  // ?project= lists one project's recordings and videos (the video studio needs all of its scenes' versions).
+  const project = c.req.query("project");
   const jobs = (
-    await c.env.DB.prepare(
-      "SELECT * FROM jobs WHERE user_id=? ORDER BY created_at DESC, rowid DESC LIMIT 100",
-    )
-      .bind(c.get("user").id)
-      .all()
+    await (project
+      ? c.env.DB.prepare("SELECT * FROM jobs WHERE user_id=? AND project_id=? ORDER BY created_at DESC, rowid DESC LIMIT 400").bind(c.get("user").id, project)
+      : c.env.DB.prepare("SELECT * FROM jobs WHERE user_id=? ORDER BY created_at DESC, rowid DESC LIMIT 100").bind(c.get("user").id)
+    ).all()
   ).results;
   return c.json({ jobs: jobs.map(publicJob) });
 });

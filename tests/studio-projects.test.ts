@@ -393,3 +393,12 @@ describe("brand kit and templates", () => {
     expect(plain).toEqual({ ...defaultCaptions, words: [] });
   });
 });
+
+describe("project job listing", () => {
+  it("lists only the signed-in user's jobs of one project", async () => {
+    const mine = await (await call(`/jobs?project=${project}`)).json() as any;
+    expect(mine.jobs.map((j: any) => j.id).sort()).toEqual([audio, video].sort());
+    expect((await (await call(`/jobs?project=tts-project`)).json() as any).jobs).toEqual([]);
+    expect((await (await call(`/jobs?project=${project}`, "GET", undefined, "o")).json() as any).jobs).toEqual([]);
+  });
+});
