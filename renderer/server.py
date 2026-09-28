@@ -16,21 +16,106 @@ def command(args, timeout=90):
         raise ValueError('Media processing failed')
     return p.stdout
 
+def export_settings(job, payload):
+    width,height=payload['width'],payload['height']
+    if [width,height] not in [[720,1280],[1080,1920],[720,720],[1080,1080],[1280,720],[1920,1080],[720,900],[1080,1350]]:
+        raise ValueError('Invalid dimensions')
+    ass=os.path.join(job['dir'],'captions.ass')
+    with open(ass,'w',encoding='utf-8') as f: f.write(payload['ass'])
+    if payload.get('fit')=='cover':
+        scale=f'scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}'
+    else:
+        scale=f'scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black'
+    return width,height,scale,ass,os.path.join(job['dir'],'result.mp4')
+
+def download(url, path, origin):
+    parsed = urlparse(url)
+    if f'{parsed.scheme}://{parsed.netloc}' != origin or not re.fullmatch(r'/api/media-inputs/[a-f0-9-]+/[0-9]+', parsed.path):
+        raise ValueError('Invalid input')
+    with urllib.request.build_opener(NoRedirect).open(url, timeout=90) as response, open(path, 'wb') as out:
+        total = 0
+        while True:
+            chunk = response.read(1024 * 1024)
+            if not chunk: break
+            total += len(chunk)
+            if total > MAX_BYTES: raise ValueError('File too large')
+            out.write(chunk)
+
+def probe(path):
+    return json.loads(command(['ffprobe','-v','error','-protocol_whitelist','file,pipe','-show_format','-show_streams','-of','json',path]))
+
+def number(value, low, high):
+    value = float(value)
+    if not math.isfinite(value) or value < low or value > high: raise ValueError('Invalid number')
+    return value
+
+def music_gain(music, length, music_duration):
+    """FFmpeg volume expression for the same envelope as shared/timeline.ts musicGain (fades, ducking)."""
+    start = number(music['start'], -3600, 3600)
+    begin, end = max(0.0, start), min(length, start + music_duration)
+    gain = f'{number(music["volume"], 0, 1):.4f}'
+    if music.get('fade'):
+        gain += f'*clip(min((t-{begin:.3f})/1,({end:.3f}-t)/1.5),0,1)'
+    ranges = music.get('ranges') or []
+    if music.get('duck') and ranges:
+        if len(ranges) > 2000: raise ValueError('Too many ranges')
+        # Merged speech ranges are at least 0.6 s apart, so their 0.3 s ramps never overlap and can be summed.
+        terms = '+'.join(f'clip(min((t-{number(a, 0, 700) - 0.3:.3f})/0.3,({number(b, 0, 700) + 0.3:.3f}-t)/0.3),0,1)' for a, b in ranges)
+        gain += f'*(1-0.7*clip({terms},0,1))'
+    return gain
+
+def timeline(job, payload, origin, width, height, scale, ass, output):
+    urls = payload.get('urls') or []
+    if not 2 <= len(urls) <= 3: raise ValueError('Invalid inputs')
+    t = payload['timeline']
+    speech_start, tail = number(t['speech_start'], 0, 10), number(t['tail'], 0, 10)
+    voice_volume, speech = number(t['voice_volume'], 0, 1), number(t['speech_duration'], 0.1, 600)
+    length = round(speech_start + speech + tail, 3)
+    files = []
+    for i, url in enumerate(urls):
+        path = os.path.join(job['dir'], f'input{i}')
+        download(url, path, origin); files.append(path)
+    video_info = probe(files[0])
+    video = next((s for s in video_info.get('streams',[]) if s.get('codec_type')=='video'), None)
+    if not video or video.get('width',0)>4096 or video.get('height',0)>4096: raise ValueError('Invalid video')
+    # Like the browser export: use the video's own soundtrack (lip sync) only when it matches the approved voice.
+    soundtrack = next((s for s in video_info['streams'] if s.get('codec_type')=='audio'), None)
+    duration = float((soundtrack or {}).get('duration') or video_info.get('format',{}).get('duration') or 0)
+    voice = '0:a:0' if soundtrack and abs(duration - speech) <= 0.25 else '1:a:0'
+    ms = int(round(speech_start * 1000))
+    graph = [
+        f'[0:v:0]tpad=start_duration={speech_start:.3f}:start_mode=clone:stop_duration={length + 1:.3f}:stop_mode=clone,'
+        f'trim=duration={length:.3f},setpts=PTS-STARTPTS,{scale},setsar=1,ass={ass}[v]',
+        f'[{voice}]aformat=sample_rates=48000:channel_layouts=stereo,volume={voice_volume:.4f},adelay=delays={ms}:all=1,apad,atrim=duration={length:.3f}[voice]',
+    ]
+    audio = '[voice]'
+    if len(files) == 3 and t.get('music'):
+        music_info = probe(files[2])
+        music_duration = float(music_info.get('format',{}).get('duration') or 0)
+        if not any(s.get('codec_type')=='audio' for s in music_info.get('streams',[])) or music_duration <= 0: raise ValueError('Invalid music')
+        start = number(t['music']['start'], -3600, 3600)
+        place = f'adelay=delays={int(round(start * 1000))}:all=1' if start >= 0 else f'atrim=start={-start:.3f},asetpts=PTS-STARTPTS'
+        graph.append(f"[2:a:0]aformat=sample_rates=48000:channel_layouts=stereo,{place},apad,atrim=duration={length:.3f},"
+                     f"volume='{music_gain(t['music'], length, music_duration)}':eval=frame[music]")
+        graph.append('[voice][music]amix=inputs=2:duration=first:normalize=0[mix]')
+        audio = '[mix]'
+    command(['ffmpeg','-nostdin','-v','error','-threads','1','-protocol_whitelist','file,pipe',*sum((['-i', f] for f in files), []),
+             '-filter_complex',';'.join(graph),'-map','[v]','-map',audio,'-filter_threads','1','-r','30','-c:v','libx264','-preset','veryfast',
+             '-crf','23','-maxrate','4M','-bufsize','8M','-threads','1','-pix_fmt','yuv420p','-c:a','aac','-b:a','160k','-t',f'{length:.3f}',
+             '-movflags','+faststart',output],timeout=1500)
+    return length
+
 def process(job, payload):
     try:
-        parsed = urlparse(payload['url'])
         origin = os.environ.get('SOURCE_ORIGIN', 'https://rechbg.com')
-        if f'{parsed.scheme}://{parsed.netloc}' != origin or not re.fullmatch(r'/api/media-inputs/[a-f0-9-]+/[0-9]+', parsed.path):
-            raise ValueError('Invalid input')
         source = os.path.join(job['dir'], 'source')
-        with urllib.request.build_opener(NoRedirect).open(payload['url'], timeout=90) as response, open(source, 'wb') as out:
-            total = 0
-            while True:
-                chunk = response.read(1024 * 1024)
-                if not chunk: break
-                total += len(chunk)
-                if total > MAX_BYTES: raise ValueError('File too large')
-                out.write(chunk)
+        if payload['operation'] == 'timeline':
+            width, height, scale, ass, output = export_settings(job, payload)
+            length = timeline(job, payload, origin, width, height, scale, ass, output)
+            if os.path.getsize(output)>400*1024*1024: raise ValueError('Output too large')
+            job.update(status='completed',duration=length,file=output)
+            return
+        download(payload['url'], source, origin)
         data = json.loads(command(['ffprobe','-v','error','-protocol_whitelist','file,pipe','-show_format','-show_streams','-of','json',source]))
         duration = float(data.get('format',{}).get('duration',0))
         video = next((s for s in data.get('streams',[]) if s.get('codec_type')=='video'),None)
@@ -44,16 +129,7 @@ def process(job, payload):
             if not any(s.get('codec_type')=='audio' for s in data['streams']): raise ValueError('Video has no audio')
             job.update(status='completed',duration=duration)
             return
-        width,height=payload['width'],payload['height']
-        if [width,height] not in [[720,1280],[1080,1920],[720,720],[1080,1080],[1280,720],[1920,1080],[720,900],[1080,1350]]:
-            raise ValueError('Invalid dimensions')
-        ass=os.path.join(job['dir'],'captions.ass')
-        with open(ass,'w',encoding='utf-8') as f: f.write(payload['ass'])
-        if payload.get('fit')=='cover':
-            scale=f'scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}'
-        else:
-            scale=f'scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black'
-        output=os.path.join(job['dir'],'result.mp4')
+        width, height, scale, ass, output = export_settings(job, payload)
         command(['ffmpeg','-nostdin','-v','error','-threads','1','-protocol_whitelist','file,pipe','-i',source,'-map','0:v:0','-map','0:a:0?',
                  '-vf',scale+f',setsar=1,ass={ass}', '-filter_threads','1','-r','30','-c:v','libx264','-preset','veryfast','-crf','23',
                  '-maxrate','4M','-bufsize','8M','-threads','1','-pix_fmt','yuv420p','-c:a','aac','-b:a','128k','-t','600','-movflags','+faststart',output],timeout=1500)
@@ -63,8 +139,8 @@ def process(job, payload):
         job.update(status='failed',error='MEDIA_PROCESSING_FAILED')
     finally:
         job['finished']=time.time()
-        source=os.path.join(job['dir'],'source')
-        if os.path.exists(source): os.remove(source)
+        for name in os.listdir(job['dir']):
+            if name == 'source' or name.startswith('input'): os.remove(os.path.join(job['dir'], name))
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self,*args): pass
@@ -75,7 +151,7 @@ class Handler(BaseHTTPRequestHandler):
         size=int(self.headers.get('Content-Length','0'))
         if size<=0 or size>2*1024*1024:return self.respond(413,{})
         payload=json.loads(self.rfile.read(size));id=payload.get('id','')
-        if not re.fullmatch(r'[a-f0-9-]{36}',id) or payload.get('operation') not in ('inspect','export'):return self.respond(400,{})
+        if not re.fullmatch(r'[a-f0-9-]{36}',id) or payload.get('operation') not in ('inspect','export','timeline'):return self.respond(400,{})
         with LOCK:
             for key,old in list(JOBS.items()):
                 if old.get('finished',time.time())<time.time()-1800:

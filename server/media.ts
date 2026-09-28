@@ -16,6 +16,19 @@ import {
 import { defaultCaptions } from "../shared/captions";
 import { documentSchema } from "./studio";
 
+const musicMimes = ["audio/mpeg", "audio/wav", "audio/x-wav", "audio/wave", "audio/mp4", "audio/x-m4a", "audio/aac", "audio/ogg"] as const;
+const musicLimit = 50 * MB;
+/** Recognizes MP3 (ID3 or frame sync), WAV, MP4/M4A and Ogg by their first bytes. */
+export function isMusicFile(b: Uint8Array) {
+  const text = (from: number, to: number) => String.fromCharCode(...b.subarray(from, to));
+  return (
+    text(0, 3) === "ID3" ||
+    (b[0] === 0xff && (b[1] & 0xe0) === 0xe0) ||
+    (text(0, 4) === "RIFF" && text(8, 12) === "WAVE") ||
+    text(4, 8) === "ftyp" ||
+    text(0, 4) === "OggS"
+  );
+}
 export async function mediaAllowance(e: Env, user: DbUser) {
   const a = await allowance(e, user),
     limits = mediaPlans[a.plan] || mediaPlans.free;
@@ -231,19 +244,24 @@ media.post("/uploads", async (c) => {
     .object({
       name: z.string().trim().min(1).max(160),
       bytes: z.number().int().min(24).max(uploadLimit),
-      kind: z.enum(["upload", "portrait", "product"]),
+      kind: z.enum(["upload", "portrait", "product", "music"]),
       mime: z.enum([
         "video/mp4",
         "video/quicktime",
         "video/webm",
         "image/jpeg",
         "image/png",
+        ...musicMimes,
       ]),
     })
     .parse(await c.req.json());
+  const music = d.kind === "music";
+  if (music !== d.mime.startsWith("audio/") || (music && d.bytes > musicLimit))
+    throw new HTTPException(400, { message: "Качете MP3, WAV, M4A или OGG файл до 50 MB." });
   if (
-    (d.kind === "upload") !== d.mime.startsWith("video/") ||
-    (d.kind !== "upload" && d.bytes > 2 * MB)
+    !music &&
+    ((d.kind === "upload") !== d.mime.startsWith("video/") ||
+      (d.kind !== "upload" && d.bytes > 2 * MB))
   )
     throw new HTTPException(400, {
       message: "Качете видео до 500 MB или JPG/PNG до 2 MB.",
@@ -260,7 +278,8 @@ media.post("/uploads", async (c) => {
         c.get("user").id,
         key,
         d.name,
-        d.kind,
+        // Music is stored as an 'audio' asset without a job (the kind list predates music).
+        music ? "audio" : d.kind,
         d.mime,
         d.bytes,
         now(),
@@ -427,6 +446,17 @@ media.post("/uploads/:id/complete", async (c) => {
       range: { offset: 0, length: 24 },
     }),
     b = new Uint8Array(await o!.arrayBuffer());
+  if (a.kind === "audio" && !a.job_id) {
+    if (!isMusicFile(b))
+      throw new HTTPException(400, { message: "Изберете валиден MP3, WAV, M4A или OGG файл." });
+    const limits = await mediaAllowance(c.env, c.get("user"));
+    await c.env.DB.prepare(
+      "UPDATE media_assets SET status='ready',upload_id=NULL,expires_at=? WHERE id=?",
+    )
+      .bind(now() + limits.days * 86400, a.id)
+      .run();
+    return c.json({ id: a.id });
+  }
   const png =
       b.length >= 24 &&
       [137, 80, 78, 71, 13, 10, 26, 10].every((v, i) => b[i] === v),

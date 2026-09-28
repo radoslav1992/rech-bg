@@ -11,7 +11,8 @@ export function renderDimensions(doc: CaptionDocument) {
     ? [short, Math.round((short * b) / a / 2) * 2]
     : [Math.round((short * a) / b / 2) * 2, short];
 }
-export function captionAss(doc: CaptionDocument) {
+/** `offset` shifts every caption, e.g. by the timeline's lead-in before the voice starts. */
+export function captionAss(doc: CaptionDocument, offset = 0) {
   const [width, height] = renderDimensions(doc),
     look = captionLook(doc);
   const color = (hex: string) =>
@@ -23,7 +24,7 @@ export function captionAss(doc: CaptionDocument) {
       .replaceAll("}", "｝")
       .replace(/[\r\n]/g, " ");
   const time = (s: number) => {
-    const n = Math.round(s * 100);
+    const n = Math.round((s + offset) * 100);
     return `${Math.floor(n / 360000)}:${String(Math.floor(n / 6000) % 60).padStart(2, "0")}:${String(Math.floor(n / 100) % 60).padStart(2, "0")}.${String(n % 100).padStart(2, "0")}`;
   };
   const font = Math.round(width * 0.053 * (look.size || 1)),

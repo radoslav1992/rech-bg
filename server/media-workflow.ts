@@ -148,14 +148,27 @@ export class MediaGeneration extends WorkflowEntrypoint<
         const [width, height] = p.document
           ? renderDimensions(p.document)
           : [720, 1280];
+        // A studio timeline render sends every input (video, approved voice, optional music) and the arrangement.
+        // Older renderers reject the unknown operation, so the task fails and refunds instead of dropping music.
+        const timeline = task.kind === "export" && p.timeline ? p.timeline : null;
         const request = {
           id,
           url: input(0),
-          operation: task.kind,
+          operation: timeline ? "timeline" : task.kind,
           width,
           height,
-          ass: p.document ? captionAss(p.document) : "",
+          ass: p.document ? captionAss(p.document, timeline?.speechStart || 0) : "",
           fit: p.document?.fit || "contain",
+          ...(timeline && {
+            urls: p.inputs.map((_: string, i: number) => input(i)),
+            timeline: {
+              speech_start: timeline.speechStart,
+              tail: timeline.tail,
+              voice_volume: timeline.voiceVolume,
+              speech_duration: timeline.speechDuration,
+              music: timeline.music,
+            },
+          }),
         };
         let finished = false,
           duration = 0;
