@@ -16,7 +16,7 @@ import {
 import { defaultCaptions } from "../shared/captions";
 import { documentSchema } from "./studio";
 
-const musicMimes = ["audio/mpeg", "audio/wav", "audio/x-wav", "audio/wave", "audio/mp4", "audio/x-m4a", "audio/aac", "audio/ogg"] as const;
+const musicMimes = ["audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/wave", "audio/mp4", "audio/x-m4a", "audio/aac", "audio/ogg"] as const;
 const musicLimit = 50 * MB;
 /** Recognizes MP3 (ID3 or frame sync), WAV, MP4/M4A and Ogg by their first bytes. */
 export function isMusicFile(b: Uint8Array) {

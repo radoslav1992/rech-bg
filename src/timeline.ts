@@ -7,6 +7,15 @@ const settingsKey = (user: string, audio: string) => `rech:timeline:v1:${user}:$
 export function loadTimeline(user: string, audio: string): TimelineSettings {
   try { return sanitizeTimeline(JSON.parse(localStorage.getItem(settingsKey(user, audio)) || "{}")); } catch { return { ...defaultTimeline }; }
 }
+/** Settings saved only in this browser before projects were stored on the server; removed once taken. */
+export function takeLocalTimeline(user: string, audio: string): TimelineSettings | null {
+  try {
+    const raw = localStorage.getItem(settingsKey(user, audio));
+    if (raw === null) return null;
+    localStorage.removeItem(settingsKey(user, audio));
+    return sanitizeTimeline(JSON.parse(raw));
+  } catch { return null; }
+}
 export function saveTimeline(user: string, audio: string, settings: TimelineSettings) {
   try { localStorage.setItem(settingsKey(user, audio), JSON.stringify(settings)); } catch { /* storage unavailable */ }
 }

@@ -1,14 +1,13 @@
-import { BackgroundExport } from "./MediaTools";
+import { BackgroundExport, uploadMedia } from "./MediaTools";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { Captions, Download, Film, Image as ImageIcon, Mic, Music, Pause, Play, SkipBack, Trash2, Upload, ZoomIn, ZoomOut } from "lucide-react";
-import { api, Button, Disclosure, Notice, useAuth, type Job } from "./lib";
+import { api, Button, Disclosure, Notice, type Job } from "./lib";
 import { captionGroups, defaultCaptions, subtitleFile, type CaptionDocument } from "../shared/captions";
 import { downloadBlob, drawCaptions, fitSource, frameSize } from "./caption-render";
 import { CaptionStyles } from "./CaptionStyles";
 import { exportTimeline } from "./timeline-export";
 import {
-  clampMusicStart, formatTime, loadTimeline, MAX_LEAD, MAX_TAIL, moveWords, musicGain, readLocalFile, removeLocalFile,
-  saveTimeline, speechRanges, timelineLength, writeLocalFile, type TimelineSettings,
+  clampMusicStart, formatTime, MAX_LEAD, MAX_TAIL, moveWords, musicGain, speechRanges, timelineLength, type TimelineSettings,
 } from "./timeline";
 import "./captions.css";
 import "./timeline.css";
@@ -47,14 +46,19 @@ function drag(e: ReactPointerEvent, pxPerSecond: number, move: (seconds: number)
 }
 const nudge = (e: ReactKeyboardEvent) => e.key === "ArrowLeft" ? (e.shiftKey ? -1 : -.1) : e.key === "ArrowRight" ? (e.shiftKey ? 1 : .1) : 0;
 
-export function TimelineEditor({ audio, video, pendingVideo, portraitUrl }: { audio: Job; video: Job | null; pendingVideo: Job | null; portraitUrl: string }) {
-  const { user } = useAuth();
+// The arrangement (voice offset, end hold, volumes, music) is part of the server-saved project document;
+// the parent applies changes to it. Music is uploaded once to the user's media storage.
+export function TimelineEditor({ audio, video, pendingVideo, portraitUrl, projectId, timeline: settings, musicAssetId, onTimeline, onFlush }: {
+  audio: Job; video: Job | null; pendingVideo: Job | null; portraitUrl: string; projectId: string;
+  timeline: TimelineSettings; musicAssetId: string | null;
+  onTimeline: (change: (s: TimelineSettings) => TimelineSettings, musicAssetId?: string | null) => void;
+  onFlush: () => Promise<void>;
+}) {
   const speechDuration = audio.duration;
   const endpoint = `/video-studio/captions/${audio.id}`, voiceUrl = `/api/jobs/${audio.id}/audio`, videoUrl = video ? `/api/jobs/${video.id}/video` : "";
-  const musicKey = `music:${user!.id}:${audio.id}`;
   const [document, setDocument] = useState<CaptionDocument>(defaultCaptions);
   const [loaded, setLoaded] = useState(false), [error, setError] = useState(""), [saveState, setSaveState] = useState<"saved" | "dirty" | "saving" | "error">("saved");
-  const [settings, setSettings] = useState<TimelineSettings>(() => loadTimeline(user!.id, audio.id));
+  const [musicUpload, setMusicUpload] = useState<number | null>(null);
   const [music, setMusic] = useState<Blob | null>(null), [musicUrl, setMusicUrl] = useState(""), [musicWave, setMusicWave] = useState<Wave | null>(null);
   const [voiceWave, setVoiceWave] = useState<Wave | null>(null);
   const [playing, setPlaying] = useState(false), [selection, setSelection] = useState<Selection>({ kind: "speech" }), [panel, setPanel] = useState<"clip" | "captions" | "format">("clip");
@@ -98,8 +102,7 @@ export function TimelineEditor({ audio, video, pendingVideo, portraitUrl }: { au
     const timer = window.setTimeout(() => { if (pending.current) void persist(pending.current).catch(() => {}); }, 1200);
     return () => window.clearTimeout(timer);
   }, [document]);
-  useEffect(() => { saveTimeline(user!.id, audio.id, settings); }, [settings, user, audio.id]);
-  const change = (fn: (s: TimelineSettings) => TimelineSettings) => setSettings(s => fn(s));
+  const change = (fn: (s: TimelineSettings) => TimelineSettings) => onTimeline(fn);
 
   // Waveforms for the voice and the (local-only) music track.
   useEffect(() => {
@@ -107,16 +110,19 @@ export function TimelineEditor({ audio, video, pendingVideo, portraitUrl }: { au
     fetch(voiceUrl, { credentials: "same-origin" }).then(r => r.ok ? r.blob() : Promise.reject()).then(b => waveform(b)).then(w => alive && setVoiceWave(w)).catch(() => {});
     return () => { alive = false; };
   }, [voiceUrl]);
+  // The project's music comes from media storage, so it follows the project to any device.
+  const loadedMusic = useRef<string | null>(null);
   useEffect(() => {
+    if (!musicAssetId) { loadedMusic.current = null; setMusic(null); return; }
+    if (loadedMusic.current === musicAssetId) return;
     let alive = true;
-    if (!settings.music) return;
-    readLocalFile(musicKey).then(file => {
-      if (!alive) return;
-      if (file instanceof Blob) setMusic(file);
-      else { change(s => ({ ...s, music: null })); setError("Музиката за този проект не е запазена в този браузър. Добавете я отново."); }
-    });
+    loadedMusic.current = musicAssetId;
+    fetch(`/api/media/assets/${musicAssetId}/file`, { credentials: "same-origin" })
+      .then(r => r.ok ? r.blob() : Promise.reject())
+      .then(b => alive && setMusic(b))
+      .catch(() => { if (alive) { loadedMusic.current = null; setError("Музиката на проекта не е налична (например изтекъл срок на съхранение). Добавете я отново или я премахнете."); } });
     return () => { alive = false; };
-  }, [musicKey]);
+  }, [musicAssetId]);
   useEffect(() => {
     if (!music) { setMusicUrl(""); setMusicWave(null); return; }
     const url = URL.createObjectURL(music); setMusicUrl(url);
@@ -198,13 +204,16 @@ export function TimelineEditor({ audio, video, pendingVideo, portraitUrl }: { au
   const addMusic = async (file: File | undefined) => {
     if (!file) return;
     if (file.size > MAX_MUSIC_BYTES) { setError("Изберете аудиофайл до 50 MB."); return; }
-    setError("");
-    await writeLocalFile(musicKey, file);
-    setMusic(file);
-    change(s => ({ ...s, music: { name: file.name, start: 0, volume: s.music?.volume ?? .35, duck: s.music?.duck ?? true, fade: s.music?.fade ?? true } }));
-    setSelection({ kind: "music" }); setPanel("clip");
+    setError(""); setMusicUpload(0);
+    try {
+      const assetId = await uploadMedia(file, "music", setMusicUpload);
+      loadedMusic.current = assetId; setMusic(file);
+      onTimeline(s => ({ ...s, music: { name: file.name.slice(0, 120), start: 0, volume: s.music?.volume ?? .35, duck: s.music?.duck ?? true, fade: s.music?.fade ?? true } }), assetId);
+      setSelection({ kind: "music" }); setPanel("clip");
+    } catch (e) { setError((e as Error).message); }
+    finally { setMusicUpload(null); }
   };
-  const removeMusic = () => { void removeLocalFile(musicKey); setMusic(null); change(s => ({ ...s, music: null })); setSelection({ kind: "speech" }); };
+  const removeMusic = () => { loadedMusic.current = null; setMusic(null); onTimeline(s => ({ ...s, music: null }), null); setSelection({ kind: "speech" }); };
   const moveSpeech = (start: number, delta: number) => change(s => ({ ...s, speechStart: Math.round(Math.min(MAX_LEAD, Math.max(0, start + delta)) * 100) / 100 }));
   const moveMusic = (start: number, delta: number) => change(s => s.music ? { ...s, music: { ...s.music, start: clampMusicStart(start + delta, musicWave?.duration || length, length) } } : s);
   const moveGroup = (group: number, words: CaptionDocument["words"], delta: number) =>
@@ -340,11 +349,12 @@ export function TimelineEditor({ audio, video, pendingVideo, portraitUrl }: { au
             onKeyDown={e => { const d = nudge(e); if (d) { e.preventDefault(); moveMusic(musicStart, d); } }}>
             <WaveShape wave={musicWave && musicDuration ? { duration: musicDuration, peaks: musicWave.peaks.slice(Math.floor((musicBegin - musicStart) / musicDuration * musicWave.peaks.length), Math.ceil((musicEnd - musicStart) / musicDuration * musicWave.peaks.length)) } : null} />
             <span><Music size={13} /> {settings.music.name} · {Math.round(settings.music.volume * 100)}%</span></button>
-            : <button type="button" className="tl-add" onClick={() => musicInput.current?.click()}><Upload size={14} /> Добави фонова музика</button>}
+            : settings.music ? <span className="tl-empty">{error ? <button type="button" className="tl-add" onClick={removeMusic}><Trash2 size={14} /> Премахни липсващата музика</button> : "Зареждане на музиката…"}</span>
+            : <button type="button" className="tl-add" disabled={musicUpload !== null} onClick={() => musicInput.current?.click()}><Upload size={14} /> {musicUpload !== null ? `Качване на музиката · ${musicUpload}%` : "Добави фонова музика"}</button>}
         </div></div>
         </div>
       </div>
-      <input ref={musicInput} type="file" accept="audio/*" hidden style={{ display: "none" }} onChange={e => { void addMusic(e.target.files?.[0]); e.target.value = ""; }} />
+      <input ref={musicInput} type="file" accept="audio/mpeg,audio/wav,audio/mp4,audio/x-m4a,audio/aac,audio/ogg,.mp3,.wav,.m4a,.ogg" hidden style={{ display: "none" }} onChange={e => { void addMusic(e.target.files?.[0]); e.target.value = ""; }} />
       <p className="tl-hint">Плъзгайте клиповете, за да ги подредите. Щракнете върху клип (или Enter от клавиатурата), за да го редактирате. Интервал пуска и спира прегледа; стрелките местят избран клип.</p>
 
       <details className="vs-word-editor"><summary>Думи и времена ({document.words.length})</summary><p>Времената са в секунди от началото на гласа.</p><fieldset disabled={exporting}>
@@ -360,7 +370,7 @@ export function TimelineEditor({ audio, video, pendingVideo, portraitUrl }: { au
       {!video && <p className="vs-fine">Експортът се отключва, когато видео аватарът е готов. Дотогава можете да подготвите субтитрите, музиката и подредбата.</p>}
       {exporting && <div className="caption-export-progress" role="status"><progress value={progress} max={1} aria-label="Експорт на видео" /><span>{Math.round(progress * 100)}% · Сглобяваме видеото, гласа, музиката и субтитрите</span><Button className="btn" onClick={() => abort.current?.abort()}>Спри експорта</Button></div>}
       <p className="vs-fine">Експортът в браузъра е безплатен. Оставете страницата отворена до завършване; препоръчваме Chrome или Edge на компютър.</p>
-      {video && <Disclosure className="tl-more" summary="Експорт на сървъра"><p className="vs-fine">Фоновият експорт включва само видеото и субтитрите — без музиката и отместванията от монтажа.</p><BackgroundExport sourceId={video.id} document={document} onSave={() => persist(document)} /></Disclosure>}
+      {video && <Disclosure className="tl-more" summary="Експорт на сървъра"><p className="vs-fine">Сървърът сглобява същия монтаж — видео, глас, музика, начало и задържане, субтитри — и можете да затворите страницата.</p><BackgroundExport sourceId={video.id} document={document} projectId={projectId} onSave={async () => { await persist(document); await onFlush(); }} /></Disclosure>}
     </>}
     {video ? <video key={videoUrl} ref={el => { voiceEl.current = el; }} src={videoUrl} className="tl-media" playsInline preload="auto" muted={false} aria-hidden="true" />
       : <audio key={voiceUrl} ref={el => { voiceEl.current = el; }} src={voiceUrl} preload="auto" aria-hidden="true" />}

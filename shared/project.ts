@@ -49,6 +49,16 @@ export function newScene(): ProjectScene {
 export function newProjectDoc(): ProjectDoc {
   return { version: PROJECT_DOC_VERSION, scenes: [newScene()], music: null };
 }
+/** Applies timeline editor settings to the first scene and the project music. */
+export function withTimeline(d: ProjectDoc, next: TimelineSettings, musicAssetId?: string | null): ProjectDoc {
+  const [scene, ...rest] = d.scenes;
+  const assetId = musicAssetId === undefined ? d.music?.assetId : musicAssetId;
+  return {
+    ...d,
+    scenes: [{ ...scene, speechStart: next.speechStart, tail: next.tail, voiceVolume: next.voiceVolume }, ...rest],
+    music: next.music && assetId ? { assetId, ...next.music } : null,
+  };
+}
 /** The timeline editor's view of a scene plus the project's music. */
 export function sceneTimeline(scene: ProjectScene, music: ProjectMusic | null): TimelineSettings {
   return {
