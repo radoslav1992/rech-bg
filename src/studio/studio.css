@@ -116,6 +116,7 @@
 .st-avatar strong { font-size: 13px; }
 .st-avatar small { font-size: 11px; color: #717970; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .st-avatar-upload { border-style: dashed; }
+.st-avatar-tag { align-self: flex-start; font-size: 10.5px; font-weight: 650; padding: 1px 7px; border-radius: 99px; background: #eef0ff; color: #3140b8; }
 .st-avatar-upload.busy { opacity: .7; cursor: progress; }
 .st-export h3 { font-size: 15px; margin: 18px 0 8px; }
 .st-checklist, .st-files { list-style: none; margin: 10px 0; padding: 0; display: grid; gap: 6px; }

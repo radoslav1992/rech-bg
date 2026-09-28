@@ -9,7 +9,8 @@ import { now, uid } from "./types";
 import { allowance } from "./billing";
 import { rate, token, safeEqual } from "./security";
 import { videoTiers, videoCredits, type VideoTier } from "../shared/video";
-import { configuredVideoProvider, hasVideoCredential, type VideoProvider } from "./video-provider";
+import { configuredVideoProvider, hasVideoCredential, mediumUsesLibrary, type VideoProvider } from "./video-provider";
+import { libraryAvatarInput } from "./avatars";
 
 export const avatarMap: Record<string, string> = {
   mia: "Mia outdoor (UGC)", lara: "Lara (Masterclass)", ines: "Ines (UGC)",
@@ -25,7 +26,9 @@ export const videoModels = {
   standard: "argil/avatars/audio-to-video",
   quality: "fal-ai/kling-video/ai-avatar/v2/pro",
 } as const;
-export type VideoMeta = { tier?: VideoTier; provider?: VideoProvider; avatar: string; imageKey?: string; imageMime?: string; token: string; consent: boolean; notifyEmail?: boolean };
+export type VideoMeta = { tier?: VideoTier; provider?: VideoProvider; avatar: string; imageKey?: string; imageMime?: string; token: string; consent: boolean; notifyEmail?: boolean;
+  /** A reusable HeyGen avatar (library avatar linked for Avatar III); set, it is used instead of creating one. */
+  heygenAvatar?: { lookId: string; groupId: string } };
 export function jobVideoTier(job: { video_meta: string; video_tier: string }): keyof typeof videoModels {
   const meta = JSON.parse(job.video_meta) as VideoMeta;
   const tier = meta.tier ?? job.video_tier;
@@ -41,6 +44,8 @@ export const videos = new Hono<{ Bindings: Env; Variables: ContextVars }>();
 videos.get("/config", (c) => {
   const available = Object.fromEntries((Object.keys(videoTiers) as VideoTier[]).map(tier => [tier, hasVideoCredential(c.env, configuredVideoProvider(c.env, tier))]));
   return c.json({ enabled: !!c.env.VIDEO_GENERATION && Object.values(available).some(Boolean), emailNotifications: !!c.env.EMAIL,
+    // Medium then works only with library avatars linked to HeyGen.
+    mediumLibraryOnly: mediumUsesLibrary(c.env),
     tiers: Object.fromEntries(Object.entries(videoTiers).map(([id, tier]) => [id, { ...tier, enabled: !!c.env.VIDEO_GENERATION && available[id as VideoTier] }])) });
 });
 videos.post("/", async (c) => {
@@ -73,13 +78,26 @@ videos.post("/", async (c) => {
   {
     if (!meta.consent) throw new HTTPException(400, { message: "Потвърдете правото си да използвате изображението." });
     let file = form.get("image");
-    if (form.get("assetId") && c.env.MEDIA_ENABLED === "true") {
+    const libraryId = form.get("libraryAvatarId");
+    const libraryOnly = d.tier === "medium" && mediumUsesLibrary(c.env);
+    if (libraryOnly && typeof libraryId !== "string")
+      throw new HTTPException(400, { message: "Средно качество е достъпно само с готовите аватари от библиотеката." });
+    if (typeof libraryId === "string") {
+      // The server reads the library portrait itself; the browser only names the avatar.
+      const library = await libraryAvatarInput(c.env, libraryId);
+      if (libraryOnly) {
+        if (!library.heygen) throw new HTTPException(400, { message: "Този аватар още не е достъпен за Средно качество. Изберете друг или друго качество." });
+        meta.heygenAvatar = library.heygen;
+      }
+      meta.avatar = libraryId;
+      file = new File([library.bytes as BlobPart], "portrait", { type: library.mime });
+    } else if (form.get("assetId") && c.env.MEDIA_ENABLED === "true") {
       const asset = await ownedAsset(c.env,user.id,String(form.get("assetId")));
       if (!["variant","portrait"].includes(asset.kind) || asset.bytes > 8*1024*1024) throw new HTTPException(400);
       const object = await c.env.AUDIO.get(asset.object_key); if (!object) throw new HTTPException(404);
       file = new File([await object.arrayBuffer()],"portrait.jpg",{type:asset.mime});
     }
-    if (!(file instanceof File) || file.size < 24 || file.size > (form.get("assetId") ? 8 : 2) * 1024 * 1024)
+    if (!(file instanceof File) || file.size < 24 || file.size > (form.get("assetId") || typeof libraryId === "string" ? 8 : 2) * 1024 * 1024)
       throw new HTTPException(400, { message: "Качете JPG или PNG портрет до 2 MB." });
     image = new Uint8Array(await file.arrayBuffer());
     const png = image.slice(0, 8).every((b, i) => b === [137,80,78,71,13,10,26,10][i]);

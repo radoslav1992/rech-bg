@@ -7,6 +7,11 @@ export type LibraryAvatar = {
   presentation: "female" | "male";
   imageUrl: string;
   active: boolean;
+  /** Linked to a ready HeyGen avatar, so it can be used for Medium quality (Avatar III). */
+  heygen?: boolean;
+  /** Administrators only: the linked HeyGen avatar (look) and its state. */
+  heygenLookId?: string | null;
+  heygenStatus?: "processing" | "ready" | "failed" | null;
 };
 export const defaultAvatars = [
   { id: "mila", name: "Мила", description: "Топло присъствие в светло творческо студио.", category: "creative", presentation: "female" },

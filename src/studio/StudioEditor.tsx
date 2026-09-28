@@ -223,6 +223,8 @@ function Editor({ projectId }: { projectId: string }) {
     finally { setSending(null); }
   };
   const portraitFile = async (portrait: ProjectPortrait): Promise<File | string> => {
+    // Library avatars go by ID: the server reads the portrait (and its HeyGen avatar for Medium).
+    if (portrait.type === "library") return `library:${portrait.id}`;
     if (portrait.type === "asset") {
       const asset = assets.find((a) => a.id === portrait.id);
       // Portraits and product avatars go by reference; other images are sent as a file.
@@ -247,7 +249,9 @@ function Editor({ projectId }: { projectId: string }) {
       const body = new FormData();
       body.set("sourceId", audio.id); body.set("tier", request.tier); body.set("idempotencyKey", key);
       body.set("credits", String(credits)); body.set("consent", String(request.consent)); body.set("notifyEmail", String(request.notifyEmail));
-      if (typeof image === "string") body.set("assetId", image); else body.set("image", image);
+      if (typeof image !== "string") body.set("image", image);
+      else if (image.startsWith("library:")) body.set("libraryAvatarId", image.slice("library:".length));
+      else body.set("assetId", image);
       const result = await api<{ id: string }>("/videos", { method: "POST", body });
       const { job } = await api(`/jobs/${result.id}`);
       addJob(job);
@@ -377,7 +381,7 @@ function Editor({ projectId }: { projectId: string }) {
           <button type="button" role="tab" aria-selected={tab === "project"} onClick={() => setTab("project")}>Проект</button>
         </div>
         {tab === "scene" && scene && <SceneInspector scene={scene} index={focusIndex} media={media[focusIndex]} voices={config.voices || []} studioEnabled={config.enabled}
-          videoConfig={config.video} fit={look.fit || "contain"} assets={assets} hasLogo={!!brand.kit?.logo}
+          videoConfig={config.video} mediumAllowed={!config.video?.mediumLibraryOnly || (scene.portrait?.type === "library" && config.mediumAvatars.has(scene.portrait.id))} fit={look.fit || "contain"} assets={assets} hasLogo={!!brand.kit?.logo}
           busy={sending?.scene === scene.id ? sending.what : null}
           onChange={(change) => changeScene(focusIndex, change)}
           onGenerateAudio={(credits) => void generateAudio(focusIndex, credits)}
@@ -403,7 +407,7 @@ function Editor({ projectId }: { projectId: string }) {
       onChange={(e) => { void addMusic(e.target.files?.[0]); e.target.value = ""; }} />
     {player.elements}
 
-    <AvatarModal open={avatarFor !== null} selected={avatarFor !== null ? doc.scenes[avatarFor]?.portrait ?? null : null} onClose={() => setAvatarFor(null)}
+    <AvatarModal open={avatarFor !== null} mediumAvatars={config.video?.mediumLibraryOnly ? config.mediumAvatars : null} selected={avatarFor !== null ? doc.scenes[avatarFor]?.portrait ?? null : null} onClose={() => setAvatarFor(null)}
       onSelect={(portrait) => { if (avatarFor !== null) changeScene(avatarFor, (s) => ({ ...s, portrait })); }} />
     <Modal open={exportOpen} title="Експорт на видеото" onClose={() => setExportOpen(false)}>
       <ExportPanel projectId={projectId} doc={doc} media={media} segments={sceneSegments} captions={captions.docs} look={look} onSave={saveAll} />

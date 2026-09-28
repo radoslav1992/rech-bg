@@ -23,6 +23,17 @@ In HeyGen mode, High uses `POST https://api.heygen.com/v3/videos` with `type: im
 
 New HeyGen High jobs need video create/read access. While any legacy Avatar III jobs or cleanup tasks remain, keep avatar create/read/delete access on the key as well. Only temporary groups created for these jobs are deleted after success/failure. Cleanup uses the existing `cleanup_tasks` table with `heygen-avatar/{jobId}/{groupId}` entries, separate from R2 cleanup. Failed cleanup is retried by scheduled maintenance and survives project/account deletion; it never reverses a completed video or its credits. Active jobs retain their avatar. Keep `HEYGEN_API_KEY` until pending video and cleanup tasks finish. An ambiguous avatar-creation response is not automatically retried; if no IDs were returned/saved, review `Rech BG {jobId}` in HeyGen to reconcile a potentially orphaned avatar. No new migration is needed.
 
+### Medium with your library avatars (HeyGen Avatar III)
+
+Set the text variable **`VIDEO_MEDIUM=heygen`** (with `HEYGEN_API_KEY`) to make Medium use HeyGen Avatar III with the avatars in your library instead of Kling. Each library avatar is linked once to a HeyGen photo avatar, which is then reused for every Medium video: one `POST /v3/videos` with `type: avatar`, the stored `avatar_id`, `engine: {type: avatar_iii}` and the recording's `audio_url`. There is no per-video avatar creation, no wait for it and no cleanup. The price stays 900 credits per started second.
+
+- **Link avatars** in Settings → Библиотека с аватари → Редактирай → *HeyGen · Средно качество*. Either paste the ID of a photo avatar (look) that already exists in the HeyGen account of `HEYGEN_API_KEY` ("Свържи този ID"), or press "Създай в HeyGen от портрета" to create one from the library portrait. HeyGen fetches that portrait through a 15-minute token link (`/api/avatar-inputs/{id}/image`). Creating takes a minute or two; then press "Провери състоянието". The server only accepts a completed photo avatar that supports Avatar III. Removing the link does not delete the avatar in HeyGen.
+- **Users:** with the variable set, Medium is available only for scenes whose presenter is a linked library avatar (they carry a "Средно качество" badge in the avatar picker). Own portraits, product images and unlinked avatars can use the other qualities. The server enforces this as well.
+- The link lives in the avatar's library record in R2 (`config/avatar-library/{id}.json`); the public avatar list shows only whether an avatar is linked, never its HeyGen ID. No D1 migration is needed.
+- Without `VIDEO_MEDIUM`, Medium keeps using Kling Standard through fal as described above. Jobs keep the route they were accepted with, so switching the variable does not affect videos already in progress.
+
+Video requests now name a library avatar with `libraryAvatarId`; the server reads its portrait itself instead of receiving the image from the browser.
+
 References: [Create video](https://developers.heygen.com/reference/create-video), [Get video](https://developers.heygen.com/reference/get-video), [Photo to avatar](https://developers.heygen.com/docs/avatar-from-photo), [Avatar III](https://developers.heygen.com/avatar-iii), [API billing](https://help.heygen.com/en/articles/10060327-heygen-api-pricing-explained). Automated checks use mocked providers; after setup, verify a short video in each tier and its matching API account charge.
 
 ## Activate

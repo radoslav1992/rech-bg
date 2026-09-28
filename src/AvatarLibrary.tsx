@@ -77,7 +77,7 @@ export function AvatarLibraryAdmin() {
     <fieldset disabled={busy}>
       <div className="avatar-admin-list">{avatars.map(a => <div key={a.id} className={a.active ? "" : "is-hidden"}>
         {a.active ? <img src={a.imageUrl} alt={a.name} width="55" height="70"/> : <Users size={30}/>}
-        <span><strong>{a.name}</strong><small>{a.active ? avatarCategories[a.category] : "Скрит от потребителите"}</small></span>
+        <span><strong>{a.name}</strong><small>{a.active ? avatarCategories[a.category] : "Скрит от потребителите"}{a.heygenStatus ? ` · HeyGen: ${heygenLabel[a.heygenStatus]}` : ""}</small></span>
         <button type="button" className="btn outline small-btn" onClick={() => setSelected(a)}>Редактирай</button>
         <button type="button" className="text-link" onClick={() => void act(async () => {
           if (a.active) await api(`/admin/avatars/${a.id}`, { method: "DELETE" });
@@ -99,6 +99,30 @@ export function AvatarLibraryAdmin() {
         {!selected && <><label><ImagePlus size={18}/> Портрет · JPG или PNG до 2 MB<input name="file" type="file" accept="image/jpeg,image/png" required/></label><label className="checkbox-label"><input name="rightsConfirmed" type="checkbox" value="true" required/> Аватарът е AI-генериран, не представя реален човек и имам право да го предоставям на потребителите за създаване на съдържание.</label></>}
         <div className="avatar-admin-actions"><Button type="submit" className="btn primary" busy={busy}>{selected ? "Запази промените" : "Добави в библиотеката"}</Button>{selected && <button type="button" className="btn outline" onClick={() => setSelected(null)}>Нов аватар / Отказ</button>}</div>
       </form>
+      {selected && <HeyGenLink key={selected.id} avatar={avatars.find(a => a.id === selected.id) || selected} act={act} />}
     </fieldset>
   </section>;
+}
+
+const heygenLabel = { processing: "създава се", ready: "готов за Средно качество", failed: "неуспешен" } as const;
+/**
+ * Links a library avatar to one reusable HeyGen photo avatar, used for Medium quality (Avatar III) when the
+ * server has VIDEO_MEDIUM=heygen. Paste the ID of an avatar already in the HeyGen account, or create it once here.
+ */
+function HeyGenLink({ avatar, act }: { avatar: LibraryAvatar; act: (fn: () => Promise<void>) => Promise<void> }) {
+  const [lookId, setLookId] = useState(avatar.heygenLookId || "");
+  const status = avatar.heygenStatus;
+  const call = (path: string, init: RequestInit) => act(async () => { await api(`/admin/avatars/${avatar.id}/heygen${path}`, init); });
+  return <div className="avatar-heygen">
+    <h3>HeyGen · Средно качество</h3>
+    <p>{status ? `Свързан с HeyGen аватар ${avatar.heygenLookId} · ${heygenLabel[status]}.` : "Не е свързан с HeyGen."} Един аватар в HeyGen се използва за всички видеа със Средно качество — без ново създаване при всяко видео.</p>
+    <label>ID на аватар (look) в HeyGen<input value={lookId} maxLength={160} placeholder="Напр. 1a2b3c4d…" onChange={e => setLookId(e.target.value.trim())} /></label>
+    <div className="avatar-admin-actions">
+      <Button className="btn" disabled={!lookId || lookId === avatar.heygenLookId} onClick={() => void call("", { method: "PUT", body: JSON.stringify({ lookId }) })}>Свържи този ID</Button>
+      {(!status || status === "failed") && <Button className="btn" onClick={() => void call("", { method: "POST" })}>Създай в HeyGen от портрета</Button>}
+      {status === "processing" && <Button className="btn" onClick={() => void call("/check", { method: "POST" })}>Провери състоянието</Button>}
+      {status && <Button className="btn outline" onClick={() => { setLookId(""); void call("", { method: "PUT", body: JSON.stringify({ lookId: null }) }); }}>Премахни връзката</Button>}
+    </div>
+    <small>Премахването на връзката не изтрива аватара в HeyGen. Създаването отнема минута-две — после натиснете „Провери състоянието“.</small>
+  </div>;
 }

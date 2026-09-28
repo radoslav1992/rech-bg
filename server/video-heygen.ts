@@ -51,6 +51,23 @@ export async function getHeyGenAvatarStatus(env: Env, avatar: HeyGenAvatar) {
   throw new VideoFailure("STATUS", look.error?.code === "moderation_failed" ? "CONTENT" : "PROVIDER");
 }
 
+/** A photo avatar (look) in the HeyGen account, e.g. one linked to a library avatar. */
+export async function getHeyGenLook(env: Env, lookId: string) {
+  const response = await videoFetch(`${avatars}/looks/${validId(lookId)}`, {
+    headers: headers(env, "STATUS"), signal: AbortSignal.timeout(45000),
+  });
+  if (!response.ok) throw await providerFailure(response, "STATUS");
+  const body = await response.json() as any;
+  const look = body?.data;
+  if (body?.error || !look || look.id !== lookId) throw new VideoFailure("STATUS", "PROVIDER");
+  const status: "processing" | "completed" | "failed" = look.status === "processing" ? "processing" : look.status === "completed" ? "completed" : "failed";
+  return {
+    status,
+    groupId: typeof look.group_id === "string" && /^[a-zA-Z0-9_-]{1,160}$/.test(look.group_id) ? look.group_id as string : "",
+    avatarIII: look.avatar_type === "photo_avatar" && Array.isArray(look.supported_api_engines) && look.supported_api_engines.includes("avatar_iii"),
+  };
+}
+
 export async function deleteHeyGenAvatar(env: Env, groupId: string) {
   const response = await videoFetch(`${avatars}/${validId(groupId)}`, {
     method: "DELETE", headers: headers(env, "CLEANUP"), signal: AbortSignal.timeout(15000),
