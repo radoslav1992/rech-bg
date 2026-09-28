@@ -325,7 +325,10 @@ export function VideoStudio() {
     {timelineAudio && id && project.doc && scene && <TimelineEditor key={timelineAudio.id} audio={timelineAudio} video={timelineVideo} pendingVideo={timelinePending} portraitUrl={portraitUrl}
       projectId={id} timeline={sceneTimeline(scene, project.doc.music)} musicAssetId={project.doc.music?.assetId ?? null}
       onTimeline={(change, musicAssetId) => project.update(d => withTimeline(d, change(sceneTimeline(d.scenes[sceneAt], d.music)), musicAssetId, sceneAt))}
-      onFlush={project.flush} serverExport={!multi} sceneLabel={multi ? `сцена ${sceneAt + 1}` : ""} />}
+      onFlush={project.flush} serverExport={!multi} sceneLabel={multi ? `сцена ${sceneAt + 1}` : ""}
+      layers={scene.layers} background={scene.background}
+      onLayers={change => project.update(d => withScene(d, sceneAt, s => ({ ...s, layers: change(s.layers) })))}
+      onBackground={background => project.update(d => withScene(d, sceneAt, s => ({ ...s, background })))} />}
     {multi && id && <section className="vs-card"><h2>Цялото видео</h2>
       <p>Сървърът свързва {scenes.length} сцени по ред — всяка със своето начало, задържане, глас и стил на субтитрите — и добавя музиката под цялото видео. {sceneStatuses.some(s => s.video !== "ready") && "Експортът се отключва, когато всяка сцена има готово видео."}</p>
       <BackgroundExport sourceId={id} projectId={id} document={defaultCaptions} onSave={project.flush} />
