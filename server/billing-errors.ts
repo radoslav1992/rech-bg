@@ -4,7 +4,7 @@ import Stripe from "stripe";
 export function billingFailure(error: Error) {
   let code = "BILLING_INTERNAL";
   const token = (value: unknown) =>
-    typeof value === "string" && /^[a-zA-Z0-9_.\[\]-]{1,120}$/.test(value)
+    typeof value === "string" && /^[a-zA-Z0-9_.[\]-]{1,120}$/.test(value)
       ? value : undefined;
   const details: Record<string, unknown> = {};
   if (error instanceof Stripe.errors.StripeError) {

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { decodeAudio, wavHeader, segments, voiceMap } from "../server/audio";
 import { hashPassword, checkPassword, sha } from "../server/security";
 import { database, bucket } from "./helpers";

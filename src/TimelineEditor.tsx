@@ -242,6 +242,8 @@ export function TimelineEditor({ audio, video, pendingVideo, portraitUrl }: { au
   const musicBegin = Math.max(0, musicStart), musicEnd = Math.min(length, musicStart + (musicDuration || length));
   const visualLabel = video ? "Видео аватар" : pendingVideo ? "Видеото се създава" : portraitUrl ? "Портрет" : "Без аватар";
 
+  // Space toggles playback anywhere in the editor, like other editors; the controls themselves stay native buttons.
+  // eslint-disable-next-line jsx-a11y/no-static-element-interactions
   return <section className="vs-card timeline-editor" onKeyDown={e => { if (e.key === " " && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLButtonElement)) { e.preventDefault(); toggle(); } }}>
     <div className="sub-heading"><h2><Film size={22} /> Монтаж</h2><span>03 / МОНТАЖ И ЕКСПОРТ</span></div>
     <p className="caption-intro">Подредете гласа, субтитрите и музиката. Докато видеото не е готово, прегледът показва избрания портрет. Всичко се обработва във вашия браузър.</p>

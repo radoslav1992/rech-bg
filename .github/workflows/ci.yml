@@ -17,6 +17,18 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
+      - run: npm run lint
       - run: npm run build
+      - run: npm run check:bundle
       - run: npm test
       - run: npx wrangler deploy --dry-run --no-autoconfig
+  renderer:
+    # The media renderer container (renderer/Dockerfile) runs Python 3.12 with ffmpeg and Noto fonts.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg fonts-noto-core
+      - run: python3 tests/renderer_test.py

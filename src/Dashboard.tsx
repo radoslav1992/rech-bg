@@ -6,14 +6,12 @@ import {
   Clock3,
   FileText,
   Folder,
-  MoreHorizontal,
   Plus,
   Podcast,
-  Search,
   Trash2,
   Video,
 } from "lucide-react";
-import { api, number, Notice, useAuth, type Project, type Job } from "./lib";
+import { api, number, Notice, useAuth, type Project } from "./lib";
 import { useJobs, jobLink, jobStatus } from "./JobActivity";
 const icons = { tts: FileText, podcast: Podcast, voiceover: Video };
 const statusNames: Record<string, string> = {
