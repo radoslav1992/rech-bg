@@ -39,7 +39,7 @@ export function bucket() {
       const parts = new Map<number, Uint8Array>();
       return {
         uploadPart: async (partNumber: number, bytes: Uint8Array) => {
-          parts.set(partNumber, bytes.slice());
+          parts.set(partNumber, new Uint8Array(bytes as ArrayBuffer | Uint8Array).slice());
           return { partNumber, etag: String(partNumber) };
         },
         complete: async (ordered: { partNumber: number }[]) => {
@@ -66,6 +66,7 @@ export function bucket() {
             body: new Blob([o.bytes as BlobPart]).stream(),
             size: o.bytes.length,
             customMetadata: o.metadata,
+            arrayBuffer: async () => o.bytes.slice().buffer,
           }
         : null;
     },

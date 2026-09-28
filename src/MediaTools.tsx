@@ -81,18 +81,15 @@ export function useMediaLibrary() {
 }
 export async function uploadMedia(
   file: File,
-  kind: "upload" | "portrait" | "product",
+  kind: "upload" | "portrait" | "product" | "music",
   progress: (value: number) => void,
 ) {
-  const mime =
-    file.type ||
-    (/\.mov$/i.test(file.name)
-      ? "video/quicktime"
-      : /\.webm$/i.test(file.name)
-        ? "video/webm"
-        : /\.mp4$/i.test(file.name)
-          ? "video/mp4"
-          : "");
+  const byExtension: [RegExp, string][] = [
+    [/\.mov$/i, "video/quicktime"], [/\.webm$/i, "video/webm"], [/\.mp4$/i, "video/mp4"],
+    [/\.mp3$/i, "audio/mpeg"], [/\.wav$/i, "audio/wav"], [/\.m4a$/i, "audio/mp4"], [/\.ogg$/i, "audio/ogg"],
+  ];
+  // Browsers report some audio types differently (e.g. audio/x-m4a); the server accepts these aliases.
+  const mime = file.type || byExtension.find(([re]) => re.test(file.name))?.[1] || "";
   const start = await post("/media/uploads", {
     name: file.name,
     bytes: file.size,
@@ -149,10 +146,13 @@ function TaskList({ tasks }: { tasks: MediaTask[] }) {
 export function BackgroundExport({
   sourceId,
   document,
+  projectId,
   onSave,
 }: {
   sourceId: string;
   document: CaptionDocument;
+  /** A video studio project renders its saved timeline (music, offsets) instead of the bare video. */
+  projectId?: string;
   onSave: () => Promise<void>;
 }) {
   const { data, enabled, error: loadError, reload } = useMediaLibrary(),
@@ -170,10 +170,10 @@ export function BackgroundExport({
   );
   const loadQuote = useCallback(
     () =>
-      api(`/media/exports/${sourceId}/quote`)
+      api(projectId ? `/video-studio/projects/${projectId}/render/quote` : `/media/exports/${sourceId}/quote`)
         .then((q) => setQuote(q.credits))
         .catch((e) => setError(e.message)),
-    [sourceId],
+    [sourceId, projectId],
   );
   useEffect(() => {
     if (enabled) void loadQuote();
@@ -183,12 +183,15 @@ export function BackgroundExport({
     setError("");
     try {
       await onSave();
-      await post("/media/exports", {
-        sourceId,
-        document,
-        credits: quote,
-        idempotencyKey: key.current,
-      });
+      if (projectId)
+        await post(`/video-studio/projects/${projectId}/render`, { credits: quote, idempotencyKey: key.current });
+      else
+        await post("/media/exports", {
+          sourceId,
+          document,
+          credits: quote,
+          idempotencyKey: key.current,
+        });
       key.current = crypto.randomUUID();
       await reload();
       await refresh();

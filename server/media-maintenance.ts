@@ -126,7 +126,8 @@ export async function maintainMedia(e: Env) {
       }
     }
     await e.AUDIO.delete(a.object_key);
-    if (a.kind === "audio")
+    // Generated recordings keep captions beside them; uploaded music (no job) has none.
+    if (a.kind === "audio" && a.job_id)
       await e.AUDIO.delete(`audio/${a.user_id}/${a.job_id}.captions.json`);
     await e.DB.prepare("DELETE FROM media_assets WHERE id=?").bind(a.id).run();
   }

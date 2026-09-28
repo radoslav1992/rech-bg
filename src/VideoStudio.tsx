@@ -1,4 +1,4 @@
-import { ProductAvatarPanel } from "./MediaTools";
+import { ProductAvatarPanel, uploadMedia } from "./MediaTools";
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Film, Mic, Sparkles, Save, Check, ArrowRight } from "lucide-react";
@@ -11,7 +11,9 @@ import type { StudioVoice } from "../shared/studio";
 import { VideoPanel } from "./VideoPanel";
 import { mergeJobs } from "./job-state";
 import { TimelineEditor } from "./TimelineEditor";
-import { readLocalFile, writeLocalFile } from "./timeline";
+import { readLocalFile, removeLocalFile, takeLocalTimeline } from "./timeline";
+import { portraitUrl as referenceUrl, useProjectDocument } from "./project-document";
+import { sceneTimeline, withTimeline, type ProjectPortrait } from "../shared/project";
 import "./video-studio.css";
 
 export function VideoStudio() {
@@ -69,27 +71,76 @@ export function VideoStudio() {
     setAssisting(false); setAssistError(""); setUndo(null);
     return () => { assistRequest.current?.abort(); assistRequest.current = null; };
   }, [id]);
-  // The chosen portrait is remembered in this browser so the timeline can show it after a reload.
+  // The project (scenes, timeline, portrait and music references) is saved on the server.
+  const project = useProjectDocument(id);
+  const scene = project.doc?.scenes[0] || null;
+  // A portrait picked before the first save, or an own file still uploading, previews locally.
+  const [pendingPortrait, setPendingPortrait] = useState<{ file: Blob | null; ref: ProjectPortrait | null } | null>(null);
   const portraitProject = useRef(id);
   useEffect(() => {
-    let live = true;
-    const previous = portraitProject.current; portraitProject.current = id;
-    if (previous && previous !== id) setPortrait(null);
-    // A new project keeps the portrait picked before its first save.
-    else if (!previous && id && user && portrait) void writeLocalFile(`portrait:${user.id}:${id}`, portrait);
-    if (id && user) readLocalFile(`portrait:${user.id}:${id}`).then(p => { if (live && p) setPortrait(current => current ?? p); });
-    return () => { live = false; };
-  }, [id, user?.id]);
+    if (portraitProject.current && portraitProject.current !== id) { setPortrait(null); setPendingPortrait(null); }
+    portraitProject.current = id;
+  }, [id]);
+  const savePortrait = async (file: Blob | null, ref: ProjectPortrait | null) => {
+    let reference = ref;
+    if (!reference && file) {
+      try {
+        const name = file instanceof File ? file.name : "portrait.jpg";
+        reference = { type: "asset", id: await uploadMedia(new File([file], name, { type: file.type }), "portrait", () => {}) };
+      } catch { return; /* Stays a local preview; the video itself still uses the chosen file. */ }
+    }
+    if (reference) project.update(d => ({ ...d, scenes: [{ ...d.scenes[0], portrait: reference }, ...d.scenes.slice(1)] }));
+  };
   useEffect(() => {
-    if (!portrait) { setPortraitUrl(""); return; }
+    if (!project.doc || !pendingPortrait) return;
+    const { file, ref } = pendingPortrait;
+    setPendingPortrait(null);
+    void savePortrait(file, ref);
+  }, [!!project.doc, pendingPortrait]);
+  useEffect(() => {
+    if (!portrait) { setPortraitUrl(referenceUrl(scene?.portrait || null)); return; }
     if (typeof portrait === "string") { setPortraitUrl(portrait); return; }
     const url = URL.createObjectURL(portrait); setPortraitUrl(url);
     return () => URL.revokeObjectURL(url);
-  }, [portrait]);
-  const choosePortrait = (p: Blob | string | null) => {
+  }, [portrait, scene?.portrait]);
+  const choosePortrait = (p: Blob | string | null, ref: ProjectPortrait | null) => {
     setPortrait(p);
-    if (p && projectId.current && user) void writeLocalFile(`portrait:${user.id}:${projectId.current}`, p);
+    setPendingPortrait({ file: typeof p === "string" ? null : p, ref });
   };
+  // The scene follows the voice version (and its video) shown in the timeline.
+  useEffect(() => {
+    if (!project.doc || !scene || !timelineAudio) return;
+    const videoId = timelineVideo?.id ?? null;
+    if (scene.audioJobId !== timelineAudio.id || scene.videoJobId !== videoId)
+      project.update(d => ({ ...d, scenes: [{ ...d.scenes[0], audioJobId: timelineAudio.id, videoJobId: videoId }, ...d.scenes.slice(1)] }));
+  }, [!!project.doc, timelineAudio?.id, timelineVideo?.id]);
+  // One-time import of data that older versions kept only in this browser.
+  useEffect(() => {
+    if (!project.doc || !user || !id) return;
+    const pristine = !project.doc.music && project.doc.scenes[0].speechStart === 0 && project.doc.scenes[0].tail === 0 && project.doc.scenes[0].voiceVolume === 1;
+    const local = timelineAudio && takeLocalTimeline(user.id, timelineAudio.id);
+    if (local && pristine) {
+      const musicKey = `music:${user.id}:${timelineAudio!.id}`;
+      project.update(d => withTimeline(d, { ...local, music: null }));
+      if (local.music) {
+        const music = local.music;
+        readLocalFile(musicKey).then(async file => {
+          if (!(file instanceof Blob)) return;
+          const assetId = await uploadMedia(new File([file], music.name, { type: file.type }), "music", () => {});
+          project.update(d => withTimeline(d, { ...sceneTimeline(d.scenes[0], d.music), music }, assetId));
+          void removeLocalFile(musicKey);
+        }).catch(() => { /* Keep the local file; the user can add the music again. */ });
+      }
+    }
+    if (!project.doc.scenes[0].portrait) {
+      readLocalFile(`portrait:${user.id}:${id}`).then(p => {
+        if (!p) return;
+        const asset = typeof p === "string" ? /^\/api\/media\/assets\/([0-9a-f-]{36})\/file$/.exec(p)?.[1] : undefined;
+        void savePortrait(typeof p === "string" ? null : p, asset ? { type: "asset", id: asset } : null)
+          .then(() => removeLocalFile(`portrait:${user.id}:${id}`));
+      });
+    }
+  }, [!!project.doc, timelineAudio?.id]);
   useEffect(() => {
     let live = true;
     if (projectId.current !== id) setVideoFormKey(crypto.randomUUID());
@@ -199,6 +250,11 @@ export function VideoStudio() {
     <div id="video-avatar" />
     <VideoPanel onPortraitChange={choosePortrait} selectedAsset={productAvatar} onClearAsset={() => setProductAvatar("")} key={videoFormKey} jobs={audio ? [audio] : []} approved={audioApproved} activeJob={activeJob} submissionBlocked={locked} onCreated={j => { setLocalJobs(list => mergeJobs(list, [j])); setSelectedVideo(j.id); jobsChanged(); }} />
     {videoJobs.length > 0 && <section className="vs-card"><h2>Вашите видеа</h2><select aria-label="Версия на видеото" value={video?.id || ""} onChange={e => { const next = videoJobs.find(j => j.id === e.target.value); setSelectedVideo(e.target.value); if (next?.source_job_id) setSelectedAudio(next.source_job_id); }}>{videoJobs.map(j => <option key={j.id} value={j.id}>{new Date(j.created_at * 1000).toLocaleString("bg")} · {jobStatus(j)}</option>)}</select>{video?.status === "failed" && <Notice error>{video.error}</Notice>}{video && ["queued", "running"].includes(video.status) && <Notice>{jobStatus(video)}. Продължаваме във фонов режим. Готовото видео ще се появи в този проект.</Notice>}</section>}
-    {timelineAudio && <TimelineEditor key={timelineAudio.id} audio={timelineAudio} video={timelineVideo} pendingVideo={timelinePending} portraitUrl={portraitUrl} />}
+    {project.conflict && <Notice>{project.conflict}</Notice>}
+    {project.error && <Notice error>{project.error}</Notice>}
+    {timelineAudio && id && project.doc && scene && <TimelineEditor key={timelineAudio.id} audio={timelineAudio} video={timelineVideo} pendingVideo={timelinePending} portraitUrl={portraitUrl}
+      projectId={id} timeline={sceneTimeline(scene, project.doc.music)} musicAssetId={project.doc.music?.assetId ?? null}
+      onTimeline={(change, musicAssetId) => project.update(d => withTimeline(d, change(sceneTimeline(d.scenes[0], d.music)), musicAssetId))}
+      onFlush={project.flush} />}
   </div>;
 }
