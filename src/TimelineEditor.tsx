@@ -2,6 +2,7 @@ import { BackgroundExport, uploadMedia, useMediaLibrary } from "./MediaTools";
 import { drawBackground, drawLayers, mediaUrl, type Visual } from "./layers-render";
 import { BackgroundControl, LayerAddBar, LayerInspector, layerNames, MediaPicker } from "./LayerTools";
 import { newTextLayer, type Layer, type SceneBackground } from "../shared/layers";
+import type { BrandKit } from "../shared/brand";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { Captions, Download, Film, Image as ImageIcon, Layers, Mic, Music, Pause, Play, SkipBack, Trash2, Upload, ZoomIn, ZoomOut } from "lucide-react";
 import { api, Button, Disclosure, Notice, type Job } from "./lib";
@@ -53,7 +54,7 @@ const nudge = (e: ReactKeyboardEvent) => e.key === "ArrowLeft" ? (e.shiftKey ? -
 // The arrangement (voice offset, end hold, volumes, music) is part of the server-saved project document;
 // the parent applies changes to it. Music is uploaded once to the user's media storage.
 export function TimelineEditor({ audio, video, pendingVideo, portraitUrl, projectId, timeline: settings, musicAssetId, onTimeline, onFlush, serverExport = true, sceneLabel = "",
-  layers = [], background = null, onLayers, onBackground }: {
+  layers = [], background = null, onLayers, onBackground, brand = null }: {
   audio: Job; video: Job | null; pendingVideo: Job | null; portraitUrl: string; projectId: string;
   timeline: TimelineSettings; musicAssetId: string | null;
   onTimeline: (change: (s: TimelineSettings) => TimelineSettings, musicAssetId?: string | null) => void;
@@ -67,6 +68,8 @@ export function TimelineEditor({ audio, video, pendingVideo, portraitUrl, projec
   background?: SceneBackground | null;
   onLayers?: (change: (layers: Layer[]) => Layer[]) => void;
   onBackground?: (background: SceneBackground | null) => void;
+  /** The account's brand kit: colours for new text and a one-click logo. */
+  brand?: BrandKit | null;
 }) {
   const speechDuration = audio.duration;
   const endpoint = `/video-studio/captions/${audio.id}`, voiceUrl = `/api/jobs/${audio.id}/audio`, videoUrl = video ? `/api/jobs/${video.id}/video` : "";
@@ -276,6 +279,7 @@ export function TimelineEditor({ audio, video, pendingVideo, portraitUrl, projec
   const addLayer = (type: Layer["type"]) => {
     if (type !== "text") { setAdding(type); setPanel("clip"); return; }
     const layer = newTextLayer(...layerWindow());
+    if (brand) { layer.color = brand.colors.text; layer.box = brand.colors.secondary; }
     onLayers?.(ls => [...ls, layer]); setSelection({ kind: "layer", id: layer.id }); setPanel("clip");
   };
   const addMediaLayer = (assetId: string) => {
@@ -284,6 +288,12 @@ export function TimelineEditor({ audio, video, pendingVideo, portraitUrl, projec
       ? { id, type: "image", assetId, start, end, position: "top-right", width: 0.25, opacity: 1 }
       : { id, type: "broll", assetId, start, end, trim: 0 };
     onLayers?.(ls => [...ls, layer]); setAdding(null); setSelection({ kind: "layer", id }); setPanel("clip");
+  };
+  const addLogo = () => {
+    if (!brand?.logo) return;
+    const id = crypto.randomUUID(), { assetId, position, width, opacity } = brand.logo;
+    onLayers?.(ls => [...ls, { id, type: "image", assetId, start: 0, end: Math.round(length * 100) / 100, position, width, opacity }]);
+    setAdding(null); setSelection({ kind: "layer", id }); setPanel("clip");
   };
   const selectedLayer = selection.kind === "layer" ? layers.find(l => l.id === selection.id) : undefined;
   // Choosing another clip cancels adding a layer.
@@ -451,7 +461,7 @@ export function TimelineEditor({ audio, video, pendingVideo, portraitUrl, projec
         </div>
       </div>
       <input ref={musicInput} type="file" accept="audio/mpeg,audio/wav,audio/mp4,audio/x-m4a,audio/aac,audio/ogg,.mp3,.wav,.m4a,.ogg" hidden style={{ display: "none" }} onChange={e => { void addMusic(e.target.files?.[0]); e.target.value = ""; }} />
-      {onLayers && <LayerAddBar onAdd={addLayer} disabled={exporting} />}
+      {onLayers && <LayerAddBar onAdd={addLayer} onLogo={brand?.logo ? addLogo : undefined} disabled={exporting} />}
       <p className="tl-hint">Плъзгайте клиповете, за да ги подредите. Щракнете върху клип (или Enter от клавиатурата), за да го редактирате. Интервал пуска и спира прегледа; стрелките местят избран клип.</p>
 
       <details className="vs-word-editor"><summary>Думи и времена ({document.words.length})</summary><p>Времената са в секунди от началото на гласа.</p><fieldset disabled={exporting}>
