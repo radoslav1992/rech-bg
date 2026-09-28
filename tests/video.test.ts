@@ -662,3 +662,104 @@ describe("Video workflow and private assets", () => {
     expect(env.AUDIO.objects.has("bad.mp4")).toBe(false);
   });
 });
+describe("Recovery of slow, interrupted and stuck video jobs", () => {
+  const heygenOutput = "https://files.heygen.ai/video/example.mp4";
+  function heygen(statuses: string[] = ["completed"]) {
+    let checks = 0;
+    const mock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === heygenOutput) return new Response(mp4);
+      if (init?.method === "POST") return Response.json({ data: { video_id: "v_video1", status: "waiting" } });
+      return Response.json({ data: { id: "v_video1", status: statuses[Math.min(checks++, statuses.length - 1)], video_url: heygenOutput } });
+    });
+    vi.stubGlobal("fetch", mock);
+    return mock;
+  }
+  it("recovers a HeyGen submission interrupted before its ticket was saved, using the same idempotency key", async () => {
+    env.VIDEO_PROVIDER = "heygen"; env.HEYGEN_API_KEY = "heygen-secret";
+    const id = await create(form("high"));
+    // The Worker was evicted after claiming the submission but before saving the ticket.
+    sqlite.prepare("UPDATE jobs SET submitted_at=? WHERE id=?").run(now() - 60, id);
+    const mock = heygen();
+    await new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step);
+    const submits = mock.mock.calls.filter(c => c[1]?.method === "POST");
+    expect(submits).toHaveLength(1);
+    expect((submits[0][1]?.headers as any)["Idempotency-Key"]).toBe(id);
+    expect(sqlite.prepare("SELECT status FROM jobs WHERE id=?").get(id)!.status).toBe("completed");
+    expect(used()).toBe(54100);
+  });
+  it("does not resubmit to HeyGen once its idempotency window has passed", async () => {
+    env.VIDEO_PROVIDER = "heygen"; env.HEYGEN_API_KEY = "heygen-secret";
+    const id = await create(form("high"));
+    sqlite.prepare("UPDATE jobs SET submitted_at=? WHERE id=?").run(now() - 21 * 3600, id);
+    const mock = heygen();
+    await expect(new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step)).rejects.toThrow();
+    expect(mock).not.toHaveBeenCalled(); expect(used()).toBe(100);
+  });
+  it("keeps polling a slow provider for more than an hour instead of refunding a video that is still rendering", async () => {
+    env.VIDEO_PROVIDER = "heygen"; env.HEYGEN_API_KEY = "heygen-secret";
+    const id = await create(form("high"));
+    const sleeps: string[] = [];
+    const slowStep = { ...step, sleep: async (_: string, duration: string) => { sleeps.push(duration); } };
+    heygen([...Array(200).fill("processing"), "completed"]);
+    await new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, slowStep);
+    expect(sqlite.prepare("SELECT status FROM jobs WHERE id=?").get(id)!.status).toBe("completed");
+    expect(sleeps.filter(s => s === "5 minutes").length).toBe(20);
+  });
+  it("follows up to two redirects to allowed hosts when saving the output", async () => {
+    const hop = (to: string) => new Response(null, { status: 302, headers: { Location: to } });
+    const chain = (locations: string[]) => {
+      const mock = vi.fn(async (url: string) => {
+        const i = ["https://files.heygen.ai/a.mp4", ...locations].indexOf(url);
+        return i < locations.length ? hop(locations[i]) : new Response(mp4);
+      });
+      vi.stubGlobal("fetch", mock);
+      return mock;
+    };
+    chain(["https://files.heygen.ai/b.mp4", "https://d1.cloudfront.net/c.mp4"]);
+    await storeVideo(env, "audio/u/ok.mp4", "https://files.heygen.ai/a.mp4");
+    expect(env.AUDIO.objects.has("audio/u/ok.mp4")).toBe(true);
+    const evil = chain(["https://evil.invalid/b.mp4"]);
+    await expect(storeVideo(env, "audio/u/evil.mp4", "https://files.heygen.ai/a.mp4")).rejects.toThrow();
+    expect(evil).toHaveBeenCalledTimes(1);
+    chain(["https://files.heygen.ai/b.mp4", "https://files.heygen.ai/c.mp4", "https://files.heygen.ai/d.mp4"]);
+    await expect(storeVideo(env, "audio/u/loop.mp4", "https://files.heygen.ai/a.mp4")).rejects.toThrow();
+    expect(env.AUDIO.objects.has("audio/u/evil.mp4") || env.AUDIO.objects.has("audio/u/loop.mp4")).toBe(false);
+  });
+  it("keeps input links valid for hours after a late submission, but not for unsubmitted old jobs", async () => {
+    const id = await create();
+    const meta = JSON.parse(sqlite.prepare("SELECT video_meta FROM jobs WHERE id=?").get(id)!.video_meta as string);
+    const audio = () => request(`/video-inputs/${id}/audio?token=${meta.token}`, {}, false);
+    sqlite.prepare("UPDATE jobs SET created_at=?,submitted_at=? WHERE id=?").run(now() - 3 * 3600, now() - 60, id);
+    expect((await audio()).status).toBe(200);
+    sqlite.prepare("UPDATE jobs SET submitted_at=NULL WHERE id=?").run(id);
+    expect((await audio()).status).toBe(200);
+    sqlite.prepare("UPDATE jobs SET created_at=? WHERE id=?").run(now() - 7 * 3600, id);
+    expect((await audio()).status).toBe(404);
+  });
+  it("fails and refunds jobs stuck past the time limit, and jobs whose workflow ended without a result", async () => {
+    const stuck = await create();
+    sqlite.prepare("UPDATE jobs SET status='running',created_at=?,updated_at=? WHERE id=?").run(now() - 9 * 3600, now() - 3600, stuck);
+    const terminate = vi.fn().mockResolvedValue(undefined);
+    env.VIDEO_GENERATION.get.mockResolvedValue({ status: async () => ({ status: "running" }), terminate });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await maintenance(env);
+    expect(terminate).toHaveBeenCalled();
+    expect(sqlite.prepare("SELECT status FROM jobs WHERE id=?").get(stuck)!.status).toBe("failed");
+    expect(used()).toBe(100);
+    const ended = await create();
+    sqlite.prepare("UPDATE jobs SET status='running',updated_at=? WHERE id=?").run(now() - 3600, ended);
+    env.VIDEO_GENERATION.get.mockResolvedValue({ status: async () => ({ status: "complete" }), terminate });
+    await maintenance(env);
+    expect(sqlite.prepare("SELECT status FROM jobs WHERE id=?").get(ended)!.status).toBe("failed");
+    expect(used()).toBe(100);
+  });
+  it("leaves a long-running job alone while its workflow is still working within the limit", async () => {
+    const id = await create();
+    sqlite.prepare("UPDATE jobs SET status='running',created_at=?,updated_at=? WHERE id=?").run(now() - 3 * 3600, now() - 3600, id);
+    const terminate = vi.fn();
+    env.VIDEO_GENERATION.get.mockResolvedValue({ status: async () => ({ status: "waiting" }), terminate });
+    await maintenance(env);
+    expect(terminate).not.toHaveBeenCalled();
+    expect(sqlite.prepare("SELECT status FROM jobs WHERE id=?").get(id)!.status).toBe("running");
+  });
+});

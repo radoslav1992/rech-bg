@@ -14,6 +14,8 @@ export const emotionTags = [
 export const studioMaxChars = 1500;
 export const studioCreditsPerChar = 3;
 export const stripTags = (text: string) => text.replace(/\[[^\]]*\]/g, "");
+/** Rough speech length for a Bulgarian script (~13 spoken characters per second), before paying for it. */
+export const estimateSpeechSeconds = (text: string) => Math.round(stripTags(text).trim().length / 13);
 export function validateStudioScript(text: string) {
   if (!stripTags(text).trim() || text.length > studioMaxChars)
     throw new Error(`Сценарият трябва да съдържа текст и да е до ${studioMaxChars} символа, включително таговете.`);

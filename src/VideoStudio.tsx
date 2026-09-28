@@ -4,7 +4,8 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { Film, Mic, Sparkles, Save, Check, ArrowRight } from "lucide-react";
 import { api, post, Button, Disclosure, Notice, number, useAuth, type Job } from "./lib";
 import { jobsChanged, jobStatus, useJobs } from "./JobActivity";
-import { emotionTags, studioMaxChars, validateStudioScript, validateSuggestedDelivery } from "../shared/studio";
+import { emotionTags, estimateSpeechSeconds, studioMaxChars, validateStudioScript, validateSuggestedDelivery } from "../shared/studio";
+import { MAX_VIDEO_SECONDS, MIN_VIDEO_SECONDS } from "../shared/video";
 import { StudioVoicePicker } from "./StudioVoicePicker";
 import type { StudioVoice } from "../shared/studio";
 import { VideoPanel } from "./VideoPanel";
@@ -33,6 +34,8 @@ export function VideoStudio() {
   const jobs = mergeJobs(localJobs, allJobs).filter(j => j.project_id === id).sort((a, b) => b.created_at - a.created_at);
   const audioJobs = jobs.filter(j => j.kind !== "video"), videoJobs = jobs.filter(j => j.kind === "video");
   const audio = audioJobs.find(j => j.id === selectedAudio) || audioJobs[0] || null;
+  // Approval is page state; a voice that already has a video was approved before, so it stays approved after reload.
+  const audioApproved = !!audio && (audio.id === approved || videoJobs.some(v => v.source_job_id === audio.id));
   const video = videoJobs.find(j => j.id === selectedVideo) || videoJobs[0] || null;
   const activeJob = mergeJobs(localJobs.filter(j => j.project_id === id), allJobs).find(j => ["queued", "running"].includes(j.status)) || null;
   const active = !!activeJob;
@@ -45,6 +48,7 @@ export function VideoStudio() {
   const remaining = Math.max(0, (user?.limit || 0) - (user?.used || 0));
   let cost = script.length * 3, scriptError = "";
   try { cost = validateStudioScript(script); } catch (e) { scriptError = (e as Error).message; }
+  const estimate = estimateSpeechSeconds(script);
   const loadVoices = async () => {
     const request = ++catalogRequest.current;
     try {
@@ -179,6 +183,8 @@ export function VideoStudio() {
       </fieldset>
       <div className="vs-actions"><Button className="btn" busy={busy} disabled={assisting || !title.trim() || !voices.some(v => v.id === voice)} onClick={async () => { setBusy(true); try { await save(); } catch (e) { setError((e as Error).message); } finally { setBusy(false); } }}><Save size={17} /> {dirty || !id ? "Запази проекта" : "Запазен"}</Button><Button className="btn primary" busy={busy} disabled={assisting || !enabled || !voices.some(v => v.id === voice) || active || !!scriptError || !title.trim() || cost > remaining || !user?.verified} onClick={generate}><Mic size={17} /> Създай глас · {number(cost)} кредита</Button></div>
       {script.length > 0 && scriptError && <Notice error>{scriptError}</Notice>}
+      {!scriptError && estimate > MAX_VIDEO_SECONDS && <Notice>Около {estimate} секунди реч. Видеото приема запис от {MIN_VIDEO_SECONDS} до {MAX_VIDEO_SECONDS} секунди — съкратете сценария, ако ще създавате видео от този глас.</Notice>}
+      {!scriptError && script.trim() && estimate < MIN_VIDEO_SECONDS && <Notice>Около {estimate} секунди реч. За видео са нужни поне {MIN_VIDEO_SECONDS} секунди.</Notice>}
       {cost > remaining && <p>Нужни са още {number(cost - remaining)} кредита. <Link to="/app/billing">Вижте плановете</Link></p>}
       <p className="vs-fine">3 кредита за символ, включително таговете. Всяко ново озвучаване се заплаща. Видеото се таксува отделно след одобрението ви. За видео целете 5–60 секунди — обикновено около 50–120 думи.</p>
     </section><aside className="vs-card vs-review"><span className="eyebrow">02 / ПРОСЛУШАЙТЕ</span><h2>Първо чуйте. После покажете.</h2><p>Проверете произношението и емоцията, преди да създадете видео.</p>
@@ -186,12 +192,12 @@ export function VideoStudio() {
       {!audio && <div className="vs-audio-empty"><Mic size={35} /><p>Вашият глас ще се появи тук.</p></div>}
       {audio?.status === "failed" && <Notice error>{audio.error}</Notice>}
       {audio && ["queued", "running"].includes(audio.status) && <Notice>Гласът се създава във фонов режим. Можете да напуснете страницата и да се върнете в проекта.</Notice>}
-      {audio?.status === "completed" && <><audio key={audio.id} controls src={`/api/jobs/${audio.id}/audio`} /><a href={`/api/jobs/${audio.id}/audio`} download className="btn">Изтегли WAV</a><p>{audio.duration.toFixed(1)} секунди · {number(audio.chars)} кредита за тази версия</p><Button className={approved === audio.id ? "btn dark" : "btn primary"} onClick={() => setApproved(audio.id)}><Check size={17} /> {approved === audio.id ? "Гласът е одобрен" : "Одобрявам този глас"}</Button></>}
+      {audio?.status === "completed" && <><audio key={audio.id} controls src={`/api/jobs/${audio.id}/audio`} /><a href={`/api/jobs/${audio.id}/audio`} download className="btn">Изтегли WAV</a><p>{audio.duration.toFixed(1)} секунди · {number(audio.chars)} кредита за тази версия</p><Button className={audioApproved ? "btn dark" : "btn primary"} onClick={() => setApproved(audio.id)}><Check size={17} /> {audioApproved ? "Гласът е одобрен" : "Одобрявам този глас"}</Button></>}
       <p className="vs-fine">Редакциите в сценария не променят вече създадените записи.</p>
     </aside></div>
     <Disclosure className="vs-card" summary="Създайте аватар с ваш продукт"><ProductAvatarPanel onSelect={id => {setProductAvatar(id); document.getElementById("video-avatar")?.scrollIntoView({behavior:"smooth"});}} /></Disclosure>
     <div id="video-avatar" />
-    <VideoPanel onPortraitChange={choosePortrait} selectedAsset={productAvatar} onClearAsset={() => setProductAvatar("")} key={videoFormKey} jobs={audio ? [audio] : []} approved={!!audio && audio.id === approved} activeJob={activeJob} submissionBlocked={locked} onCreated={j => { setLocalJobs(list => mergeJobs(list, [j])); setSelectedVideo(j.id); jobsChanged(); }} />
+    <VideoPanel onPortraitChange={choosePortrait} selectedAsset={productAvatar} onClearAsset={() => setProductAvatar("")} key={videoFormKey} jobs={audio ? [audio] : []} approved={audioApproved} activeJob={activeJob} submissionBlocked={locked} onCreated={j => { setLocalJobs(list => mergeJobs(list, [j])); setSelectedVideo(j.id); jobsChanged(); }} />
     {videoJobs.length > 0 && <section className="vs-card"><h2>Вашите видеа</h2><select aria-label="Версия на видеото" value={video?.id || ""} onChange={e => { const next = videoJobs.find(j => j.id === e.target.value); setSelectedVideo(e.target.value); if (next?.source_job_id) setSelectedAudio(next.source_job_id); }}>{videoJobs.map(j => <option key={j.id} value={j.id}>{new Date(j.created_at * 1000).toLocaleString("bg")} · {jobStatus(j)}</option>)}</select>{video?.status === "failed" && <Notice error>{video.error}</Notice>}{video && ["queued", "running"].includes(video.status) && <Notice>{jobStatus(video)}. Продължаваме във фонов режим. Готовото видео ще се появи в този проект.</Notice>}</section>}
     {timelineAudio && <TimelineEditor key={timelineAudio.id} audio={timelineAudio} video={timelineVideo} pendingVideo={timelinePending} portraitUrl={portraitUrl} />}
   </div>;

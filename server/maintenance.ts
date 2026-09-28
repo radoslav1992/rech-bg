@@ -1,5 +1,5 @@
 import type { Env } from "./types";
-import { now, MINUTE, DAY } from "./types";
+import { now, MINUTE, HOUR, DAY } from "./types";
 import { notifyVideo } from "./video-notifications";
 import { cleanupHeyGenAvatars } from "./video-heygen-avatar";
 import { maintainMedia } from "./media-maintenance";
@@ -79,6 +79,16 @@ export async function maintenance(e: Env) {
   });
   await stage("heygen", () => cleanupHeyGenAvatars(e));
 }
+// Longer than the slowest workflow (video: ~6 h of polling plus avatar preparation), so only
+// genuinely stuck jobs hit it. Stuck jobs otherwise hold credits and block all of the user's generation.
+const JOB_CEILING = 8 * HOUR;
+async function failStuckJob(e: Env, id: string) {
+  await e.DB.prepare(
+    "UPDATE jobs SET status='failed',error=?,updated_at=? WHERE id=? AND status IN ('queued','running')",
+  )
+    .bind("Генерацията беше прекъсната. Кредитите са върнати.", now(), id)
+    .run();
+}
 async function reconcileJobs(e: Env) {
   const jobs = (
     await e.DB.prepare(
@@ -90,22 +100,26 @@ async function reconcileJobs(e: Env) {
   for (const j of jobs) {
     const workflow = j.kind === "video" ? e.VIDEO_GENERATION : e.GENERATION;
     if (!workflow) continue;
+    const expired = j.created_at < now() - JOB_CEILING;
     try {
       const instance = await workflow.get(j.id);
       const status = await instance.status();
-      if (["errored", "terminated"].includes(status.status)) {
-        await e.DB.prepare(
-          "UPDATE jobs SET status='failed',error=?,updated_at=? WHERE id=? AND status IN ('queued','running')",
-        )
-          .bind(
-            "Генерацията беше прекъсната. Кредитите са върнати.",
-            now(),
-            j.id,
-          )
-          .run();
+      // "complete" with the job still active means the workflow ended without recording a result.
+      if (["errored", "terminated", "complete"].includes(status.status)) await failStuckJob(e, j.id);
+      else if (expired) {
+        try {
+          await instance.terminate();
+        } catch {
+          /* Already finished or not terminable; failing the job is what releases the user. */
+        }
+        console.error("Stuck job failed after the time limit", { jobId: j.id, workflow: status.status });
+        await failStuckJob(e, j.id);
       }
     } catch {
-      if (j.status === "queued") {
+      if (expired) {
+        console.error("Stuck job failed after the time limit", { jobId: j.id });
+        await failStuckJob(e, j.id);
+      } else if (j.status === "queued") {
         try {
           await workflow.create({ id: j.id, params: { jobId: j.id } });
         } catch {

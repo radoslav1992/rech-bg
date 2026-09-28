@@ -115,7 +115,9 @@ videos.post("/", async (c) => {
 // Short-lived capability URLs expose only the two inputs of an active video job.
 export const videoInputs = new Hono<{ Bindings: Env }>();
 videoInputs.get("/:id/:asset", async (c) => {
-  const job = await c.env.DB.prepare("SELECT * FROM jobs WHERE id=? AND kind='video' AND status IN ('queued','running') AND created_at>?").bind(c.req.param("id"), now()-7200).first<any>();
+  // Valid while the job is active and for 6 hours after submission (or creation, before it): providers may
+  // fetch inputs late from a long queue, and a dispatch retried by the hourly cron submits later.
+  const job = await c.env.DB.prepare("SELECT * FROM jobs WHERE id=? AND kind='video' AND status IN ('queued','running') AND COALESCE(submitted_at,created_at)>?").bind(c.req.param("id"), now()-6*3600).first<any>();
   const meta: VideoMeta | null = job?.video_meta ? JSON.parse(job.video_meta) : null;
   if (!meta || !safeEqual(c.req.query("token") || "", meta.token)) throw new HTTPException(404, { message: "Файлът не е наличен." });
   let key: string | undefined, mime: string | undefined;
