@@ -87,6 +87,10 @@ Export mixes voice and music with an OfflineAudioContext using the same loudness
 ## Reliability and storage
 
 - `mode='studio'` identifies premium projects and audio jobs; the existing `kind` audio/video distinction is preserved.
+- Video status is polled every 20 s for about an hour, then every 5 minutes for up to about 5 more hours, because a slow provider queue still finishes and is still billed. After that the job is refunded; a HeyGen/WaveSpeed ticket that may still complete is logged as `Video provider still running after timeout; review for manual pickup` with its request ID.
+- A HeyGen submission interrupted after it was claimed but before its ticket was saved is re-sent with the same `Idempotency-Key` (the job ID) within 20 hours, recovering the original video instead of refunding it. Other providers still fail and refund such an ambiguous submission.
+- Hourly maintenance fails and refunds any audio/video job still active 8 hours after creation (terminating its workflow), or whose workflow ended without recording a result, so a stuck job cannot hold credits or block the user.
+- Provider input links stay valid while the job is active and for 6 hours after submission (or creation, before submission). Output downloads follow at most two redirects, each to an allowed host.
 - Quota reservation/refund remains transactional through the existing D1 triggers. The server checks the client's premium quote against the saved script before reserving credits.
 - SDK and Workflow retries are disabled for the paid speech POST. `submitted_at` claims it before submission; a restart reuses a saved WAV instead of paying again. An ambiguous request without a saved recording fails/refunds the user's credits rather than silently resubmitting. A provider charge can still exist in that ambiguous situation and must be reviewed by the operator.
 - Speech timestamps are the normal caption source. If absent, one bounded Forced Alignment call attempts to recover timings without regenerating speech. Alignment failure keeps the successful audio and allows manual caption entry.

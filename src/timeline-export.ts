@@ -5,8 +5,9 @@ import { musicGain, speechRanges, timelineLength, type TimelineSettings } from "
 const FPS = 30, RATE = 48000, BG = "#171d17";
 const unsupported = "Този браузър не може да експортира видеото. Използвайте актуален Chrome или Edge на компютър. Оригиналът и SRT остават достъпни.";
 
+// Callers pass a fresh ArrayBuffer (Blob.arrayBuffer()), so it can be handed over without a copy.
 async function decode(bytes: ArrayBuffer) {
-  return new OfflineAudioContext(2, 1, RATE).decodeAudioData(bytes.slice(0));
+  return new OfflineAudioContext(2, 1, RATE).decodeAudioData(bytes);
 }
 async function fetchBlob(url: string, signal: AbortSignal) {
   const r = await fetch(url, { signal, credentials: "same-origin" });
@@ -49,10 +50,16 @@ export async function exportTimeline({ document, settings, videoUrl, voiceUrl, m
   if (!videoCodec || !audioCodec) throw new Error(unsupported);
 
   const videoBlob = await fetchBlob(videoUrl, signal);
-  // Prefer the generated video's own soundtrack so lips and voice stay in sync; fall back to the approved WAV.
-  let voice: AudioBuffer;
-  try { voice = await decode(await videoBlob.arrayBuffer()); }
-  catch { voice = await decode(await (await fetchBlob(voiceUrl, signal)).arrayBuffer()); }
+  // Prefer the generated video's own soundtrack so lips and voice stay in sync. Caption times, ducking and the
+  // timeline length come from the approved WAV, so use the soundtrack only when its length matches; otherwise
+  // (a provider trimmed or padded it) fall back to the WAV rather than cutting the voice or drifting captions.
+  let voice: AudioBuffer | null = null;
+  try {
+    const soundtrack = await decode(await videoBlob.arrayBuffer());
+    if (Math.abs(soundtrack.duration - speechDuration) <= 0.25) voice = soundtrack;
+  } catch { /* No decodable soundtrack: use the WAV. */ }
+  if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
+  voice ??= await decode(await (await fetchBlob(voiceUrl, signal)).arrayBuffer());
   let musicBuffer: AudioBuffer | null = null;
   if (music && settings.music) {
     try { musicBuffer = await decode(await music.arrayBuffer()); }

@@ -12,6 +12,8 @@ import { providerFailure, VideoFailure, videoFailureMessage, type VideoStage } f
 import { videoFetch } from "./video-http";
 import { notifyVideo } from "./video-notifications";
 
+const FAST_POLLS = 180, SLOW_POLLS = 60;
+const HEYGEN_IDEMPOTENCY_WINDOW = 20 * 3600;
 type Ticket = { provider?: VideoProvider; request_id: string; status_url: string; response_url: string; cancel_url?: string };
 export function queueUrl(value: string) {
   const url = new URL(value);
@@ -37,8 +39,21 @@ async function getVideo(env: Env, ticket: Ticket, stage: "STATUS" | "RESULT") {
   return queueGet(env, stage === "STATUS" ? ticket.status_url : ticket.response_url, stage);
 }
 // Multipart upload bounds memory and accepts CDN responses without Content-Length.
+/** Downloads a provider output, following at most two CDN redirects; every hop must pass outputUrl. */
+async function fetchOutput(url: string, signal: AbortSignal) {
+  let next = outputUrl(url);
+  for (let hop = 0; hop <= 2; hop++) {
+    const r = await fetch(next, { redirect: "manual", signal });
+    if (r.status < 300 || r.status >= 400) return r;
+    await r.body?.cancel();
+    const location = r.headers.get("Location");
+    if (!location || hop === 2) break;
+    next = outputUrl(new URL(location, next).href);
+  }
+  throw new VideoFailure("DOWNLOAD", "MEDIA");
+}
 export async function storeVideo(env: Env, key: string, url: string) {
-  const r = await videoFetch(outputUrl(url), { signal: AbortSignal.timeout(240000) });
+  const r = await fetchOutput(url, AbortSignal.timeout(240000));
   if (!r.ok || !r.body) throw new VideoFailure("DOWNLOAD", "MEDIA", r.status);
   const limit = 100 * 1024 * 1024;
   if (Number(r.headers.get("Content-Length")) > limit) { await r.body.cancel(); throw new Error("Video too large"); }
@@ -80,7 +95,9 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> 
       const job = await step.do("load-video", async () => {
         const row = await this.env.DB.prepare("SELECT * FROM jobs WHERE id=? AND kind='video'").bind(id).first<any>();
         if (!row || !["queued", "running"].includes(row.status)) throw new Error("Video unavailable");
-        await this.env.DB.prepare("UPDATE jobs SET status='running',updated_at=? WHERE id=?").bind(now(), id).run();
+        // Guarded so a job failed in the meantime (and already refunded) is never revived.
+        const started = await this.env.DB.prepare("UPDATE jobs SET status='running',updated_at=? WHERE id=? AND status IN ('queued','running')").bind(now(), id).run();
+        if (!started.meta.changes) throw new Error("Video unavailable");
         return row;
       });
       stage = "SUBMIT";
@@ -119,9 +136,11 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> 
         const input = tier === "standard"
           ? { avatar: avatarMap[meta.avatar], audio_url, remove_background: false }
           : { image_url: `${base}/image?token=${meta.token}`, audio_url, prompt: "A person speaking naturally to the camera. Subtle facial expressions and head movements." };
-        // Never repeat an ambiguous external submission: it may already be billable.
+        // Never repeat an ambiguous external submission: it may already be billable. HeyGen is the exception:
+        // it receives Idempotency-Key = job ID, so re-sending returns the original video instead of a new charge.
         const claim = await this.env.DB.prepare("UPDATE jobs SET submitted_at=? WHERE id=? AND submitted_at IS NULL").bind(now(), id).run();
-        if (!claim.meta.changes) throw new Error("Submission requires reconciliation");
+        if (!claim.meta.changes && !(provider === "heygen" && row?.submitted_at > now() - HEYGEN_IDEMPOTENCY_WINDOW))
+          throw new Error("Submission requires reconciliation");
         if (provider === "heygen" || provider === "wavespeed") {
           const t = provider === "heygen"
             ? await submitHeyGenVideo(this.env, id, `${base}/image?token=${meta.token}`, audio_url, avatar || undefined)
@@ -144,7 +163,9 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> 
       });
       let completed = false;
       stage = "STATUS";
-      for (let i = 0; i < 180; i++) {
+      // ~1 hour at 20 s, then up to ~5 more hours at 5 min: a slow provider queue still finishes (and is
+      // still billed), so give up only when a result is very unlikely.
+      for (let i = 0; i < FAST_POLLS + SLOW_POLLS; i++) {
         const status = await step.do(`video-status-${i}`, { retries: { limit: 2, delay: "10 seconds" }, timeout: "2 minutes" }, async () => {
           const s = await getVideo(this.env, ticket!, "STATUS");
           await this.env.DB.prepare("UPDATE jobs SET updated_at=? WHERE id=?").bind(now(), id).run();
@@ -154,9 +175,14 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> 
           return s.status as string;
         });
         if (status === "COMPLETED") { completed = true; break; }
-        await step.sleep(`video-wait-${i}`, "20 seconds");
+        await step.sleep(`video-wait-${i}`, i < FAST_POLLS ? "20 seconds" : "5 minutes");
       }
-      if (!completed) throw new VideoFailure("STATUS", "TIMEOUT");
+      if (!completed) {
+        // Only fal can be cancelled below; other providers may still finish and bill. Log the ticket for review.
+        if (ticket.provider === "heygen" || ticket.provider === "wavespeed")
+          console.error("Video provider still running after timeout; review for manual pickup", { jobId: id, provider: ticket.provider, requestId: ticket.request_id });
+        throw new VideoFailure("STATUS", "TIMEOUT");
+      }
       stage = "SAVE";
       await step.do("save-video", { retries: { limit: 2, delay: "15 seconds" }, timeout: "5 minutes" }, async () => {
         const key = `audio/${job.user_id}/${id}.mp4`;

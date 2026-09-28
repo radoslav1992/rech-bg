@@ -349,7 +349,7 @@ export function TimelineEditor({ audio, video, pendingVideo, portraitUrl }: { au
 
       <details className="vs-word-editor"><summary>Думи и времена ({document.words.length})</summary><p>Времената са в секунди от началото на гласа.</p><fieldset disabled={exporting}>
         {document.words.map((word, i) => <div className="vs-word" key={i}><input aria-label={`Дума ${i + 1}`} value={word.text} maxLength={80} onChange={e => edit({ words: document.words.map((w, n) => n === i ? { ...w, text: e.target.value } : w) })} /><input aria-label={`Начало ${i + 1}`} type="number" min="0" step="0.01" value={word.start} onChange={e => edit({ words: document.words.map((w, n) => n === i ? { ...w, start: Number(e.target.value) } : w) })} /><input aria-label={`Край ${i + 1}`} type="number" min="0" step="0.01" value={word.end} onChange={e => edit({ words: document.words.map((w, n) => n === i ? { ...w, end: Number(e.target.value) } : w) })} /><button className="btn" aria-label={`Изтрий дума ${i + 1}`} onClick={() => edit({ words: document.words.filter((_, n) => n !== i) })}>×</button></div>)}
-        <button className="btn" onClick={() => { const start = document.words.at(-1)?.end || 0; edit({ words: [...document.words, { text: "Дума", start, end: Math.min(speechDuration, start + 0.3) }] }); }}>Добави дума</button>
+        <button className="btn" disabled={(document.words.at(-1)?.end || 0) > speechDuration - 0.05} title="Думите трябва да са в рамките на гласа" onClick={() => { const start = document.words.at(-1)?.end || 0; edit({ words: [...document.words, { text: "Дума", start, end: Math.min(speechDuration, start + 0.3) }] }); }}>Добави дума</button>
       </fieldset></details>
 
       <div className="vs-actions caption-export-actions">
