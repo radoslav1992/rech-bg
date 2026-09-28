@@ -11,6 +11,7 @@ import { defaultCaptions } from "../shared/captions";
 import { MB } from "../shared/media";
 import { MAX_DOC_BYTES, MAX_PROJECT_SECONDS, projectDocSchema, sceneTimeline, type ProjectDoc } from "../shared/project";
 import { speechRanges, timelineLength } from "../shared/timeline";
+import { imageAssetKinds, videoAssetKinds } from "../shared/layers";
 
 // Server-side video studio projects: the JSON document (scenes, timeline, media references) and its render.
 export const studioProjects = new Hono<{ Bindings: Env; Variables: ContextVars }>();
@@ -29,11 +30,23 @@ const conflictBody = (stored: Stored | null) => ({
 });
 const invalid = () => new HTTPException(400, { message: "Проектът съдържа файл или запис, който не е наличен." });
 
+/** Media a scene's layers and background refer to, keyed by how each is used ("image:<id>", "broll:<id>", …). */
+export const layerAssets = (s: ProjectDoc["scenes"][number]) => [
+  ...s.layers.flatMap((l) => (l.type === "text" ? [] : [`${l.type}:${l.assetId}`])),
+  ...(s.background?.type === "image" ? [`background:${s.background.assetId}`] : []),
+];
+async function ownedMedia(e: Env, userId: string, id: string, kinds: readonly string[], statuses: string[]) {
+  return e.DB.prepare(
+    `SELECT id,object_key,kind,mime,duration FROM media_assets WHERE id=? AND user_id=? AND kind IN (${kinds.map(() => "?").join(",")}) AND status IN (${statuses.map(() => "?").join(",")})`,
+  )
+    .bind(id, userId, ...kinds, ...statuses)
+    .first<{ id: string; object_key: string; kind: string; mime: string; duration: number }>();
+}
 /** Checks that every reference added since the stored version belongs to this user and project. */
 async function checkReferences(e: Env, userId: string, projectId: string, next: ProjectDoc, previous: ProjectDoc | null) {
   const known = new Set<string>();
   for (const s of previous?.scenes || []) {
-    for (const id of [s.audioJobId, s.videoJobId, s.portrait?.type === "asset" ? s.portrait.id : null, ...s.history]) if (id) known.add(id);
+    for (const id of [s.audioJobId, s.videoJobId, s.portrait?.type === "asset" ? s.portrait.id : null, ...s.history, ...layerAssets(s)]) if (id) known.add(id);
   }
   if (previous?.music) known.add(previous.music.assetId);
   const fresh = (id: string | null | undefined): id is string => !!id && !known.has(id);
@@ -51,6 +64,16 @@ async function checkReferences(e: Env, userId: string, projectId: string, next: 
         .bind(s.videoJobId, userId, s.audioJobId).first();
       if (!video) throw invalid();
     }
+    // Checked per use: a file saved as B-roll must still pass the image checks when reused as an overlay.
+    for (const layer of s.layers) {
+      if (layer.type === "text" || !fresh(`${layer.type}:${layer.assetId}`)) continue;
+      // Stills and overlays must be ready images; a B-roll video may still be under its automatic check.
+      const kinds = layer.type === "image" ? imageAssetKinds : [...imageAssetKinds, ...videoAssetKinds];
+      const statuses = layer.type === "image" ? ["ready"] : ["ready", "checking"];
+      if (!(await ownedMedia(e, userId, layer.assetId, kinds, statuses))) throw invalid();
+    }
+    if (s.background?.type === "image" && fresh(`background:${s.background.assetId}`) && !(await ownedMedia(e, userId, s.background.assetId, imageAssetKinds, ["ready"])))
+      throw invalid();
     if (s.portrait?.type === "asset" && fresh(s.portrait.id)) {
       const asset = await e.DB.prepare("SELECT id FROM media_assets WHERE id=? AND user_id=? AND kind IN ('portrait','variant','product') AND status='ready'")
         .bind(s.portrait.id, userId).first();
@@ -103,6 +126,22 @@ async function renderPlan(e: Env, user: DbUser, projectId: string) {
   if (!stored) throw new HTTPException(400, { message: "Експортът се отключва, когато видео аватарът е готов." });
   const music = stored.document.music;
   const scenes = [];
+  // Layer media follows the scenes' own inputs; a file used the same way is sent once.
+  const extras: string[] = [], extraIndex = new Map<string, number>();
+  const extra = (key: string, objectKey: string) => {
+    if (!extraIndex.has(key)) { extraIndex.set(key, extras.length); extras.push(objectKey); }
+    return extraIndex.get(key)!;
+  };
+  const media = async (label: string, id: string, kinds: readonly string[]) => {
+    const asset = await e.DB.prepare(
+      `SELECT object_key,kind,mime,duration FROM media_assets WHERE id=? AND user_id=? AND status='ready' AND expires_at>? AND kind IN (${kinds.map(() => "?").join(",")})`,
+    )
+      .bind(id, user.id, now(), ...kinds)
+      .first<{ object_key: string; kind: string; mime: string; duration: number }>();
+    if (!asset) throw new HTTPException(400, { message: `${label}Файл от слоевете вече не е наличен или още се проверява. Заменете го или го премахнете.` });
+    return asset;
+  };
+  const overlays: any[] = [], texts: any[] = [];
   let offset = 0;
   for (const [i, scene] of stored.document.scenes.entries()) {
     const label = stored.document.scenes.length > 1 ? `Сцена ${i + 1}: ` : "";
@@ -118,7 +157,27 @@ async function renderPlan(e: Env, user: DbUser, projectId: string) {
     const captions = validDocument(saved ? await new Response(saved.body).json() : defaultCaptions, audio.duration);
     const settings = sceneTimeline(scene, music);
     const length = timelineLength(settings, audio.duration);
-    scenes.push({ scene, audio, video, captions, settings, offset, length });
+    let background: { color: string } | { input: number } | null = null;
+    if (scene.background?.type === "color") background = { color: scene.background.color };
+    if (scene.background?.type === "image") {
+      const asset = await media(label, scene.background.assetId, imageAssetKinds);
+      // A background is looped for its scene's length, so each scene gets its own input.
+      background = { input: extra(`background:${i}`, asset.object_key) };
+    }
+    for (const layer of scene.layers) {
+      if (layer.start >= length) continue;
+      const start = offset + layer.start, end = offset + Math.min(layer.end, length);
+      if (layer.type === "text") { texts.push({ ...layer, start, end }); continue; }
+      const asset = await media(label, layer.assetId, layer.type === "image" ? imageAssetKinds : [...imageAssetKinds, ...videoAssetKinds]);
+      const still = asset.mime.startsWith("image/");
+      if (layer.type === "broll" && !still && layer.trim >= asset.duration)
+        throw new HTTPException(400, { message: `${label}Началото на видео слоя е след края на клипа.` });
+      const input = extra(`media:${asset.object_key}`, asset.object_key);
+      overlays.push(layer.type === "image"
+        ? { kind: "image", input, start, end, position: layer.position, width: layer.width, opacity: layer.opacity }
+        : { kind: "broll", input, start, end, trim: still || layer.type !== "broll" ? 0 : layer.trim, still });
+    }
+    scenes.push({ scene, audio, video, captions, settings, offset, length, background });
     offset += length;
   }
   if (offset > MAX_PROJECT_SECONDS)
@@ -134,7 +193,8 @@ async function renderPlan(e: Env, user: DbUser, projectId: string) {
   // A one-scene project keeps pricing per generated video; a multi-scene project is priced as one video.
   const source = scenes.length === 1 ? scenes[0].scene.videoJobId! : projectId;
   const credits = await exportQuote(e, user.id, source, offset, true);
-  return { scenes, length: offset, credits, source, music, musicKey };
+  if (extras.length > 40) throw new HTTPException(400, { message: "Проектът използва твърде много файлове в слоевете (до 40)." });
+  return { scenes, length: offset, credits, source, music, musicKey, extras, overlays, texts };
 }
 studioProjects.get("/:id/render/quote", async (c) => {
   const plan = await renderPlan(c.env, c.get("user"), c.req.param("id"));
@@ -150,13 +210,16 @@ studioProjects.post("/:id/render", async (c) => {
   if (d.credits !== plan.credits)
     throw new HTTPException(409, { message: "Цената се промени. Обновете страницата." });
   const inputs = plan.scenes.flatMap((x) => [x.video.key, x.audio.audio_key]);
+  // Layer media follows the scenes' video/voice pairs; music is always last.
+  const first = inputs.length;
   const id = await createMediaTask(c.env, user, {
     kind: "export",
     source: plan.source,
     key: d.idempotencyKey,
     credits: plan.credits,
     payload: {
-      inputs: [...inputs, ...(plan.musicKey ? [plan.musicKey] : [])],
+      inputs: [...inputs, ...plan.extras, ...(plan.musicKey ? [plan.musicKey] : [])],
+      texts: plan.texts,
       // Frame size and fit come from the first scene; every scene keeps its own caption look.
       document: plan.scenes[0].captions,
       captions: plan.scenes.map((x) => ({ document: x.captions, offset: x.offset + x.settings.speechStart })),
@@ -167,7 +230,9 @@ studioProjects.post("/:id/render", async (c) => {
           tail: x.settings.tail,
           voiceVolume: x.settings.voiceVolume,
           speechDuration: x.audio.duration,
+          background: x.background && ("color" in x.background ? x.background : { input: first + x.background.input }),
         })),
+        layers: plan.overlays.map((o) => ({ ...o, input: first + o.input })),
         music: plan.music && {
           start: plan.music.start, volume: plan.music.volume, duck: plan.music.duck, fade: plan.music.fade,
           // Speech of every scene, on the final video's clock, so music ducks under all of it.

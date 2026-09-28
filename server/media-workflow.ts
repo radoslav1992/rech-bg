@@ -6,7 +6,8 @@ import {
 import type { Env } from "./types";
 import { now } from "./types";
 import { withDefaults } from "./config";
-import { captionAss, captionAssScenes, renderDimensions } from "./caption-ass";
+import { captionAss, captionAssScenes, renderDimensions, withTextLayers } from "./caption-ass";
+import { anchor } from "../shared/layers";
 import { defaultCaptions } from "../shared/captions";
 import { MB } from "../shared/media";
 import { videoFetch } from "./video-http";
@@ -153,9 +154,10 @@ export class MediaGeneration extends WorkflowEntrypoint<
         const timeline = task.kind === "export" && p.timeline ? p.timeline : null;
         // Tasks queued before multi-scene projects describe a single scene with top-level fields.
         const scenes: any[] | null = timeline ? timeline.scenes || [timeline] : null;
-        const ass = !p.document ? ""
+        const captions = !p.document ? ""
           : p.captions ? captionAssScenes(p.document, p.captions)
           : captionAss(p.document, scenes?.[0].speechStart || 0);
+        const ass = p.texts?.length ? withTextLayers(captions, p.texts, width, height) : captions;
         const request = {
           id,
           url: input(0),
@@ -172,8 +174,12 @@ export class MediaGeneration extends WorkflowEntrypoint<
                 tail: x.tail,
                 voice_volume: x.voiceVolume,
                 speech_duration: x.speechDuration,
+                background: x.background || null,
               })),
               music: timeline.music,
+              layers: (timeline.layers || []).map((l: any) => l.kind === "image"
+                ? { kind: "image", input: l.input, start: l.start, end: l.end, anchor: anchor(l.position), width: l.width, opacity: l.opacity }
+                : { kind: "broll", input: l.input, start: l.start, end: l.end, trim: l.trim, still: l.still }),
             },
           }),
         };

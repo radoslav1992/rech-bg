@@ -116,4 +116,62 @@ class RendererTest(unittest.TestCase):
             # The number of inputs must match the scenes (video + voice each, plus music).
             self.assertEqual(run(range(4), scenes, music)['status'], 'failed')
 
+    def test_timeline_layers_backgrounds_broll_and_overlays(self):
+        with tempfile.TemporaryDirectory() as directory:
+            d = Path(directory)
+            def make(name, *args):
+                subprocess.run(['ffmpeg','-nostdin','-v','error',*args,str(d/name)],check=True)
+            make('v0.mp4','-f','lavfi','-i','color=c=blue:s=320x180:d=1','-c:v','libx264','-threads','1')
+            make('a0.wav','-f','lavfi','-i','sine=frequency=330:duration=1')
+            make('v1.mp4','-f','lavfi','-i','color=c=yellow:s=200x200:d=1','-c:v','libx264','-threads','1')
+            make('a1.wav','-f','lavfi','-i','sine=frequency=440:duration=1')
+            make('bg.png','-f','lavfi','-i','color=c=0x00ff00:s=100x100','-frames:v','1')
+            make('still.png','-f','lavfi','-i','color=c=magenta:s=90x160','-frames:v','1')
+            make('clip.mp4','-f','lavfi','-i','color=c=cyan:s=320x180:d=2','-c:v','libx264','-threads','1')
+            make('logo.png','-f','lavfi','-i','color=c=white:s=64x64','-frames:v','1')
+            files = [d/'v0.mp4', d/'a0.wav', d/'v1.mp4', d/'a1.wav', d/'bg.png', d/'still.png', d/'clip.mp4', d/'logo.png']
+            class Opener:
+                def open(self, url, *args, **kwargs): return files[int(url.rsplit('/',1)[1])].open('rb')
+            base = 'https://rechbg.com/api/media-inputs/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/'
+            ass = ('[Script Info]\nScriptType: v4.00+\nPlayResX: 720\nPlayResY: 1280\n\n[V4+ Styles]\n'
+                   'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n'
+                   'Style: TB,Noto Sans,40,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,3,8,0,5,0,0,0,1\n\n'
+                   '[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n'
+                   'Dialogue: 0,0:00:00.00,0:00:02.00,TB,,0,0,0,,{\\an2\\pos(360,1216)\\fs60}Заглавие\n')
+            work = d / 'job'; work.mkdir()
+            job = {'dir': str(work), 'status': 'running'}
+            payload = {'operation': 'timeline', 'url': base + '0', 'urls': [base + str(i) for i in range(len(files))], 'width': 720, 'height': 1280,
+                       'ass': ass, 'fit': 'contain', 'timeline': {'music': None, 'scenes': [
+                           {'speech_start': 0, 'tail': 0, 'voice_volume': 1, 'speech_duration': 1.0, 'background': {'color': '#ff0000'}},
+                           {'speech_start': 0, 'tail': 0, 'voice_volume': 1, 'speech_duration': 1.0, 'background': {'input': 4}},
+                       ], 'layers': [
+                           {'kind': 'broll', 'input': 5, 'start': 0.2, 'end': 0.45, 'trim': 0, 'still': True},
+                           {'kind': 'broll', 'input': 6, 'start': 1.2, 'end': 1.5, 'trim': 0.5, 'still': False},
+                           {'kind': 'image', 'input': 7, 'start': 0, 'end': 2, 'anchor': [0, 0], 'width': 0.2, 'opacity': 1},
+                       ]}}
+            with patch.object(renderer.urllib.request, 'build_opener', return_value=Opener()):
+                renderer.process(job, payload)
+            self.assertEqual(job['status'], 'completed', job)
+            self.assertAlmostEqual(job['duration'], 2.0, places=2)
+            def pixel(t, x, y):
+                raw = subprocess.check_output(['ffmpeg','-nostdin','-v','error','-ss',str(t),'-i',job['file'],'-frames:v','1',
+                                               '-vf',f'format=rgb24,crop=1:1:{x}:{y}','-f','rawvideo','-pix_fmt','rgb24','-'])
+                return tuple(raw[:3])
+            def near(c, want): return all(abs(a - b) < 60 for a, b in zip(c, want))
+            self.assertTrue(near(pixel(0.1, 360, 300), (255, 0, 0)), 'colour background around the scene 1 video')
+            self.assertTrue(near(pixel(0.8, 360, 640), (0, 0, 255)), 'scene 1 video')
+            self.assertTrue(near(pixel(0.3, 360, 640), (255, 0, 255)), 'still B-roll fills the frame')
+            self.assertTrue(near(pixel(1.35, 360, 640), (0, 255, 255)), 'video B-roll')
+            self.assertTrue(near(pixel(1.7, 360, 150), (0, 255, 0)), 'image background around the scene 2 video (square video spans y 280-1000)')
+            self.assertTrue(near(pixel(1.7, 360, 640), (255, 255, 0)), 'scene 2 video')
+            self.assertTrue(near(pixel(0.8, 100, 100), (255, 255, 255)), 'logo overlay at the top left')
+            self.assertTrue(near(pixel(0.8, 360, 1221), (0, 0, 0)), 'text box at the bottom (8 px border below the text)')
+            self.assertTrue(near(pixel(0.8, 360, 1250), (255, 0, 0)), 'below the text box the background shows')
+            # Layer inputs must point at layer media, not at the scenes' own video/voice.
+            work2 = d / 'bad'; work2.mkdir(); bad = {'dir': str(work2), 'status': 'running'}
+            payload['timeline']['layers'] = [{'kind': 'image', 'input': 0, 'start': 0, 'end': 1, 'anchor': [0, 0], 'width': 0.2, 'opacity': 1}]
+            with patch.object(renderer.urllib.request, 'build_opener', return_value=Opener()):
+                renderer.process(bad, payload)
+            self.assertEqual(bad['status'], 'failed')
+
 if __name__ == '__main__': unittest.main()

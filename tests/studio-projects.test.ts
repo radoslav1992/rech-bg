@@ -138,9 +138,11 @@ describe("server timeline render", () => {
     expect(payload.inputs).toEqual([`audio/u/${video}.mp4`, `audio/u/${audio}.wav`, `media/u/${music}/original`]);
     expect(payload.document.words).toEqual(words);
     expect(payload.timeline).toEqual({
-      scenes: [{ speechStart: 1.5, tail: 2, voiceVolume: 0.9, speechDuration: 10 }],
+      scenes: [{ speechStart: 1.5, tail: 2, voiceVolume: 0.9, speechDuration: 10, background: null }],
       music: { start: -3, volume: 0.4, duck: true, fade: true, ranges: [[1.7, 2.3], [4.5, 5]] },
+      layers: [],
     });
+    expect(payload.texts).toEqual([]);
     expect(payload.captions).toEqual([{ document: expect.objectContaining({ words }), offset: 1.5 }]);
     // The same key returns the same task; a later edit does not change the queued render.
     await save(doc({ tail: 0 }), 1);
@@ -238,8 +240,8 @@ describe("multi-scene projects", () => {
     const payload = JSON.parse(task.payload);
     expect(payload.inputs).toEqual([`audio/u/${video}.mp4`, `audio/u/${audio}.wav`, `audio/u/${video2}.mp4`, `audio/u/${audio2}.wav`, `media/u/${music}/original`]);
     expect(payload.timeline.scenes).toEqual([
-      { speechStart: 1.5, tail: 2, voiceVolume: 0.9, speechDuration: 10 },
-      { speechStart: 0, tail: 1, voiceVolume: 1, speechDuration: 6 },
+      { speechStart: 1.5, tail: 2, voiceVolume: 0.9, speechDuration: 10, background: null },
+      { speechStart: 0, tail: 1, voiceVolume: 1, speechDuration: 6, background: null },
     ]);
     // Scene 2 starts at 13.5 s; its word at 0.5–1.5 s is speech at 14–15 s on the final clock.
     expect(payload.timeline.music.ranges).toEqual([[1.5, 2.5], [14, 15]]);
@@ -258,5 +260,67 @@ describe("multi-scene projects", () => {
     sqlite.prepare("UPDATE jobs SET duration=590 WHERE id=?").run(audio2);
     await save(twoScenes(), 1);
     expect(((await (await call(`/video-studio/projects/${project}/render/quote`)).json()) as any).error).toMatch(/10 минути/);
+  });
+});
+
+describe("scene layers and backgrounds", () => {
+  const image = crypto.randomUUID(), clip = crypto.randomUUID(), otherImage = crypto.randomUUID();
+  beforeEach(async () => {
+    const asset = sqlite.prepare("INSERT INTO media_assets(id,user_id,object_key,name,kind,mime,bytes,status,duration,created_at,expires_at) VALUES(?,?,?,?,?,?,1000,?,?,1,?)");
+    asset.run(image, "u", `media/u/${image}/original`, "Лого.png", "product", "image/png", "ready", 0, now() + 86400);
+    asset.run(clip, "u", `media/u/${clip}/original`, "Клип.mp4", "upload", "video/mp4", "ready", 12, now() + 86400);
+    sqlite.prepare("INSERT INTO media_limits VALUES('other',1000000000,30)").run();
+    asset.run(otherImage, "other", `media/other/${otherImage}/original`, "x.png", "product", "image/png", "ready", 0, now() + 86400);
+  });
+  const text = (changes = {}) => ({ id: crypto.randomUUID(), type: "text", start: 0, end: 3, text: "Ново: {лято}\nОферта", position: "bottom", size: 0.06, color: "#ffffff", box: "#111111", bold: true, ...changes });
+  const withLayers = (layers: any[], background: any = null) => doc({ layers, background } as any);
+  it("accepts the user's own images and clips and rejects other users' files, wrong kinds and reversed times", async () => {
+    const logo = { id: crypto.randomUUID(), type: "image", assetId: image, start: 0, end: 5, position: "top-right", width: 0.2, opacity: 0.8 };
+    const broll = { id: crypto.randomUUID(), type: "broll", assetId: clip, start: 4, end: 6, trim: 2 };
+    expect((await save(withLayers([text(), logo, broll], { type: "image", assetId: image }), 0)).status).toBe(200);
+    expect((await save(withLayers([{ ...logo, assetId: otherImage }]), 1)).status).toBe(400);
+    // A video cannot be an image overlay or a background.
+    expect((await save(withLayers([{ ...logo, assetId: clip }]), 1)).status).toBe(400);
+    expect((await save(withLayers([], { type: "image", assetId: clip }), 1)).status).toBe(400);
+    expect((await save(withLayers([text({ start: 3, end: 1 })]), 1)).status).toBe(400);
+    expect((await save(withLayers([], { type: "color", color: "red" }), 1)).status).toBe(400);
+  });
+  it("puts layers on the final clock and sends their media once, after the scenes' inputs", async () => {
+    const logo = { id: crypto.randomUUID(), type: "image", assetId: image, start: 0, end: 5, position: "top-right", width: 0.2, opacity: 0.8 };
+    const broll = { id: crypto.randomUUID(), type: "broll", assetId: clip, start: 4, end: 6, trim: 2 };
+    const still = { id: crypto.randomUUID(), type: "broll", assetId: image, start: 7, end: 8, trim: 0 };
+    const late = { ...text(), id: crypto.randomUUID(), start: 50, end: 60 };
+    await save(withLayers([text(), logo, broll, still, late], { type: "image", assetId: image }), 0);
+    expect((await call(`/video-studio/projects/${project}/render`, "POST", { idempotencyKey: crypto.randomUUID(), credits: 0 })).status).toBe(202);
+    const payload = JSON.parse((sqlite.prepare("SELECT payload FROM media_tasks").get() as any).payload);
+    // video, voice | background (looped, its own input) | image (overlay and still share one input) | clip | music
+    expect(payload.inputs).toEqual([`audio/u/${video}.mp4`, `audio/u/${audio}.wav`, `media/u/${image}/original`, `media/u/${image}/original`, `media/u/${clip}/original`, `media/u/${music}/original`]);
+    expect(payload.timeline.scenes[0].background).toEqual({ input: 2 });
+    expect(payload.timeline.layers).toEqual([
+      { kind: "image", input: 3, start: 0, end: 5, position: "top-right", width: 0.2, opacity: 0.8 },
+      { kind: "broll", input: 4, start: 4, end: 6, trim: 2, still: false },
+      { kind: "broll", input: 3, start: 7, end: 8, trim: 0, still: true },
+    ]);
+    // A layer starting after the scene ends is dropped; text becomes subtitle events.
+    expect(payload.texts.map((t: any) => t.start)).toEqual([0]);
+  });
+  it("explains a clip trimmed past its end and a missing layer file", async () => {
+    await save(withLayers([{ id: crypto.randomUUID(), type: "broll", assetId: clip, start: 1, end: 2, trim: 12 }]), 0);
+    expect(((await (await call(`/video-studio/projects/${project}/render/quote`)).json()) as any).error).toMatch(/след края на клипа/);
+    await save(withLayers([{ id: crypto.randomUUID(), type: "image", assetId: image, start: 1, end: 2, position: "center", width: 0.3, opacity: 1 }]), 1);
+    sqlite.prepare("UPDATE media_assets SET expires_at=1 WHERE id=?").run(image);
+    expect(((await (await call(`/video-studio/projects/${project}/render/quote`)).json()) as any).error).toMatch(/слоевете/);
+  });
+  it("writes text layers as positioned, escaped subtitle events under the captions", async () => {
+    const { captionAss, withTextLayers } = await import("../server/caption-ass");
+    const base = captionAss({ ...defaultCaptions, words: [{ text: "Здравей", start: 0, end: 1 }] });
+    const ass = withTextLayers(base, [text({ position: "top-left", box: null, bold: false }) as any, text() as any], 720, 1280);
+    expect(ass).toContain("Style: T,"); expect(ass).toContain("Style: TB,");
+    expect(ass).toContain("{\\an7\\pos(36,64)\\fs77\\b0");
+    expect(ass).toContain("{\\an2\\pos(360,1216)\\fs77\\b1");
+    // Braces cannot inject override tags; line breaks become \N.
+    expect(ass).toContain("Ново: ｛лято｝\\NОферта");
+    // Text events come before the captions, so captions are drawn on top.
+    expect(ass.indexOf("Ново")).toBeLessThan(ass.indexOf("Здравей"));
   });
 });

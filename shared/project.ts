@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { MAX_LEAD, MAX_TAIL, type TimelineSettings } from "./timeline";
 import { studioMaxChars } from "./studio";
+import { backgroundSchema, layerSchema, MAX_LAYERS } from "./layers";
 
 // A video studio project as stored on the server: small JSON that only references media
 // (recordings and videos by job ID, uploads by media asset ID). Captions stay per recording.
@@ -36,6 +37,10 @@ export const sceneSchema = z.object({
   speechStart: seconds(MAX_LEAD),
   tail: seconds(MAX_TAIL),
   voiceVolume: z.number().finite().min(0).max(1),
+  /** Text, image and B-roll layers over the avatar (see shared/layers.ts). */
+  layers: z.array(layerSchema).max(MAX_LAYERS).default([]),
+  /** Fills the frame around the avatar when framing leaves space; null = black. */
+  background: backgroundSchema.nullable().default(null),
 });
 export const musicSchema = z.object({
   assetId: z.uuid(),
@@ -58,7 +63,7 @@ export type ProjectDoc = z.infer<typeof projectDocSchema>;
 export function newScene(fields: Partial<ProjectScene> = {}): ProjectScene {
   return {
     id: crypto.randomUUID(), title: "", script: "", voice: null, history: [], audioFor: null,
-    audioJobId: null, videoJobId: null, portrait: null, speechStart: 0, tail: 0, voiceVolume: 1, ...fields,
+    audioJobId: null, videoJobId: null, portrait: null, speechStart: 0, tail: 0, voiceVolume: 1, layers: [], background: null, ...fields,
   };
 }
 /** Short, stable fingerprint of what a recording says (FNV-1a), to spot a recording older than its script. */
