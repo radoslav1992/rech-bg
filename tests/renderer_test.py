@@ -79,4 +79,41 @@ class RendererTest(unittest.TestCase):
             self.assertEqual(run({'speech_start': 11, 'tail': 0, 'voice_volume': 1, 'speech_duration': 1.0, 'music': None}, urls=2)['status'], 'failed')
             self.assertEqual(run({'speech_start': 0, 'tail': 0, 'voice_volume': 1, 'speech_duration': 1.0, 'music': {**music, 'volume': "1':eval=frame[x]"}})['status'], 'failed')
 
+    def test_timeline_joins_scenes_with_cuts_and_music_across_them(self):
+        with tempfile.TemporaryDirectory() as directory:
+            d = Path(directory)
+            def make(name, *args):
+                subprocess.run(['ffmpeg','-nostdin','-v','error',*args,str(d/name)],check=True)
+            # Two scenes of different shapes and lengths; the frame size comes from the payload.
+            make('v0.mp4','-f','lavfi','-i','color=c=blue:s=320x180:d=1','-f','lavfi','-i','sine=frequency=440:duration=1','-c:v','libx264','-threads','1','-c:a','aac')
+            make('a0.wav','-f','lavfi','-i','sine=frequency=330:duration=1')
+            make('v1.mp4','-f','lavfi','-i','color=c=red:s=180x320:d=2','-c:v','libx264','-threads','1')
+            make('a1.wav','-f','lavfi','-i','sine=frequency=550:duration=2')
+            make('music.wav','-f','lavfi','-i','sine=frequency=220:duration=10')
+            files = [d/'v0.mp4', d/'a0.wav', d/'v1.mp4', d/'a1.wav', d/'music.wav']
+            class Opener:
+                def open(self, url, *args, **kwargs): return files[int(url.rsplit('/',1)[1])].open('rb')
+            base = 'https://rechbg.com/api/media-inputs/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/'
+            ass = '[Script Info]\nScriptType: v4.00+\nPlayResX: 720\nPlayResY: 1280\n[Events]\nFormat: Layer,Start,End,Style,Text\n'
+            def run(urls, scenes, music):
+                work = d / f'job{len(list(d.iterdir()))}'; work.mkdir()
+                job = {'dir': str(work), 'status': 'running'}
+                payload = {'operation': 'timeline', 'url': base + '0', 'urls': [base + str(i) for i in urls], 'width': 720, 'height': 1280,
+                           'ass': ass, 'fit': 'cover', 'timeline': {'scenes': scenes, 'music': music}}
+                with patch.object(renderer.urllib.request, 'build_opener', return_value=Opener()):
+                    renderer.process(job, payload)
+                return job
+            scenes = [{'speech_start': 0.5, 'tail': 0, 'voice_volume': 1, 'speech_duration': 1.0},
+                      {'speech_start': 0, 'tail': 0.5, 'voice_volume': 0.8, 'speech_duration': 2.0}]
+            music = {'start': 0, 'volume': 0.3, 'duck': True, 'fade': True, 'ranges': [[0.5, 1.5], [1.5, 3.5]]}
+            job = run(range(5), scenes, music)
+            self.assertEqual(job['status'], 'completed', job)
+            self.assertAlmostEqual(job['duration'], 4.0, places=2)
+            info = json.loads(subprocess.check_output(['ffprobe','-v','error','-show_format','-show_streams','-of','json',job['file']]))
+            self.assertAlmostEqual(float(info['format']['duration']), 4.0, delta=0.15)
+            self.assertTrue(any(s['codec_type']=='audio' for s in info['streams']))
+            self.assertTrue(any(s.get('width')==720 and s.get('height')==1280 for s in info['streams']))
+            # The number of inputs must match the scenes (video + voice each, plus music).
+            self.assertEqual(run(range(4), scenes, music)['status'], 'failed')
+
 if __name__ == '__main__': unittest.main()

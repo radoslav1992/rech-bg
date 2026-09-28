@@ -9,7 +9,7 @@ import { createMediaTask, exportQuote, exportSource, validDocument } from "./med
 import { captionKey } from "./studio-speech";
 import { defaultCaptions } from "../shared/captions";
 import { MB } from "../shared/media";
-import { MAX_DOC_BYTES, projectDocSchema, sceneTimeline, type ProjectDoc } from "../shared/project";
+import { MAX_DOC_BYTES, MAX_PROJECT_SECONDS, projectDocSchema, sceneTimeline, type ProjectDoc } from "../shared/project";
 import { speechRanges, timelineLength } from "../shared/timeline";
 
 // Server-side video studio projects: the JSON document (scenes, timeline, media references) and its render.
@@ -33,15 +33,17 @@ const invalid = () => new HTTPException(400, { message: "Проектът съд
 async function checkReferences(e: Env, userId: string, projectId: string, next: ProjectDoc, previous: ProjectDoc | null) {
   const known = new Set<string>();
   for (const s of previous?.scenes || []) {
-    for (const id of [s.audioJobId, s.videoJobId, s.portrait?.type === "asset" ? s.portrait.id : null]) if (id) known.add(id);
+    for (const id of [s.audioJobId, s.videoJobId, s.portrait?.type === "asset" ? s.portrait.id : null, ...s.history]) if (id) known.add(id);
   }
   if (previous?.music) known.add(previous.music.assetId);
   const fresh = (id: string | null | undefined): id is string => !!id && !known.has(id);
+  if (new Set(next.scenes.map((s) => s.id)).size !== next.scenes.length) throw invalid();
   for (const s of next.scenes) {
     if (!s.audioJobId && s.videoJobId) throw invalid();
-    if (fresh(s.audioJobId)) {
+    for (const audioId of new Set([s.audioJobId, ...s.history])) {
+      if (!fresh(audioId)) continue;
       const audio = await e.DB.prepare("SELECT id FROM jobs WHERE id=? AND user_id=? AND project_id=? AND kind='audio'")
-        .bind(s.audioJobId, userId, projectId).first();
+        .bind(audioId, userId, projectId).first();
       if (!audio) throw invalid();
     }
     if (fresh(s.videoJobId) || (s.videoJobId && fresh(s.audioJobId))) {
@@ -98,18 +100,29 @@ async function renderPlan(e: Env, user: DbUser, projectId: string) {
   if (e.MEDIA_ENABLED !== "true" || !e.MEDIA_GENERATION || !e.MEDIA_RENDERER)
     throw new HTTPException(503, { message: "Експортът на сървъра временно не е достъпен." });
   const stored = await loadProjectDoc(e, user.id, projectId);
-  const scene = stored?.document.scenes[0];
-  if (!scene?.audioJobId || !scene.videoJobId)
-    throw new HTTPException(400, { message: "Експортът се отключва, когато видео аватарът е готов." });
-  const audio = await e.DB.prepare("SELECT audio_key,duration FROM jobs WHERE id=? AND user_id=? AND kind='audio' AND status='completed'")
-    .bind(scene.audioJobId, user.id)
-    .first<{ audio_key: string; duration: number }>();
-  if (!audio?.audio_key) throw invalid();
-  const video = await exportSource(e, user.id, scene.videoJobId);
-  if (!video.generated) throw invalid();
-  const saved = await e.AUDIO.get(captionKey(user.id, scene.audioJobId));
-  const captions = validDocument(saved ? await new Response(saved.body).json() : defaultCaptions, audio.duration);
-  const music = stored!.document.music;
+  if (!stored) throw new HTTPException(400, { message: "Експортът се отключва, когато видео аватарът е готов." });
+  const music = stored.document.music;
+  const scenes = [];
+  let offset = 0;
+  for (const [i, scene] of stored.document.scenes.entries()) {
+    const label = stored.document.scenes.length > 1 ? `Сцена ${i + 1}: ` : "";
+    if (!scene.audioJobId || !scene.videoJobId)
+      throw new HTTPException(400, { message: `${label}Експортът се отключва, когато видео аватарът е готов.` });
+    const audio = await e.DB.prepare("SELECT audio_key,duration FROM jobs WHERE id=? AND user_id=? AND kind='audio' AND status='completed'")
+      .bind(scene.audioJobId, user.id)
+      .first<{ audio_key: string; duration: number }>();
+    if (!audio?.audio_key) throw invalid();
+    const video = await exportSource(e, user.id, scene.videoJobId);
+    if (!video.generated) throw invalid();
+    const saved = await e.AUDIO.get(captionKey(user.id, scene.audioJobId));
+    const captions = validDocument(saved ? await new Response(saved.body).json() : defaultCaptions, audio.duration);
+    const settings = sceneTimeline(scene, music);
+    const length = timelineLength(settings, audio.duration);
+    scenes.push({ scene, audio, video, captions, settings, offset, length });
+    offset += length;
+  }
+  if (offset > MAX_PROJECT_SECONDS)
+    throw new HTTPException(400, { message: `Цялото видео трябва да е до ${MAX_PROJECT_SECONDS / 60} минути.` });
   let musicKey: string | null = null;
   if (music) {
     const asset = await e.DB.prepare("SELECT object_key FROM media_assets WHERE id=? AND user_id=? AND kind='audio' AND job_id IS NULL AND status='ready' AND expires_at>?")
@@ -118,10 +131,10 @@ async function renderPlan(e: Env, user: DbUser, projectId: string) {
     if (!asset) throw new HTTPException(400, { message: "Музиката вече не е налична. Качете я отново или я премахнете от монтажа." });
     musicKey = asset.object_key;
   }
-  const settings = sceneTimeline(scene, music);
-  const length = timelineLength(settings, audio.duration);
-  const credits = await exportQuote(e, user.id, scene.videoJobId, length, true);
-  return { scene, audio, video, captions, settings, length, credits, musicKey };
+  // A one-scene project keeps pricing per generated video; a multi-scene project is priced as one video.
+  const source = scenes.length === 1 ? scenes[0].scene.videoJobId! : projectId;
+  const credits = await exportQuote(e, user.id, source, offset, true);
+  return { scenes, length: offset, credits, source, music, musicKey };
 }
 studioProjects.get("/:id/render/quote", async (c) => {
   const plan = await renderPlan(c.env, c.get("user"), c.req.param("id"));
@@ -136,24 +149,30 @@ studioProjects.post("/:id/render", async (c) => {
   const plan = await renderPlan(c.env, user, c.req.param("id"));
   if (d.credits !== plan.credits)
     throw new HTTPException(409, { message: "Цената се промени. Обновете страницата." });
-  const { settings, audio, captions } = plan;
+  const inputs = plan.scenes.flatMap((x) => [x.video.key, x.audio.audio_key]);
   const id = await createMediaTask(c.env, user, {
     kind: "export",
-    source: plan.scene.videoJobId!,
+    source: plan.source,
     key: d.idempotencyKey,
     credits: plan.credits,
     payload: {
-      inputs: [plan.video.key, audio.audio_key, ...(plan.musicKey ? [plan.musicKey] : [])],
-      document: captions,
+      inputs: [...inputs, ...(plan.musicKey ? [plan.musicKey] : [])],
+      // Frame size and fit come from the first scene; every scene keeps its own caption look.
+      document: plan.scenes[0].captions,
+      captions: plan.scenes.map((x) => ({ document: x.captions, offset: x.offset + x.settings.speechStart })),
       duration: plan.length,
       timeline: {
-        speechStart: settings.speechStart,
-        tail: settings.tail,
-        voiceVolume: settings.voiceVolume,
-        speechDuration: audio.duration,
-        music: settings.music && {
-          start: settings.music.start, volume: settings.music.volume, duck: settings.music.duck, fade: settings.music.fade,
-          ranges: speechRanges(captions.words, settings, audio.duration),
+        scenes: plan.scenes.map((x) => ({
+          speechStart: x.settings.speechStart,
+          tail: x.settings.tail,
+          voiceVolume: x.settings.voiceVolume,
+          speechDuration: x.audio.duration,
+        })),
+        music: plan.music && {
+          start: plan.music.start, volume: plan.music.volume, duck: plan.music.duck, fade: plan.music.fade,
+          // Speech of every scene, on the final video's clock, so music ducks under all of it.
+          ranges: plan.scenes.flatMap((x) =>
+            speechRanges(x.captions.words, x.settings, x.audio.duration).map(([a, b]) => [x.offset + a, x.offset + b])),
         },
       },
     },
