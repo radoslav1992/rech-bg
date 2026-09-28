@@ -8,6 +8,7 @@ import {
   Link,
   useLocation,
   useNavigate,
+  useNavigationType,
 } from "react-router-dom";
 import {
   House,
@@ -55,13 +56,21 @@ const loading = <p className="loading-page" role="status">Зареждане…<
 /** Keeps the title and description current, and moves focus to the new page for screen readers. */
 function RouteChange() {
   const { pathname } = useLocation();
-  const first = useRef(true);
+  // Read through a ref: only a path change should re-run the effect (a query change must not scroll or refocus).
+  const type = useNavigationType();
+  const navigationType = useRef(type);
+  navigationType.current = type;
+  const previous = useRef<string | null | undefined>(undefined);
   useEffect(() => {
     const meta = pageMeta(pathname);
     document.title = meta.title;
     document.querySelector('meta[name="description"]')?.setAttribute("content", meta.description);
     window.scrollTo(0, 0);
-    if (first.current) { first.current = false; return; }
+    const first = previous.current === undefined, sameScreen = previous.current === meta.route;
+    previous.current = meta.route;
+    // Skip the first load, URL replacements (e.g. a saved project getting its id) and changes within one screen,
+    // so focus is never pulled out of an editor the user is working in.
+    if (first || sameScreen || navigationType.current === "REPLACE") return;
     const target = document.querySelector<HTMLElement>("main h1") || document.querySelector<HTMLElement>("main");
     if (target) {
       if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
