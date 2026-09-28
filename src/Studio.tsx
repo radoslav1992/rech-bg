@@ -254,6 +254,8 @@ export function Studio() {
   const selected = voices.find((v) => v.id === voice)!;
   return (
     <div className="studio-page">
+      {/* The visible title is an editable input; give the page a heading for screen readers. */}
+      <h1 className="sr-only">Аудио студио — {title || "нов проект"}</h1>
       <div className="studio-heading">
         <div>
           <Link to="/app/projects" className="breadcrumb">
