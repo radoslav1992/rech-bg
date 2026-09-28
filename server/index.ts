@@ -21,6 +21,7 @@ import { videos, videoInputs } from "./video";
 import { notifyVideo } from "./video-notifications";
 import { cleanupHeyGenAvatars } from "./video-heygen-avatar";
 import { jobStorage } from './media-storage';
+import { audioReserveBytes } from '../shared/media';
 import { mediaError } from './media';
 import { media, mediaInputs } from './media';
 import { maintainMedia } from './media-maintenance';
@@ -132,7 +133,7 @@ app.get("/api/voices/:id/sample", async (c) => {
 app.post("/api/contact", async (c) => {
   await rate(c, "contact", 5);
   const body = await c.req.json();
-  if (body.website) return c.json({ ok: true });
+  if (body && typeof body === "object" && body.website) return c.json({ ok: true });
   const d = z
     .object({
       name: z.string().trim().min(2).max(100),
@@ -180,10 +181,10 @@ const projectSchema = z.object({
   title: z.string().trim().min(1).max(120),
   mode: z.enum(["tts", "podcast", "voiceover", "studio"]),
   script: z.string().max(14000),
-  voice: z.string().refine((s) => !!voiceMap[s] || isStudioVoice(s)),
-  second_voice: z.string().refine((s) => !!voiceMap[s]),
+  voice: z.string().refine((s) => Object.hasOwn(voiceMap, s) || isStudioVoice(s)),
+  second_voice: z.string().refine((s) => Object.hasOwn(voiceMap, s)),
   pause_ms: z.number().int().min(0).max(1500).default(400),
-}).refine(p => p.mode === "studio" ? isStudioVoice(p.voice) && p.script.length <= 1500 : !!voiceMap[p.voice], { message: "Невалиден глас или сценарий за този тип проект." });
+}).refine(p => p.mode === "studio" ? isStudioVoice(p.voice) && p.script.length <= 1500 : Object.hasOwn(voiceMap, p.voice), { message: "Невалиден глас или сценарий за този тип проект." });
 app.get("/api/projects", async (c) => {
   const r = await c.env.DB.prepare(
     "SELECT p.*,j.id AS latest_job,j.status,j.duration FROM projects p LEFT JOIN jobs j ON j.id=(SELECT id FROM jobs WHERE project_id=p.id ORDER BY created_at DESC, rowid DESC LIMIT 1) WHERE p.user_id=? ORDER BY p.updated_at DESC LIMIT 100",
@@ -343,7 +344,7 @@ app.post("/api/generate", async (c) => {
         chars,
         now(),
         now(),
-      ), ...(await jobStorage(c.env,u,id,p.title,"audio"))
+      ), ...(await jobStorage(c.env,u,id,p.title,"audio",audioReserveBytes(turns.reduce((s, t) => s + t.text.length, 0), turns.length, p.pause_ms)))
       ]);
   } catch (e) {
     const msg = String(e);
@@ -667,7 +668,7 @@ app.post("/api/admin/voices/:id/sample/generate", async (c) => {
 });
 app.post("/api/admin/voices/:id/sample", async (c) => {
   const id = c.req.param("id");
-  if (!voiceMap[id] && !isStudioVoice(id))
+  if (!Object.hasOwn(voiceMap, id) && !isStudioVoice(id))
     throw new HTTPException(400, { message: "Невалиден глас." });
   const form = await c.req.formData();
   const studioVoice = isStudioVoice(id) ? await resolveStudioVoice(c.env, id) : null;
@@ -760,6 +761,9 @@ app.get("*", async (c) => {
 });
 app.onError((e, c) => {
   if (e instanceof HTTPException) return c.json({ error: e.message }, e.status);
+  // Malformed JSON bodies are client errors, not outages.
+  if (e instanceof SyntaxError && c.req.method !== "GET" && c.req.path.startsWith("/api/"))
+    return c.json({ error: "Невалидна заявка." }, 400);
   if (e instanceof z.ZodError)
     return c.json(
       {
@@ -803,20 +807,56 @@ async function drainCleanup(e: Env) {
     }
   }
 }
+/** Runs one maintenance stage so a failure in it cannot skip the others. */
+async function stage(name: string, work: () => Promise<unknown>) {
+  try {
+    await work();
+  } catch (error) {
+    console.error("Maintenance stage failed", { stage: name, error: (error as Error)?.name });
+  }
+}
 export async function maintenance(e: Env) {
-  if (e.MEDIA_ENABLED === "true") await maintainMedia(e);
-  await drainCleanup(e);
-  await e.DB.batch([
-    e.DB.prepare("DELETE FROM sessions WHERE expires_at<?").bind(now()),
-    e.DB.prepare("DELETE FROM auth_tokens WHERE expires_at<?").bind(now()),
-    e.DB.prepare("DELETE FROM rate_limits WHERE expires_at<?").bind(now()),
-    e.DB.prepare("DELETE FROM contact_messages WHERE created_at<?").bind(
-      now() - 365 * 86400,
-    ),
-    e.DB.prepare("DELETE FROM users WHERE verified=0 AND created_at<?").bind(
-      now() - 7 * 86400,
-    ),
-  ]);
+  if (e.MEDIA_ENABLED === "true") await stage("media", () => maintainMedia(e));
+  await stage("cleanup", () => drainCleanup(e));
+  await stage("expiry", () =>
+    e.DB.batch([
+      e.DB.prepare("DELETE FROM sessions WHERE expires_at<?").bind(now()),
+      e.DB.prepare("DELETE FROM auth_tokens WHERE expires_at<?").bind(now()),
+      e.DB.prepare("DELETE FROM rate_limits WHERE expires_at<?").bind(now()),
+      e.DB.prepare("DELETE FROM contact_messages WHERE created_at<?").bind(
+        now() - 365 * 86400,
+      ),
+      e.DB.prepare("DELETE FROM users WHERE verified=0 AND created_at<?").bind(
+        now() - 7 * 86400,
+      ),
+    ]),
+  );
+  await stage("jobs", () => reconcileJobs(e));
+  await stage("segments", async () => {
+    // Backstop for segment cleanup: each finished job is swept once, oldest first.
+    const old = (
+      await e.DB.prepare(
+        "SELECT id,user_id FROM jobs WHERE status IN ('failed','completed') AND updated_at<? AND NOT EXISTS(SELECT 1 FROM segment_sweeps WHERE job_id=jobs.id) ORDER BY updated_at LIMIT 100",
+      )
+        .bind(now() - 86400)
+        .all<any>()
+    ).results;
+    for (const j of old) {
+      await deletePrefix(e, `segments/${j.user_id}/${j.id}/`);
+      await e.DB.prepare("INSERT OR IGNORE INTO segment_sweeps(job_id) VALUES (?)").bind(j.id).run();
+    }
+  });
+  await stage("notifications", async () => {
+    // Read only matching metadata, keeping this compatible with audio-only rows.
+    const notifications = (await e.DB.prepare("SELECT id FROM jobs WHERE kind='video' AND status IN ('completed','failed') AND json_extract(video_meta,'$.notifyEmail')=1 AND json_extract(video_meta,'$.emailStatus') IS NULL ORDER BY created_at DESC LIMIT 50").all<{ id: string }>()).results;
+    for (const j of notifications) {
+      try { await notifyVideo(e, j.id); }
+      catch { console.error("Video notification reconciliation failed", { jobId: j.id }); }
+    }
+  });
+  await stage("heygen", () => cleanupHeyGenAvatars(e));
+}
+async function reconcileJobs(e: Env) {
   const jobs = (
     await e.DB.prepare(
       "SELECT * FROM jobs WHERE status IN ('queued','running') AND updated_at<? LIMIT 100",
@@ -851,21 +891,6 @@ export async function maintenance(e: Env) {
       }
     }
   }
-  const old = (
-    await e.DB.prepare(
-      "SELECT id,user_id FROM jobs WHERE status IN ('failed','completed') AND updated_at<? ORDER BY updated_at DESC LIMIT 100",
-    )
-      .bind(now() - 86400)
-      .all<any>()
-  ).results;
-  for (const j of old) await deletePrefix(e, `segments/${j.user_id}/${j.id}/`);
-  // Read only matching metadata, keeping this compatible with audio-only rows.
-  const notifications = (await e.DB.prepare("SELECT id FROM jobs WHERE kind='video' AND status IN ('completed','failed') AND json_extract(video_meta,'$.notifyEmail')=1 AND json_extract(video_meta,'$.emailStatus') IS NULL ORDER BY created_at DESC LIMIT 50").all<{ id: string }>()).results;
-  for (const j of notifications) {
-    try { await notifyVideo(e, j.id); }
-    catch { console.error("Video notification reconciliation failed", { jobId: j.id }); }
-  }
-  await cleanupHeyGenAvatars(e);
 }
 export default {
   fetch: (request: Request, env: Env, ctx: ExecutionContext) =>

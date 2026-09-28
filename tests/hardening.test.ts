@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Stripe from "stripe";
-import worker from "../server/index";
+import worker, { maintenance } from "../server/index";
 import { database } from "./helpers";
 import { hashPassword, sha } from "../server/security";
 import { allowance, webhook, RENEWAL_GRACE } from "../server/billing";
@@ -203,5 +203,56 @@ describe("account deletion", () => {
     sqlite.prepare("INSERT INTO users VALUES('u2','U@test.invalid','Нов','hash',1,NULL,2)").run();
     const again = await allowance(env, sqlite.prepare("SELECT * FROM users WHERE id='u2'").get() as any);
     expect(again).toMatchObject({ plan: "free", used: 700, limit: 1000 });
+  });
+});
+
+describe("request validation", () => {
+  it("answers malformed and null JSON with 400 instead of an outage", async () => {
+    expect((await call("/contact", "POST", "{not json")).status).toBe(400);
+    expect((await call("/contact", "POST", "null")).status).toBe(400);
+    expect((await call("/auth/login", "POST", "{")).status).toBe(400);
+  });
+  it("rejects prototype property names as voices", async () => {
+    const project = { title: "Т", mode: "tts", script: "Текст", voice: "constructor", second_voice: "boris" };
+    const auth = { Cookie: "rech_session=session" };
+    expect((await call("/projects", "POST", project, auth)).status).toBe(400);
+    expect((await call("/projects", "POST", { ...project, voice: "mila", second_voice: "toString" }, auth)).status).toBe(400);
+    expect((await call("/projects", "POST", { ...project, voice: "mila" }, auth)).status).toBe(200);
+  });
+});
+
+describe("storage reservation", () => {
+  it("sizes audio reservations by length and keeps the old ceiling", async () => {
+    const { audioReserveBytes, MB } = await import("../shared/media");
+    expect(audioReserveBytes(1000, 1, 400)).toBeLessThan(15 * MB);
+    // A 48 kHz recording spoken at 10 characters per second still fits.
+    expect(audioReserveBytes(1000, 1, 400)).toBeGreaterThan((1000 / 10) * 96000 + 44);
+    expect(audioReserveBytes(10000, 40, 1500)).toBe(96 * MB);
+  });
+});
+
+describe("hourly maintenance", () => {
+  it("keeps running later stages when an earlier one fails", async () => {
+    env.MEDIA_ENABLED = "true";
+    env.AUDIO = { list: async () => ({ objects: [], truncated: false }), head: async () => null, delete: async () => {} };
+    sqlite.exec("DROP TABLE media_job_history");
+    sqlite.prepare("INSERT INTO sessions VALUES('expired','u',1)").run();
+    await maintenance(env);
+    expect(console.error).toHaveBeenCalledWith("Maintenance stage failed", expect.objectContaining({ stage: "media" }));
+    expect(sqlite.prepare("SELECT COUNT(*) n FROM sessions WHERE token_hash='expired'").get()!.n).toBe(0);
+  });
+  it("sweeps each finished job's segments once and moves on to older jobs", async () => {
+    const listed: string[] = [];
+    env.AUDIO = { list: async ({ prefix }: any) => { listed.push(prefix); return { objects: [], truncated: false }; }, delete: async () => {} };
+    sqlite.exec("INSERT INTO projects VALUES('p','u','Т','tts','Т','mila','boris',400,1,1); INSERT INTO usage_windows(id,user_id,quota,used) VALUES('w','u',100000,0)");
+    const insert = sqlite.prepare("INSERT INTO jobs(id,user_id,project_id,window_id,idempotency_key,title,mode,script,voice,second_voice,pause_ms,chars,status,created_at,updated_at) VALUES(?,'u','p','w',?,'Т','tts','Т','mila','boris',0,1,'completed',1,?)");
+    for (let i = 0; i < 150; i++) insert.run("j" + i, "k" + i, 1000 + i);
+    await maintenance(env);
+    await maintenance(env);
+    const swept = listed.filter((p) => p.startsWith("segments/"));
+    expect(swept).toHaveLength(150);
+    expect(new Set(swept).size).toBe(150);
+    await maintenance(env);
+    expect(listed.filter((p) => p.startsWith("segments/"))).toHaveLength(150);
   });
 });

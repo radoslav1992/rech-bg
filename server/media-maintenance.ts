@@ -19,29 +19,43 @@ export async function maintainMedia(e: Env) {
       if (!user) continue;
       const plan = await mediaAllowance(e, user);
       // Existing files are counted even if they put an account over quota; no data is silently discarded.
-      await e.DB.batch([
-        e.DB.prepare(
-          "UPDATE media_limits SET max_bytes=MAX(max_bytes,?+COALESCE((SELECT SUM(bytes) FROM media_assets WHERE user_id=?),0)) WHERE user_id=?",
-        ).bind(obj.size, j.user_id, j.user_id),
-        e.DB.prepare(
-          "INSERT INTO media_assets(id,user_id,object_key,name,kind,mime,bytes,status,duration,job_id,created_at,expires_at) VALUES(?,?,?,?,?,?,?,'ready',?,?,?,?)",
-        ).bind(
-          j.id,
-          j.user_id,
-          key,
-          j.title,
-          j.kind === "video" ? "video" : "audio",
-          j.kind === "video" ? "video/mp4" : "audio/wav",
-          obj.size,
-          j.duration,
-          j.id,
-          j.created_at,
-          now() + plan.days * 86400,
-        ),
-        e.DB.prepare(
-          "UPDATE media_limits SET max_bytes=? WHERE user_id=?",
-        ).bind(plan.bytes, j.user_id),
-      ]);
+      try {
+        await e.DB.batch([
+          e.DB.prepare(
+            "UPDATE media_limits SET max_bytes=MAX(max_bytes,?+COALESCE((SELECT SUM(bytes) FROM media_assets WHERE user_id=?),0)) WHERE user_id=?",
+          ).bind(obj.size, j.user_id, j.user_id),
+          e.DB.prepare(
+            "INSERT INTO media_assets(id,user_id,object_key,name,kind,mime,bytes,status,duration,job_id,created_at,expires_at) VALUES(?,?,?,?,?,?,?,'ready',?,?,?,?)",
+          ).bind(
+            j.id,
+            j.user_id,
+            key,
+            j.title,
+            j.kind === "video" ? "video" : "audio",
+            j.kind === "video" ? "video/mp4" : "audio/wav",
+            obj.size,
+            j.duration,
+            j.id,
+            j.created_at,
+            now() + plan.days * 86400,
+          ),
+          e.DB.prepare(
+            "UPDATE media_limits SET max_bytes=? WHERE user_id=?",
+          ).bind(plan.bytes, j.user_id),
+        ]);
+      } catch (error) {
+        // An account at the 300-file limit can never index this recording. Record it so the same row
+        // does not fail every hour; the file stays available from its job. Other errors retry next run.
+        if (!String(error).includes("STORAGE_FULL")) {
+          console.error("Legacy media indexing will retry", { jobId: j.id });
+          continue;
+        }
+        await e.DB.prepare(
+          "INSERT OR IGNORE INTO media_job_history(job_id) VALUES(?)",
+        )
+          .bind(j.id)
+          .run();
+      }
     } else
       await e.DB.prepare(
         "INSERT OR IGNORE INTO media_job_history(job_id) VALUES(?)",

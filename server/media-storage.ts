@@ -8,6 +8,7 @@ export async function jobStorage(
   id: string,
   title: string,
   kind: "audio" | "video",
+  reserve = (kind === "video" ? 100 : 96) * MB,
 ) {
   if (e.MEDIA_ENABLED !== "true") return [];
   const a = await mediaAllowance(e, user);
@@ -21,7 +22,7 @@ export async function jobStorage(
       title,
       kind,
       kind === "video" ? "video/mp4" : "audio/wav",
-      (kind === "video" ? 100 : 96) * MB,
+      reserve,
       id,
       now(),
       now() + a.days * 86400,

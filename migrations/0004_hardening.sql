@@ -10,3 +10,5 @@ CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status,updated_at);
 CREATE INDEX IF NOT EXISTS media_assets_job ON media_assets(job_id);
 -- Token cleanup after password changes and resets.
 CREATE INDEX IF NOT EXISTS auth_tokens_user ON auth_tokens(user_id);
+-- Finished jobs whose leftover segments the hourly backstop already removed, so it moves on to older ones.
+CREATE TABLE IF NOT EXISTS segment_sweeps (job_id TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE);
