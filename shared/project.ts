@@ -2,6 +2,7 @@ import { z } from "zod";
 import { MAX_LEAD, MAX_TAIL, type TimelineSettings } from "./timeline";
 import { studioMaxChars } from "./studio";
 import { backgroundSchema, layerSchema, MAX_LAYERS } from "./layers";
+import { bumperSchema, captionLookSchema } from "./brand";
 
 // A video studio project as stored on the server: small JSON that only references media
 // (recordings and videos by job ID, uploads by media asset ID). Captions stay per recording.
@@ -54,6 +55,11 @@ export const projectDocSchema = z.object({
   version: z.literal(PROJECT_DOC_VERSION),
   scenes: z.array(sceneSchema).min(1).max(MAX_SCENES),
   music: musicSchema.nullable(),
+  /** Shown before the first and after the last scene in the final video. */
+  intro: bumperSchema.nullable().default(null),
+  outro: bumperSchema.nullable().default(null),
+  /** Caption look new recordings in this project start with (e.g. from the brand kit). */
+  captionLook: captionLookSchema.nullable().default(null),
 });
 export type ProjectPortrait = z.infer<typeof portraitSchema>;
 export type ProjectScene = z.infer<typeof sceneSchema>;
@@ -77,7 +83,7 @@ export function withScene(d: ProjectDoc, index: number, change: (s: ProjectScene
   return { ...d, scenes: d.scenes.map((s, i) => (i === index ? change(s) : s)) };
 }
 export function newProjectDoc(): ProjectDoc {
-  return { version: PROJECT_DOC_VERSION, scenes: [newScene()], music: null };
+  return { version: PROJECT_DOC_VERSION, scenes: [newScene()], music: null, intro: null, outro: null, captionLook: null };
 }
 /** Applies timeline editor settings to one scene and the project music. */
 export function withTimeline(d: ProjectDoc, next: TimelineSettings, musicAssetId?: string | null, index = 0): ProjectDoc {

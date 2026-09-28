@@ -174,4 +174,40 @@ class RendererTest(unittest.TestCase):
                 renderer.process(bad, payload)
             self.assertEqual(bad['status'], 'failed')
 
+    def test_timeline_intro_still_and_outro_clip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            d = Path(directory)
+            def make(name, *args):
+                subprocess.run(['ffmpeg','-nostdin','-v','error',*args,str(d/name)],check=True)
+            make('v0.mp4','-f','lavfi','-i','color=c=blue:s=320x180:d=1','-c:v','libx264','-threads','1')
+            make('a0.wav','-f','lavfi','-i','sine=frequency=330:duration=1')
+            make('intro.png','-f','lavfi','-i','color=c=magenta:s=100x100','-frames:v','1')
+            make('outro.mp4','-f','lavfi','-i','color=c=cyan:s=320x180:d=3','-f','lavfi','-i','sine=frequency=880:duration=3','-c:v','libx264','-threads','1','-c:a','aac')
+            files = [d/'v0.mp4', d/'a0.wav', d/'intro.png', d/'outro.mp4']
+            class Opener:
+                def open(self, url, *args, **kwargs): return files[int(url.rsplit('/',1)[1])].open('rb')
+            base = 'https://rechbg.com/api/media-inputs/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/'
+            work = d / 'job'; work.mkdir()
+            job = {'dir': str(work), 'status': 'running'}
+            payload = {'operation': 'timeline', 'url': base + '0', 'urls': [base + str(i) for i in range(4)], 'width': 720, 'height': 1280,
+                       'ass': '[Script Info]\nScriptType: v4.00+\nPlayResX: 720\nPlayResY: 1280\n[Events]\nFormat: Layer,Start,End,Style,Text\n', 'fit': 'contain', 'timeline': {
+                           'music': None, 'layers': [],
+                           'scenes': [{'speech_start': 0, 'tail': 0, 'voice_volume': 1, 'speech_duration': 1.0, 'background': None}],
+                           'intro': {'input': 2, 'seconds': 2, 'still': True},
+                           'outro': {'input': 3, 'seconds': 1.5, 'still': False}}}
+            with patch.object(renderer.urllib.request, 'build_opener', return_value=Opener()):
+                renderer.process(job, payload)
+            self.assertEqual(job['status'], 'completed', job)
+            self.assertAlmostEqual(job['duration'], 4.5, places=2)
+            info = json.loads(subprocess.check_output(['ffprobe','-v','error','-show_format','-show_streams','-of','json',job['file']]))
+            self.assertAlmostEqual(float(info['format']['duration']), 4.5, delta=0.15)
+            def pixel(t, x=360, y=640):
+                raw = subprocess.check_output(['ffmpeg','-nostdin','-v','error','-ss',str(t),'-i',job['file'],'-frames:v','1',
+                                               '-vf',f'format=rgb24,crop=1:1:{x}:{y}','-f','rawvideo','-pix_fmt','rgb24','-'])
+                return tuple(raw[:3])
+            def near(c, want): return all(abs(a - b) < 60 for a, b in zip(c, want))
+            self.assertTrue(near(pixel(1.0), (255, 0, 255)), 'intro image fills the frame')
+            self.assertTrue(near(pixel(2.5), (0, 0, 255)), 'the scene follows the intro')
+            self.assertTrue(near(pixel(3.8), (0, 255, 255)), 'outro clip, cut to its seconds')
+
 if __name__ == '__main__': unittest.main()

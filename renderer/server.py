@@ -86,8 +86,30 @@ def timeline(job, payload, origin, width, height, scale, ass, output):
         path = os.path.join(job['dir'], f'input{i}')
         download(url, path, origin); files.append(path)
     graph, video_labels, voice_labels, total = [], '', '', 0.0
-    loops = {}  # background images are looped for their scene's length
+    loops = {}  # still images (backgrounds, intro/outro) are looped for their segment's length
     fit_cover = payload.get('fit') == 'cover'
+    cover = f'scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},setsar=1'
+    def bumper(name, info):
+        """Intro/outro segment: a held still or a clip cut to `seconds`, with the clip's sound or silence."""
+        if not info: return '', '', 0.0
+        source, seconds = extra_input(info['input']), number(info['seconds'], 1, 15)
+        if info.get('still'):
+            if source in loops: raise ValueError('Input reused')
+            loops[source] = seconds
+            graph.append(f'[{source}:v:0]fps=30,{cover},format=yuv420p,trim=duration={seconds:.3f},setpts=PTS-STARTPTS[v{name}]')
+            has_audio = False
+        else:
+            graph.append(f'[{source}:v:0]trim=duration={seconds:.3f},setpts=PTS-STARTPTS,fps=30,{cover},format=yuv420p,'
+                         f'tpad=stop_mode=clone:stop_duration={seconds:.3f},trim=duration={seconds:.3f}[v{name}]')
+            has_audio = any(st.get('codec_type') == 'audio' for st in probe(files[source]).get('streams', []))
+        if has_audio:
+            graph.append(f'[{source}:a:0]aformat=sample_rates=48000:channel_layouts=stereo,apad,atrim=duration={seconds:.3f},asetpts=PTS-STARTPTS[a{name}]')
+        else:
+            graph.append(f'anullsrc=r=48000:cl=stereo,atrim=duration={seconds:.3f}[a{name}]')
+        return f'[v{name}]', f'[a{name}]', seconds
+    intro_v, intro_a, intro_s = bumper('intro', t.get('intro'))
+    outro_v, outro_a, outro_s = bumper('outro', t.get('outro'))
+    video_labels, voice_labels, total = intro_v, intro_a, intro_s
     for i, scene in enumerate(scenes):
         speech_start, tail = number(scene['speech_start'], 0, 10), number(scene['tail'], 0, 10)
         voice_volume, speech = number(scene['voice_volume'], 0, 1), number(scene['speech_duration'], 0.1, 600)
@@ -123,9 +145,11 @@ def timeline(job, payload, origin, width, height, scale, ass, output):
         graph.append(f'[{voice}]aformat=sample_rates=48000:channel_layouts=stereo,volume={voice_volume:.4f},adelay=delays={ms}:all=1,'
                      f'apad,atrim=duration={length:.3f},asetpts=PTS-STARTPTS[a{i}]')
         video_labels += f'[v{i}]'; voice_labels += f'[a{i}]'
-    total = round(total, 3)
+    video_labels += outro_v; voice_labels += outro_a
+    total = round(total + outro_s, 3)
     if total > 600: raise ValueError('Video too long')
-    graph.append(f'{video_labels}concat=n={len(scenes)}:v=1:a=0[base0]')
+    segments = len(scenes) + (1 if intro_v else 0) + (1 if outro_v else 0)
+    graph.append(f'{video_labels}concat=n={segments}:v=1:a=0[base0]')
     current = 'base0'
     # Layers on the final clock: B-roll cutaways and image overlays, then text and captions (ASS) on top.
     for j, layer in enumerate(layers):
@@ -153,7 +177,7 @@ def timeline(job, payload, origin, width, height, scale, ass, output):
             raise ValueError('Invalid layer')
         current = f'c{j}'
     graph.append(f'[{current}]ass={ass},format=yuv420p[v]')
-    graph.append(f'{voice_labels}concat=n={len(scenes)}:v=0:a=1[voice]')
+    graph.append(f'{voice_labels}concat=n={segments}:v=0:a=1[voice]')
     audio = '[voice]'
     if has_music:
         m = music_input

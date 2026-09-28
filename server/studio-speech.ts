@@ -4,12 +4,24 @@ import type { WorkflowStep } from "cloudflare:workers";
 import type { Env } from "./types";
 import { now } from "./types";
 import { wavHeader } from "./audio";
-import { alignmentWords, defaultCaptions } from "../shared/captions";
+import { alignmentWords, defaultCaptions, type CaptionWord } from "../shared/captions";
+import { projectDocSchema } from "../shared/project";
 import { stripTags, validateStudioScript } from "../shared/studio";
 
 import { resolveStudioVoice } from "./studio-voices";
 
 export const captionKey = (user: string, id: string) => `audio/${user}/${id}.captions.json`;
+/** A new recording's captions start with its project's caption look (brand kit or template), if any. */
+export async function initialCaptions(env: Env, job: any, words: CaptionWord[]) {
+  let look = {};
+  try {
+    const row = await env.DB.prepare("SELECT document FROM project_documents WHERE project_id=? AND user_id=?")
+      .bind(job.project_id, job.user_id).first<{ document: string }>();
+    const parsed = row && projectDocSchema.safeParse(JSON.parse(row.document));
+    if (parsed?.success && parsed.data.captionLook) look = parsed.data.captionLook;
+  } catch { /* The default look is always valid. */ }
+  return JSON.stringify({ ...defaultCaptions, ...look, words });
+}
 export async function runStudioSpeech(env: Env, job: any, step: WorkflowStep) {
   const key = `audio/${job.user_id}/${job.id}.wav`;
   await step.do("studio-speech-once", { retries: { limit: 0, delay: "5 seconds" }, timeout: "5 minutes" }, async () => {
@@ -31,7 +43,7 @@ export async function runStudioSpeech(env: Env, job: any, step: WorkflowStep) {
     audio.set(wavHeader(pcm.length, 24000)); audio.set(pcm, 44);
     const words = alignmentWords(result.normalizedAlignment || result.alignment);
     // Store timing first. A saved WAV is the durable marker that the paid call completed.
-    await env.AUDIO.put(captionKey(job.user_id, job.id), JSON.stringify({ ...defaultCaptions, words }), { httpMetadata: { contentType: "application/json" } });
+    await env.AUDIO.put(captionKey(job.user_id, job.id), await initialCaptions(env, job, words), { httpMetadata: { contentType: "application/json" } });
     await env.AUDIO.put(key, audio, { httpMetadata: { contentType: "audio/wav" }, customMetadata: { duration: String(pcm.length / 48000) } });
   });
   await step.do("studio-caption-timing", { retries: { limit: 0, delay: "5 seconds" }, timeout: "2 minutes" }, async () => {
@@ -49,7 +61,7 @@ export async function runStudioSpeech(env: Env, job: any, step: WorkflowStep) {
       }, { maxRetries: 0, timeoutInSeconds: 90 });
       const words = alignment.words.map(({ text, start, end }) => ({ text, start, end }));
       if (words.some(w => !Number.isFinite(w.start) || !Number.isFinite(w.end) || w.start < 0 || w.end <= w.start)) return;
-      await env.AUDIO.put(captionKey(job.user_id, job.id), JSON.stringify({ ...defaultCaptions, words }), { httpMetadata: { contentType: "application/json" } });
+      await env.AUDIO.put(captionKey(job.user_id, job.id), JSON.stringify({ ...document, words }), { httpMetadata: { contentType: "application/json" } });
     } catch { console.warn("Studio caption timing unavailable", { jobId: job.id }); }
   });
   await step.do("complete-studio-speech", async () => {

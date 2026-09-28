@@ -140,7 +140,7 @@ describe("server timeline render", () => {
     expect(payload.timeline).toEqual({
       scenes: [{ speechStart: 1.5, tail: 2, voiceVolume: 0.9, speechDuration: 10, background: null }],
       music: { start: -3, volume: 0.4, duck: true, fade: true, ranges: [[1.7, 2.3], [4.5, 5]] },
-      layers: [],
+      layers: [], intro: null, outro: null,
     });
     expect(payload.texts).toEqual([]);
     expect(payload.captions).toEqual([{ document: expect.objectContaining({ words }), offset: 1.5 }]);
@@ -322,5 +322,74 @@ describe("scene layers and backgrounds", () => {
     expect(ass).toContain("Ново: ｛лято｝\\NОферта");
     // Text events come before the captions, so captions are drawn on top.
     expect(ass.indexOf("Ново")).toBeLessThan(ass.indexOf("Здравей"));
+  });
+});
+
+describe("brand kit and templates", () => {
+  const logo = crypto.randomUUID(), sting = crypto.randomUUID(), foreign = crypto.randomUUID();
+  beforeEach(() => {
+    const asset = sqlite.prepare("INSERT INTO media_assets(id,user_id,object_key,name,kind,mime,bytes,status,duration,created_at,expires_at) VALUES(?,?,?,?,?,?,1000,'ready',?,1,?)");
+    asset.run(logo, "u", `media/u/${logo}/original`, "Лого.png", "product", "image/png", 0, now() + 86400);
+    asset.run(sting, "u", `media/u/${sting}/original`, "Интро.mp4", "upload", "video/mp4", 4, now() + 86400);
+    sqlite.prepare("INSERT INTO media_limits VALUES('other',1000000000,30)").run();
+    asset.run(foreign, "other", `media/other/${foreign}/original`, "x.png", "product", "image/png", 0, now() + 86400);
+  });
+  const kit = (changes = {}) => ({
+    name: "Реч БГ", logo: { assetId: logo, position: "top-right", width: 0.2, opacity: 0.9 },
+    colors: { primary: "#5667f5", secondary: "#111111", text: "#ffffff" },
+    captionLook: { style: "neon", format: "1:1", position: "top", enabled: true, accent: "#ff00aa" },
+    intro: { assetId: sting, seconds: 3 }, outro: { assetId: logo, seconds: 2 }, ...changes,
+  });
+  it("returns a default kit, saves the user's own files and rejects other users' files", async () => {
+    const empty = await (await call("/video-studio/brand")).json() as any;
+    expect(empty.kit).toMatchObject({ logo: null, intro: null, colors: { primary: "#5667f5" } });
+    expect((await call("/video-studio/brand", "PUT", kit())).status).toBe(200);
+    expect((await (await call("/video-studio/brand")).json() as any).kit.captionLook.style).toBe("neon");
+    expect((await call("/video-studio/brand", "PUT", kit({ logo: { assetId: foreign, position: "top", width: 0.2, opacity: 1 } }))).status).toBe(400);
+    // A clip is not a logo.
+    expect((await call("/video-studio/brand", "PUT", kit({ logo: { assetId: sting, position: "top", width: 0.2, opacity: 1 } }))).status).toBe(400);
+    expect((await call("/video-studio/brand", "GET", undefined, "o")).status).toBe(200);
+    expect(((await (await call("/video-studio/brand", "GET", undefined, "o")).json()) as any).kit.logo).toBeNull();
+  });
+  it("saves a template without recordings and starts a new project from it with fresh scene IDs", async () => {
+    await save({ ...doc(), captionLook: kit().captionLook, intro: kit().intro } as any, 0);
+    expect((await call("/video-studio/templates", "POST", { projectId: project, name: "Реклама" })).status).toBe(201);
+    expect((await call("/video-studio/templates", "POST", { projectId: project, name: "x" }, "o")).status).toBe(404);
+    const list = await (await call("/video-studio/templates")).json() as any;
+    expect(list.templates).toEqual([expect.objectContaining({ name: "Реклама", scenes: 1, intro: true, music: true })]);
+    const stored = JSON.parse((sqlite.prepare("SELECT document FROM studio_templates").get() as any).document);
+    expect(stored.scenes[0]).toMatchObject({ audioJobId: null, videoJobId: null, history: [], audioFor: null, speechStart: 1.5 });
+    const r = await call(`/video-studio/templates/${list.templates[0].id}/use`, "POST", { title: "Нова реклама" });
+    expect(r.status).toBe(201);
+    const { id } = await r.json() as any;
+    expect(sqlite.prepare("SELECT title,mode FROM projects WHERE id=?").get(id)).toEqual({ title: "Нова реклама", mode: "studio" });
+    const created = await (await call(`/video-studio/projects/${id}/document`)).json() as any;
+    expect(created.revision).toBe(1);
+    expect(created.document.scenes[0].id).not.toBe(stored.scenes[0].id);
+    expect(created.document).toMatchObject({ intro: { assetId: sting }, captionLook: { style: "neon" }, music: { assetId: music } });
+    expect((await call(`/video-studio/templates/${list.templates[0].id}/use`, "POST", { title: "x" }, "o")).status).toBe(404);
+    expect((await call(`/video-studio/templates/${list.templates[0].id}`, "DELETE", undefined, "o")).status).toBe(200);
+    expect(sqlite.prepare("SELECT COUNT(*) n FROM studio_templates").get()!.n).toBe(1);
+  });
+  it("wraps the final video in the intro and outro and shifts everything after the intro", async () => {
+    await env.AUDIO.put(`audio/u/${audio}.captions.json`, JSON.stringify({ ...defaultCaptions, words: [{ text: "Здравей", start: 0.2, end: 0.8 }] }));
+    await save({ ...doc(), intro: { assetId: sting, seconds: 10 }, outro: { assetId: logo, seconds: 2 } } as any, 0);
+    const quote = await (await call(`/video-studio/projects/${project}/render/quote`)).json() as any;
+    // The 4-second clip caps the intro: 4 + 13.5 + 2.
+    expect(quote.length).toBe(19.5);
+    await call(`/video-studio/projects/${project}/render`, "POST", { idempotencyKey: crypto.randomUUID(), credits: quote.credits });
+    const payload = JSON.parse((sqlite.prepare("SELECT payload FROM media_tasks").get() as any).payload);
+    expect(payload.timeline.intro).toEqual({ input: 2, seconds: 4, still: false });
+    expect(payload.timeline.outro).toEqual({ input: 3, seconds: 2, still: true });
+    expect(payload.captions[0].offset).toBe(5.5);
+    expect(payload.timeline.music.ranges).toEqual([[5.7, 6.3]]);
+  });
+  it("starts a new recording's captions with the project's caption look", async () => {
+    const { initialCaptions } = await import("../server/studio-speech");
+    await save({ ...doc(), captionLook: kit().captionLook } as any, 0);
+    const captions = JSON.parse(await initialCaptions(env, { project_id: project, user_id: "u" }, [{ text: "Здравей", start: 0, end: 1 }]));
+    expect(captions).toMatchObject({ style: "neon", format: "1:1", position: "top", accent: "#ff00aa", words: [{ text: "Здравей" }] });
+    const plain = JSON.parse(await initialCaptions(env, { project_id: "tts-project", user_id: "u" }, []));
+    expect(plain).toEqual({ ...defaultCaptions, words: [] });
   });
 });

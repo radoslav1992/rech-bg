@@ -35,7 +35,7 @@ export const layerAssets = (s: ProjectDoc["scenes"][number]) => [
   ...s.layers.flatMap((l) => (l.type === "text" ? [] : [`${l.type}:${l.assetId}`])),
   ...(s.background?.type === "image" ? [`background:${s.background.assetId}`] : []),
 ];
-async function ownedMedia(e: Env, userId: string, id: string, kinds: readonly string[], statuses: string[]) {
+export async function ownedMedia(e: Env, userId: string, id: string, kinds: readonly string[], statuses: string[]) {
   return e.DB.prepare(
     `SELECT id,object_key,kind,mime,duration FROM media_assets WHERE id=? AND user_id=? AND kind IN (${kinds.map(() => "?").join(",")}) AND status IN (${statuses.map(() => "?").join(",")})`,
   )
@@ -49,7 +49,12 @@ async function checkReferences(e: Env, userId: string, projectId: string, next: 
     for (const id of [s.audioJobId, s.videoJobId, s.portrait?.type === "asset" ? s.portrait.id : null, ...s.history, ...layerAssets(s)]) if (id) known.add(id);
   }
   if (previous?.music) known.add(previous.music.assetId);
+  for (const b of [previous?.intro, previous?.outro]) if (b) known.add(`bumper:${b.assetId}`);
   const fresh = (id: string | null | undefined): id is string => !!id && !known.has(id);
+  // Intro and outro: an image, or a clip that may still be under its automatic check.
+  for (const b of [next.intro, next.outro])
+    if (b && fresh(`bumper:${b.assetId}`) && !(await ownedMedia(e, userId, b.assetId, [...imageAssetKinds, ...videoAssetKinds], ["ready", "checking"])))
+      throw invalid();
   if (new Set(next.scenes.map((s) => s.id)).size !== next.scenes.length) throw invalid();
   for (const s of next.scenes) {
     if (!s.audioJobId && s.videoJobId) throw invalid();
@@ -142,7 +147,18 @@ async function renderPlan(e: Env, user: DbUser, projectId: string) {
     return asset;
   };
   const overlays: any[] = [], texts: any[] = [];
-  let offset = 0;
+  // Intro and outro: an image held for its seconds, or a clip cut to them; scenes start after the intro.
+  const bumper = async (b: ProjectDoc["intro"], label: string) => {
+    if (!b) return null;
+    const asset = await media(label, b.assetId, [...imageAssetKinds, ...videoAssetKinds]);
+    const still = asset.mime.startsWith("image/");
+    const seconds = Math.round((still ? b.seconds : Math.min(b.seconds, asset.duration)) * 100) / 100;
+    // Each bumper is its own input: a still is looped for exactly its length.
+    return { input: extra(`${label}:${asset.object_key}`, asset.object_key), seconds, still };
+  };
+  const intro = await bumper(stored.document.intro, "Интро: ");
+  const outro = await bumper(stored.document.outro, "Финал: ");
+  let offset = intro?.seconds || 0;
   for (const [i, scene] of stored.document.scenes.entries()) {
     const label = stored.document.scenes.length > 1 ? `Сцена ${i + 1}: ` : "";
     if (!scene.audioJobId || !scene.videoJobId)
@@ -180,6 +196,7 @@ async function renderPlan(e: Env, user: DbUser, projectId: string) {
     scenes.push({ scene, audio, video, captions, settings, offset, length, background });
     offset += length;
   }
+  offset += outro?.seconds || 0;
   if (offset > MAX_PROJECT_SECONDS)
     throw new HTTPException(400, { message: `Цялото видео трябва да е до ${MAX_PROJECT_SECONDS / 60} минути.` });
   let musicKey: string | null = null;
@@ -194,7 +211,7 @@ async function renderPlan(e: Env, user: DbUser, projectId: string) {
   const source = scenes.length === 1 ? scenes[0].scene.videoJobId! : projectId;
   const credits = await exportQuote(e, user.id, source, offset, true);
   if (extras.length > 40) throw new HTTPException(400, { message: "Проектът използва твърде много файлове в слоевете (до 40)." });
-  return { scenes, length: offset, credits, source, music, musicKey, extras, overlays, texts };
+  return { scenes, length: offset, credits, source, music, musicKey, extras, overlays, texts, intro, outro };
 }
 studioProjects.get("/:id/render/quote", async (c) => {
   const plan = await renderPlan(c.env, c.get("user"), c.req.param("id"));
@@ -233,6 +250,8 @@ studioProjects.post("/:id/render", async (c) => {
           background: x.background && ("color" in x.background ? x.background : { input: first + x.background.input }),
         })),
         layers: plan.overlays.map((o) => ({ ...o, input: first + o.input })),
+        intro: plan.intro && { ...plan.intro, input: first + plan.intro.input },
+        outro: plan.outro && { ...plan.outro, input: first + plan.outro.input },
         music: plan.music && {
           start: plan.music.start, volume: plan.music.volume, duck: plan.music.duck, fade: plan.music.fade,
           // Speech of every scene, on the final video's clock, so music ducks under all of it.
