@@ -43,7 +43,7 @@ export function AvatarLibraryPicker({ selectedId = "", disabled = false, onSelec
   return <div className="avatar-library-picker">
     <div className="avatar-library-heading"><h3><Users size={19}/> Готови аватари</h3><span>{avatars.length} лица</span></div>
     <p>Изберете синтетичен аватар за вашата история. Изборът е безплатен; аудиото, видеото и продуктовите варианти използват обичайните кредити. Гласът се избира отделно.</p>
-    {error && <Notice>{error} <button type="button" className="text-link" disabled={!!pending} onClick={() => setAttempt(n => n + 1)}>Обнови библиотеката</button></Notice>}
+    {error && <Notice error>{error} <button type="button" className="text-link" disabled={!!pending} onClick={() => setAttempt(n => n + 1)}>Обнови библиотеката</button></Notice>}
     {!loaded && !error && <p role="status">Зареждаме аватарите…</p>}
     {loaded && <>
       <div className="avatar-library-filters"><label><Search size={16}/><input aria-label="Търсете аватар" placeholder="Име или описание…" value={search} onChange={e => setSearch(e.target.value)}/></label><select aria-label="Стил на аватара" value={category} onChange={e => setCategory(e.target.value)}><option value="">Всички стилове</option>{Object.entries(avatarCategories).map(([id, label]) => <option value={id} key={id}>{label}</option>)}</select></div>
@@ -72,7 +72,7 @@ export function AvatarLibraryAdmin() {
   return <section className="settings-card avatar-library-admin">
     <h2><Users size={21}/> Библиотека с аватари</h2>
     <p>Добавяйте синтетични лица, които всички потребители могат да използват във видео и с продукти. Скритите аватари могат да бъдат възстановени. Промените не засягат вече избрани копия и готови видеа.</p>
-    {error && <Notice>{error}</Notice>}
+    {error && <Notice error>{error}</Notice>}
     {!loaded && <Button className="btn" busy={busy} onClick={() => void act(load)}>Зареди библиотеката</Button>}
     <fieldset disabled={busy}>
       <div className="avatar-admin-list">{avatars.map(a => <div key={a.id} className={a.active ? "" : "is-hidden"}>

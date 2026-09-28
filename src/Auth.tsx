@@ -243,7 +243,7 @@ export function AuthPage({ mode }: { mode: string }) {
                 )}
               </>
             )}
-            {message && <Notice good={good}>{message}</Notice>}
+            {message && <Notice good={good} error={!good}>{message}</Notice>}
             {!good || ["login", "register"].includes(mode) ? (
               <Button busy={busy} className="btn dark full" type="submit">
                 {

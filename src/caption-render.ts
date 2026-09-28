@@ -134,9 +134,9 @@ export function drawCaptions(ctx: CanvasRenderingContext2D, width: number, heigh
   ctx.restore();
 }
 export async function renderCaptionedVideo(url: string, document: CaptionDocument, onProgress: (progress: number) => void, signal: AbortSignal) {
-  const { Input, UrlSource, ALL_FORMATS, Output, BufferTarget, Mp4OutputFormat, Conversion } = await import("mediabunny");
+  const { Input, UrlSource, MP4, QTFF, WEBM, Output, BufferTarget, Mp4OutputFormat, Conversion } = await import("mediabunny");
   const [width, height] = frameSize(document.format, document.resolution);
-  const input = new Input({ source: new UrlSource(url), formats: ALL_FORMATS });
+  const input = new Input({ source: new UrlSource(url), formats: [MP4, QTFF, WEBM] });
   const target = new BufferTarget();
   const output = new Output({ format: new Mp4OutputFormat(), target });
   const canvas = window.document.createElement("canvas"); canvas.width = width; canvas.height = height;

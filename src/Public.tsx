@@ -22,6 +22,10 @@ import {
   Notice,
   type Voice,
 } from "./lib";
+/** In the app shell the page already sits inside the workspace <main>, so avoid a nested landmark. */
+function Page({ inApp, ...props }: { inApp: boolean; className: string; children: React.ReactNode }) {
+  return inApp ? <div {...props} /> : <main {...props} />;
+}
 export function PublicLayout() {
   const [open, setOpen] = useState(false);
   const { user } = useAuth();
@@ -152,13 +156,13 @@ export function Pricing({ inApp = false }: { inApp?: boolean }) {
     }
   };
   return (
-    <main className={inApp ? "app-page" : "container section pricing-page"}>
+    <Page inApp={inApp} className={inApp ? "app-page" : "container section pricing-page"}>
       <div className={inApp ? "page-heading" : "center-heading"}>
         <span className="eyebrow">МЯСТО ЗА ВСЯКА ИДЕЯ</span>
         <h1>{inApp ? "Вашият абонамент" : "Добър глас. Ясна цена."}</h1>
         <p>Изберете място за вашите думи. Сменете плана, когато сте готови.</p>
       </div>
-      {error && <Notice>{error}</Notice>}
+      {error && <Notice error>{error}</Notice>}
       {inApp && params.has("success") && (
         <Notice good={user?.hasSubscription}>
           Плащането се проверява. Планът се обновява автоматично след
@@ -246,7 +250,7 @@ export function Pricing({ inApp = false }: { inApp?: boolean }) {
           лимита — генерацията спира до подновяване или промяна на плана.
         </p>
       </div>
-    </main>
+    </Page>
   );
 }
 export function Voices({ inApp = false }: { inApp?: boolean }) {
@@ -264,7 +268,7 @@ export function Voices({ inApp = false }: { inApp?: boolean }) {
       (v.name + " " + v.tone).toLowerCase().includes(query.toLowerCase()),
   );
   return (
-    <main className={inApp ? "app-page" : "container section"}>
+    <Page inApp={inApp} className={inApp ? "app-page" : "container section"}>
       <div className="page-heading">
         <span className="eyebrow">30 ГЛАСА. БЕЗБРОЙ ИСТОРИИ.</span>
         <h1>Намерете вашето звучене.</h1>
@@ -278,6 +282,7 @@ export function Voices({ inApp = false }: { inApp?: boolean }) {
           {["Всички", "Женски", "Мъжки"].map((f) => (
             <button
               className={f === filter ? "active" : ""}
+              aria-pressed={f === filter}
               key={f}
               onClick={() => setFilter(f)}
             >
@@ -313,7 +318,7 @@ export function Voices({ inApp = false }: { inApp?: boolean }) {
         Имената обозначават синтетични гласове. Описанията са ориентировъчни;
         проверете звученето с вашия текст. Примерите предстои да бъдат качени.
       </p>
-    </main>
+    </Page>
   );
 }
 export function About() {
@@ -476,7 +481,7 @@ export function Contact() {
           Използваме данните само за отговор на запитването.{" "}
           <Link to="/privacy">Поверителност</Link>
         </p>
-        {message && <Notice good={good}>{message}</Notice>}
+        {message && <Notice good={good} error={!good}>{message}</Notice>}
         <Button busy={busy} className="btn dark" type="submit">
           Изпратете съобщение <ArrowUpRight size={17} />
         </Button>

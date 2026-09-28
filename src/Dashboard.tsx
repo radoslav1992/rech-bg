@@ -61,11 +61,11 @@ export function Dashboard() {
           Нов запис
         </Link>
       </div>
-      {error && <Notice>{error}</Notice>}
+      {error && <Notice error>{error}</Notice>}
       <section id="activity" className="background-recordings">
         <div className="sub-heading"><h2>Вашите записи</h2><span>Обновяват се автоматично</span></div>
         <p>Не е нужно да чакате тук. Записите се създават и когато затворите приложението.</p>
-        {jobsError && <Notice>{jobsError}</Notice>}
+        {jobsError && <Notice error>{jobsError}</Notice>}
         {jobs.length ? [...jobs.filter(j => ["queued", "running"].includes(j.status)), ...jobs.filter(j => !["queued", "running"].includes(j.status)).slice(0, 5)].map(j => <article className="background-recording" key={j.id}>
           <div><strong>{j.title}</strong><small>{j.kind === "video" ? "Видео" : "Аудио"} · {new Date(j.created_at * 1000).toLocaleString("bg-BG")}</small></div>
           <span className={"status " + j.status}>{jobStatus(j)}</span>
@@ -250,7 +250,7 @@ export function Projects() {
           Нов проект
         </Link>
       </div>
-      {error && <Notice>{error}</Notice>}
+      {error && <Notice error>{error}</Notice>}
       <div className="filter-bar">
         <div className="segmented">
           {[
@@ -263,6 +263,7 @@ export function Projects() {
             <button
               key={id}
               className={mode === id ? "active" : ""}
+              aria-pressed={mode === id}
               onClick={() => setMode(id)}
             >
               {label}

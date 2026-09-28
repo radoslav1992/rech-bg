@@ -58,11 +58,25 @@ export function useMediaLibrary() {
       live.current = false;
     };
   }, [reload]);
+  // Poll only while something is processing and the tab is visible; otherwise refresh on return or job changes.
+  const busy =
+    !!data &&
+    (data.tasks.some((t) => t.status === "queued" || t.status === "running") ||
+      data.assets.some((a) => a.status === "uploading" || a.status === "checking"));
   useEffect(() => {
     if (!enabled) return;
-    const id = setInterval(() => void reload(), 6000);
-    return () => clearInterval(id);
-  }, [enabled, reload]);
+    const tick = () => {
+      if (!document.hidden) void reload();
+    };
+    const id = busy ? setInterval(tick, 6000) : undefined;
+    document.addEventListener("visibilitychange", tick);
+    window.addEventListener("rech:jobs-changed", tick);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", tick);
+      window.removeEventListener("rech:jobs-changed", tick);
+    };
+  }, [enabled, busy, reload]);
   return { data, error, enabled, reload };
 }
 export async function uploadMedia(
@@ -126,7 +140,7 @@ function TaskList({ tasks }: { tasks: MediaTask[] }) {
           </span>
           <strong>{mediaPhase[t.phase] || t.phase}</strong>
           <small>{new Date(t.created_at * 1000).toLocaleString("bg")}</small>
-          {t.error && <Notice>{t.error}</Notice>}
+          {t.error && <Notice error>{t.error}</Notice>}
         </div>
       ))}
     </div>
@@ -195,7 +209,7 @@ export function BackgroundExport({
           готовия MP4. Настройките се запазват като отделна версия.
         </p>
       </div>
-      {(error || loadError) && <Notice>{error || loadError}</Notice>}
+      {(error || loadError) && <Notice error>{error || loadError}</Notice>}
       <Button
         className="btn primary"
         busy={busy}
@@ -326,7 +340,7 @@ export function ProductAvatarPanel({
         Изберете готов аватар или качете портрет, след това добавете снимка на продукта. Създайте няколко композиции и
         изберете една за говорещото видео.
       </p>
-      {(error || loadError) && <Notice>{error || loadError}</Notice>}
+      {(error || loadError) && <Notice error>{error || loadError}</Notice>}
       <fieldset
         disabled={busy || picking || !!active}
         onChange={() => {
@@ -565,7 +579,7 @@ export function MediaTools() {
           </p>
         </div>
       </header>
-      {(error || loadError) && <Notice>{error || loadError}</Notice>}
+      {(error || loadError) && <Notice error>{error || loadError}</Notice>}
       {enabled === false && (
         <Notice>Новите инструменти се подготвят за активиране.</Notice>
       )}

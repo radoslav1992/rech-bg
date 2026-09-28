@@ -51,9 +51,14 @@ export function JobActivity({ children }: { children: ReactNode }) {
     };
   }, [user?.id]);
   const active = jobs.filter(j => ["queued", "running"].includes(j.status));
+  const announcement = finished ? `„${finished.title}“ — ${jobStatus(finished).toLowerCase()}.`
+    : active.length === 1 ? `„${active[0].title}“ — ${jobStatus(active[0]).toLowerCase()}.`
+    : active.length ? `${active.length} записа се подготвят.` : "";
   return <JobsContext.Provider value={{ jobs, error }}>
-    {!!active.length && <div className="job-activity" role="status"><Clock3 size={18} /><span>{active.length === 1 ? `„${active[0].title}“ — ${jobStatus(active[0]).toLowerCase()}.` : `${active.length} записа се подготвят.`} Можете да затворите страницата.</span><Link to="/app#activity">Проследете записа</Link></div>}
-    {finished && <div className="job-activity finished" role="status">{finished.status === "completed" ? <Check size={18} /> : <X size={18} />}<span>„{finished.title}“ — {jobStatus(finished).toLowerCase()}.</span><Link to={jobLink(finished)}>Отворете записа</Link><button className="round" onClick={() => setFinished(null)} aria-label="Затвори известието"><X size={16} /></button></div>}
+    {/* One live region that stays mounted; the visual banners below are not announced separately. */}
+    <p className="sr-only" role="status">{announcement}</p>
+    {!!active.length && <div className="job-activity"><Clock3 size={18} /><span>{active.length === 1 ? `„${active[0].title}“ — ${jobStatus(active[0]).toLowerCase()}.` : `${active.length} записа се подготвят.`} Можете да затворите страницата.</span><Link to="/app#activity">Проследете записа</Link></div>}
+    {finished && <div className="job-activity finished">{finished.status === "completed" ? <Check size={18} /> : <X size={18} />}<span>„{finished.title}“ — {jobStatus(finished).toLowerCase()}.</span><Link to={jobLink(finished)}>Отворете записа</Link><button className="round" onClick={() => setFinished(null)} aria-label="Затвори известието"><X size={16} /></button></div>}
     {children}
   </JobsContext.Provider>;
 }

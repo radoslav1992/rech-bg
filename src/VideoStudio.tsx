@@ -2,7 +2,7 @@ import { ProductAvatarPanel } from "./MediaTools";
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Film, Mic, Sparkles, Save, Check, ArrowRight } from "lucide-react";
-import { api, post, Button, Notice, number, useAuth, type Job } from "./lib";
+import { api, post, Button, Disclosure, Notice, number, useAuth, type Job } from "./lib";
 import { jobsChanged, jobStatus, useJobs } from "./JobActivity";
 import { emotionTags, studioMaxChars, validateStudioScript, validateSuggestedDelivery } from "../shared/studio";
 import { StudioVoicePicker } from "./StudioVoicePicker";
@@ -157,7 +157,7 @@ export function VideoStudio() {
   return <div className="video-studio">
     <header className="vs-heading"><div><span className="eyebrow">ОТ СЦЕНАРИЙ ДО ПУБЛИКУВАНЕ</span><h1>Вашето видео студио.</h1><p>Глас с характер. Лице за историята. Думи, които се виждат.</p></div><Link className="btn" to="/app/studio"><Mic size={17} /> Само аудио</Link></header>
     <div className="vs-steps"><span><b>01</b> Сценарий и глас</span><ArrowRight size={18} /><span><b>02</b> Одобрение и видео</span><ArrowRight size={18} /><span><b>03</b> Монтаж и експорт</span></div>
-    {error && <Notice>{error}</Notice>}{pollingError && <Notice>{pollingError}</Notice>}
+    {error && <Notice error>{error}</Notice>}{pollingError && <Notice>{pollingError}</Notice>}
     {!enabled && <Notice>Видео студиото е подготвено. Премиум озвучаването ще бъде достъпно след активиране.</Notice>}
     <div className="vs-layout"><section className="vs-card vs-script"><div className="sub-heading"><h2><Film size={23} /> Дайте начало на историята</h2><span>01 / СЦЕНАРИЙ</span></div>
       <fieldset disabled={locked}><label>Име на проекта<input value={title} maxLength={120} onChange={e => edit(() => setTitle(e.target.value))} /></label>
@@ -170,29 +170,29 @@ export function VideoStudio() {
       <div className="vs-counter"><span>Таговете в [скоби] насочват гласа. Изразителността зависи от избрания глас.</span><strong>{number(script.length)} / {number(studioMaxChars)}</strong></div>
       <div className="vs-assistant"><label>Настроение<select value={tone} onChange={e => { setTone(e.target.value); setSuggestion(""); setAssistError(""); }}><option value="ad">Уверена реклама</option><option value="story">Увлекателна история</option><option value="calm">Спокоен разказ</option></select></label><Button type="button" className="btn" busy={assisting} aria-busy={assisting} aria-describedby="delivery-feedback" disabled={!!scriptError || !user?.verified} onClick={assist}>{!assisting && <Sparkles size={17} />} {assisting ? "Подготвяме емоциите…" : "Предложи емоции"}</Button></div><small>До 5 предложения дневно са включени. Прегледайте предложението и натиснете „Приложи“, за да го добавите към сценария.</small>
       <div id="delivery-feedback" aria-live="polite" aria-atomic="true">
-        {assisting && <p role="status">Подбираме емоции за вашия сценарий. Това може да отнеме няколко секунди.</p>}
+        <p role="status" className={assisting ? undefined : "sr-only"}>{assisting ? "Подбираме емоции за вашия сценарий. Това може да отнеме няколко секунди." : suggestion ? "Предложението е готово — прегледайте преди да приложите." : ""}</p>
         {assistError && <Notice>{assistError}</Notice>}
         {!assisting && !assistError && (!user?.verified ? <p>Потвърдете имейла си, за да получите предложение за емоции.</p> : scriptError ? <p>{script.length ? scriptError : "Напишете сценарий, за да получите предложение за емоции."}</p> : null)}
       </div>
-      {suggestion && <div className="vs-suggestion" role="status"><strong>Предложението е готово — прегледайте преди да приложите</strong><p>{suggestion}</p><button type="button" className="btn dark" onClick={() => { setUndo(script); edit(() => setScript(suggestion)); }}>Приложи</button><button type="button" className="btn" onClick={() => setSuggestion("")}>Отхвърли</button></div>}
+      {suggestion && <div className="vs-suggestion"><strong>Предложението е готово — прегледайте преди да приложите</strong><p>{suggestion}</p><button type="button" className="btn dark" onClick={() => { setUndo(script); edit(() => setScript(suggestion)); }}>Приложи</button><button type="button" className="btn" onClick={() => setSuggestion("")}>Отхвърли</button></div>}
       {undo !== null && <button className="btn" onClick={() => { edit(() => setScript(undo)); setUndo(null); }}>Върни предишния сценарий</button>}
       </fieldset>
       <div className="vs-actions"><Button className="btn" busy={busy} disabled={assisting || !title.trim() || !voices.some(v => v.id === voice)} onClick={async () => { setBusy(true); try { await save(); } catch (e) { setError((e as Error).message); } finally { setBusy(false); } }}><Save size={17} /> {dirty || !id ? "Запази проекта" : "Запазен"}</Button><Button className="btn primary" busy={busy} disabled={assisting || !enabled || !voices.some(v => v.id === voice) || active || !!scriptError || !title.trim() || cost > remaining || !user?.verified} onClick={generate}><Mic size={17} /> Създай глас · {number(cost)} кредита</Button></div>
-      {script.length > 0 && scriptError && <Notice>{scriptError}</Notice>}
+      {script.length > 0 && scriptError && <Notice error>{scriptError}</Notice>}
       {cost > remaining && <p>Нужни са още {number(cost - remaining)} кредита. <Link to="/app/billing">Вижте плановете</Link></p>}
       <p className="vs-fine">3 кредита за символ, включително таговете. Всяко ново озвучаване се заплаща. Видеото се таксува отделно след одобрението ви. За видео целете 5–60 секунди — обикновено около 50–120 думи.</p>
     </section><aside className="vs-card vs-review"><span className="eyebrow">02 / ПРОСЛУШАЙТЕ</span><h2>Първо чуйте. После покажете.</h2><p>Проверете произношението и емоцията, преди да създадете видео.</p>
       {audioJobs.length > 0 && <label>Версия на гласа<select value={audio?.id || ""} onChange={e => { setSelectedAudio(e.target.value); setSelectedVideo(""); setApproved(""); }}>{audioJobs.map(j => <option key={j.id} value={j.id}>{new Date(j.created_at * 1000).toLocaleString("bg")} · {jobStatus(j)}</option>)}</select></label>}
       {!audio && <div className="vs-audio-empty"><Mic size={35} /><p>Вашият глас ще се появи тук.</p></div>}
-      {audio?.status === "failed" && <Notice>{audio.error}</Notice>}
+      {audio?.status === "failed" && <Notice error>{audio.error}</Notice>}
       {audio && ["queued", "running"].includes(audio.status) && <Notice>Гласът се създава във фонов режим. Можете да напуснете страницата и да се върнете в проекта.</Notice>}
       {audio?.status === "completed" && <><audio key={audio.id} controls src={`/api/jobs/${audio.id}/audio`} /><a href={`/api/jobs/${audio.id}/audio`} download className="btn">Изтегли WAV</a><p>{audio.duration.toFixed(1)} секунди · {number(audio.chars)} кредита за тази версия</p><Button className={approved === audio.id ? "btn dark" : "btn primary"} onClick={() => setApproved(audio.id)}><Check size={17} /> {approved === audio.id ? "Гласът е одобрен" : "Одобрявам този глас"}</Button></>}
       <p className="vs-fine">Редакциите в сценария не променят вече създадените записи.</p>
     </aside></div>
-    <details className="vs-card"><summary>Създайте аватар с ваш продукт</summary><ProductAvatarPanel onSelect={id => {setProductAvatar(id); document.getElementById("video-avatar")?.scrollIntoView({behavior:"smooth"});}} /></details>
+    <Disclosure className="vs-card" summary="Създайте аватар с ваш продукт"><ProductAvatarPanel onSelect={id => {setProductAvatar(id); document.getElementById("video-avatar")?.scrollIntoView({behavior:"smooth"});}} /></Disclosure>
     <div id="video-avatar" />
     <VideoPanel onPortraitChange={choosePortrait} selectedAsset={productAvatar} onClearAsset={() => setProductAvatar("")} key={videoFormKey} jobs={audio ? [audio] : []} approved={!!audio && audio.id === approved} activeJob={activeJob} submissionBlocked={locked} onCreated={j => { setLocalJobs(list => mergeJobs(list, [j])); setSelectedVideo(j.id); jobsChanged(); }} />
-    {videoJobs.length > 0 && <section className="vs-card"><h2>Вашите видеа</h2><select aria-label="Версия на видеото" value={video?.id || ""} onChange={e => { const next = videoJobs.find(j => j.id === e.target.value); setSelectedVideo(e.target.value); if (next?.source_job_id) setSelectedAudio(next.source_job_id); }}>{videoJobs.map(j => <option key={j.id} value={j.id}>{new Date(j.created_at * 1000).toLocaleString("bg")} · {jobStatus(j)}</option>)}</select>{video?.status === "failed" && <Notice>{video.error}</Notice>}{video && ["queued", "running"].includes(video.status) && <Notice>{jobStatus(video)}. Продължаваме във фонов режим. Готовото видео ще се появи в този проект.</Notice>}</section>}
+    {videoJobs.length > 0 && <section className="vs-card"><h2>Вашите видеа</h2><select aria-label="Версия на видеото" value={video?.id || ""} onChange={e => { const next = videoJobs.find(j => j.id === e.target.value); setSelectedVideo(e.target.value); if (next?.source_job_id) setSelectedAudio(next.source_job_id); }}>{videoJobs.map(j => <option key={j.id} value={j.id}>{new Date(j.created_at * 1000).toLocaleString("bg")} · {jobStatus(j)}</option>)}</select>{video?.status === "failed" && <Notice error>{video.error}</Notice>}{video && ["queued", "running"].includes(video.status) && <Notice>{jobStatus(video)}. Продължаваме във фонов режим. Готовото видео ще се появи в този проект.</Notice>}</section>}
     {timelineAudio && <TimelineEditor key={timelineAudio.id} audio={timelineAudio} video={timelineVideo} pendingVideo={timelinePending} portraitUrl={portraitUrl} />}
   </div>;
 }
