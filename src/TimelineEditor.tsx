@@ -48,11 +48,15 @@ const nudge = (e: ReactKeyboardEvent) => e.key === "ArrowLeft" ? (e.shiftKey ? -
 
 // The arrangement (voice offset, end hold, volumes, music) is part of the server-saved project document;
 // the parent applies changes to it. Music is uploaded once to the user's media storage.
-export function TimelineEditor({ audio, video, pendingVideo, portraitUrl, projectId, timeline: settings, musicAssetId, onTimeline, onFlush }: {
+export function TimelineEditor({ audio, video, pendingVideo, portraitUrl, projectId, timeline: settings, musicAssetId, onTimeline, onFlush, serverExport = true, sceneLabel = "" }: {
   audio: Job; video: Job | null; pendingVideo: Job | null; portraitUrl: string; projectId: string;
   timeline: TimelineSettings; musicAssetId: string | null;
   onTimeline: (change: (s: TimelineSettings) => TimelineSettings, musicAssetId?: string | null) => void;
   onFlush: () => Promise<void>;
+  /** A multi-scene project exports the whole video below the scenes instead of from one scene's timeline. */
+  serverExport?: boolean;
+  /** Set when editing one scene of several, e.g. "сцена 2". */
+  sceneLabel?: string;
 }) {
   const speechDuration = audio.duration;
   const endpoint = `/video-studio/captions/${audio.id}`, voiceUrl = `/api/jobs/${audio.id}/audio`, videoUrl = video ? `/api/jobs/${video.id}/video` : "";
@@ -254,7 +258,7 @@ export function TimelineEditor({ audio, video, pendingVideo, portraitUrl, projec
   // Space toggles playback anywhere in the editor, like other editors; the controls themselves stay native buttons.
   // eslint-disable-next-line jsx-a11y/no-static-element-interactions
   return <section className="vs-card timeline-editor" onKeyDown={e => { if (e.key === " " && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLButtonElement)) { e.preventDefault(); toggle(); } }}>
-    <div className="sub-heading"><h2><Film size={22} /> Монтаж</h2><span>03 / МОНТАЖ И ЕКСПОРТ</span></div>
+    <div className="sub-heading"><h2><Film size={22} /> Монтаж{sceneLabel && ` · ${sceneLabel}`}</h2><span>03 / МОНТАЖ И ЕКСПОРТ</span></div>
     <p className="caption-intro">Подредете гласа, субтитрите и музиката. Докато видеото не е готово, прегледът показва избрания портрет. Всичко се обработва във вашия браузър.</p>
     {error && <Notice error>{error}</Notice>}
     {!loaded ? <p>Зареждане на монтажа…</p> : <>
@@ -363,14 +367,14 @@ export function TimelineEditor({ audio, video, pendingVideo, portraitUrl, projec
       </fieldset></details>
 
       <div className="vs-actions caption-export-actions">
-        <Button className="btn primary" busy={exporting} disabled={!video} onClick={render}><Download size={16} /> {exporting ? `Експорт · ${Math.round(progress * 100)}%` : "Експортирай MP4"}</Button>
+        <Button className="btn primary" busy={exporting} disabled={!video} onClick={render}><Download size={16} /> {exporting ? `Експорт · ${Math.round(progress * 100)}%` : sceneLabel ? "Експортирай сцената (MP4)" : "Експортирай MP4"}</Button>
         {(["srt", "vtt"] as const).map(type => <Button key={type} className="btn" disabled={!document.words.length || exporting} onClick={() => downloadBlob(new Blob([subtitleFile(document.words, type)], { type: "text/plain;charset=utf-8" }), `rechbg.${type}`)}><Download size={16} /> {type.toUpperCase()}</Button>)}
         {video && <a className="btn" href={videoUrl} download>Оригинален MP4</a>}
       </div>
       {!video && <p className="vs-fine">Експортът се отключва, когато видео аватарът е готов. Дотогава можете да подготвите субтитрите, музиката и подредбата.</p>}
       {exporting && <div className="caption-export-progress" role="status"><progress value={progress} max={1} aria-label="Експорт на видео" /><span>{Math.round(progress * 100)}% · Сглобяваме видеото, гласа, музиката и субтитрите</span><Button className="btn" onClick={() => abort.current?.abort()}>Спри експорта</Button></div>}
       <p className="vs-fine">Експортът в браузъра е безплатен. Оставете страницата отворена до завършване; препоръчваме Chrome или Edge на компютър.</p>
-      {video && <Disclosure className="tl-more" summary="Експорт на сървъра"><p className="vs-fine">Сървърът сглобява същия монтаж — видео, глас, музика, начало и задържане, субтитри — и можете да затворите страницата.</p><BackgroundExport sourceId={video.id} document={document} projectId={projectId} onSave={async () => { await persist(document); await onFlush(); }} /></Disclosure>}
+      {video && serverExport && <Disclosure className="tl-more" summary="Експорт на сървъра"><p className="vs-fine">Сървърът сглобява същия монтаж — видео, глас, музика, начало и задържане, субтитри — и можете да затворите страницата.</p><BackgroundExport sourceId={video.id} document={document} projectId={projectId} onSave={async () => { await persist(document); await onFlush(); }} /></Disclosure>}
     </>}
     {video ? <video key={videoUrl} ref={el => { voiceEl.current = el; }} src={videoUrl} className="tl-media" playsInline preload="auto" muted={false} aria-hidden="true" />
       : <audio key={voiceUrl} ref={el => { voiceEl.current = el; }} src={voiceUrl} preload="auto" aria-hidden="true" />}
