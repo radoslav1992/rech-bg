@@ -231,3 +231,23 @@ HTTP 202 от `/api/videos` означава приета заявка, а HTTP 
 Set the server secret `ELEVENLABS_API_KEY` and deploy to activate `/app/video-studio`.
 The existing database and Workflow bindings are reused; no new migration is required.
 See [VIDEO-STUDIO.md](VIDEO-STUDIO.md) for voice overrides, credit pricing, captions and the activation check.
+
+## 9. Миграция 0004: сигурност на плащанията и производителност
+
+Преди deployment на тази версия приложете новата миграция (Worker кодът използва новите таблици и колони):
+
+```sh
+npx wrangler d1 migrations apply rech-bg --remote
+```
+
+`migrations/0004_hardening.sql` добавя:
+
+- `usage_windows.plan`: при смяна на план в рамките на периода квотата следва новия план (downgrade вече не запазва по-високата квота);
+- `trial_history`: хеш на имейла и използваните пробни кредити на изтрити профили, за да не се получава нова проба при повторна регистрация;
+- `segment_sweeps` и индекси за списъка с проекти, почистването на задачи, освобождаването на място и токените.
+
+Поведение, което да проверите в Stripe след deployment:
+
+- Изтриването на профил затваря отворените Checkout сесии на клиента. Ако абонамент все пак бъде създаден за изтрит профил, webhook-ът го прекратява и записва `Cancelled subscription of a deleted account; review for refund` в логовете — проверете и възстановете плащането ръчно.
+- При подновяване достъпът до платения период се запазва до 3 дни, докато новата фактура бъде платена. Неуспешно плащане (`past_due`) спира достъпа веднага.
+- Препоръката за Customer Portal остава: downgrade в края на периода.

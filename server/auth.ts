@@ -3,7 +3,7 @@ import { HTTPException } from "hono/http-exception";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { z } from "zod";
 import type { Env, ContextVars, DbUser } from "./types";
-import { now, uid, ready } from "./types";
+import { now, uid, ready, DAY, HOUR } from "./types";
 import {
   checkPassword,
   hashPassword,
@@ -41,7 +41,7 @@ async function issue(
       await sha(t),
       user.id,
       kind,
-      now() + (kind === "verify" ? 86400 : 3600),
+      now() + (kind === "verify" ? DAY : HOUR),
     )
     .run();
   await sendMail(
@@ -166,8 +166,8 @@ auth.post("/login", async (c) => {
   const { email, password } = credentials.parse(await c.req.json());
   const pair = email + ":" + clientIp(c);
   if (
-    (await limited(c.env, "login-fail", LOGIN_FAILURES_PER_ADDRESS, 3600, pair)) ||
-    (await limited(c.env, "login-fail-email", LOGIN_FAILURES_PER_EMAIL, 3600, email))
+    (await limited(c.env, "login-fail", LOGIN_FAILURES_PER_ADDRESS, HOUR, pair)) ||
+    (await limited(c.env, "login-fail-email", LOGIN_FAILURES_PER_EMAIL, HOUR, email))
   )
     throw tooMany();
   const user = await c.env.DB.prepare("SELECT * FROM users WHERE email=?")
@@ -179,8 +179,8 @@ auth.post("/login", async (c) => {
       "pbkdf2:100000:00000000000000000000000000000000:0000000000000000000000000000000000000000000000000000000000000000",
   );
   if (!user || !valid) {
-    await hit(c.env, "login-fail", 3600, pair);
-    await hit(c.env, "login-fail-email", 3600, email);
+    await hit(c.env, "login-fail", HOUR, pair);
+    await hit(c.env, "login-fail-email", HOUR, email);
     throw new HTTPException(401, { message: "Невалиден имейл или парола." });
   }
   await createSession(c, user.id);
@@ -202,7 +202,7 @@ auth.post("/forgot", async (c) => {
     .parse(await c.req.json());
   // The per-address cap stops inbox flooding from rotating IPs. The response is identical
   // either way and the send happens after it, so neither timing nor status reveals an account.
-  if ((await hit(c.env, "forgot-email", 3600, email)) > 3)
+  if ((await hit(c.env, "forgot-email", HOUR, email)) > 3)
     return c.json({ ok: true });
   const base = origin(c.env, c.req.raw);
   await defer(

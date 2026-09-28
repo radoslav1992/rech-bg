@@ -43,8 +43,11 @@ npm run preview
 Локалният режим няма фалшив аудио генератор. За реално аудио е нужен достъп до Workers AI. Публичните страници работят преди активиране на регистрации; имейлите и плащанията изискват конфигурация.
 
 ```sh
+npm run lint
 npm run build
+npm run check:bundle
 npm test
+python3 tests/renderer_test.py   # изисква ffmpeg
 npx wrangler deploy --dry-run --no-autoconfig
 ```
 

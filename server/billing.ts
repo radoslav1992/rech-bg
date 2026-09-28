@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { plans, type PlanId } from "../shared/catalog";
 import type { Env, ContextVars, DbUser } from "./types";
-import { now, ready, uid } from "./types";
+import { now, ready, uid, DAY } from "./types";
 import { origin, rate, sha } from "./security";
 import { z } from "zod";
 export const billing = new Hono<{ Bindings: Env; Variables: ContextVars }>();
@@ -17,7 +17,7 @@ export function stripe(env: Env) {
     maxNetworkRetries: 2,
   });
 }
-export const RENEWAL_GRACE = 3 * 86400;
+export const RENEWAL_GRACE = 3 * DAY;
 const paidPlans = ["starter", "creator", "studio"] as const;
 /** Identifies a trial across account deletion without keeping the address itself. */
 export const trialKey = (email: string) => sha("trial:" + email.trim().toLowerCase());
