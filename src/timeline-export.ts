@@ -37,11 +37,15 @@ export async function exportTimeline({ document, settings, videoUrl, voiceUrl, m
   document: CaptionDocument; settings: TimelineSettings; videoUrl: string; voiceUrl: string; music: Blob | null;
   speechDuration: number; onProgress: (progress: number) => void; signal: AbortSignal;
 }) {
-  const mb = await import("mediabunny");
+  // Named imports keep the library tree-shakable; the formats match what uploads accept (MP4, MOV, WebM).
+  const {
+    getFirstEncodableVideoCodec, getFirstEncodableAudioCodec, QUALITY_HIGH, Input, BlobSource, MP4, QTFF, WEBM,
+    BufferTarget, Output, Mp4OutputFormat, CanvasSink, CanvasSource, AudioBufferSource,
+  } = await import("mediabunny");
   const [width, height] = frameSize(document.format, document.resolution);
   const length = timelineLength(settings, speechDuration);
-  const videoCodec = await mb.getFirstEncodableVideoCodec(["avc", "vp9", "av1"], { width, height, quality: mb.QUALITY_HIGH });
-  const audioCodec = await mb.getFirstEncodableAudioCodec(["aac", "opus"], { numberOfChannels: 2, sampleRate: RATE, quality: mb.QUALITY_HIGH });
+  const videoCodec = await getFirstEncodableVideoCodec(["avc", "vp9", "av1"], { width, height, quality: QUALITY_HIGH });
+  const audioCodec = await getFirstEncodableAudioCodec(["aac", "opus"], { numberOfChannels: 2, sampleRate: RATE, quality: QUALITY_HIGH });
   if (!videoCodec || !audioCodec) throw new Error(unsupported);
 
   const videoBlob = await fetchBlob(videoUrl, signal);
@@ -57,9 +61,9 @@ export async function exportTimeline({ document, settings, videoUrl, voiceUrl, m
   if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
   const mixed = await mixAudio(voice, musicBuffer, settings, document, speechDuration, length);
 
-  const input = new mb.Input({ source: new mb.BlobSource(videoBlob), formats: mb.ALL_FORMATS });
-  const target = new mb.BufferTarget();
-  const output = new mb.Output({ format: new mb.Mp4OutputFormat({ fastStart: "in-memory" }), target });
+  const input = new Input({ source: new BlobSource(videoBlob), formats: [MP4, QTFF, WEBM] });
+  const target = new BufferTarget();
+  const output = new Output({ format: new Mp4OutputFormat({ fastStart: "in-memory" }), target });
   const canvas = window.document.createElement("canvas"); canvas.width = width; canvas.height = height;
   const ctx = canvas.getContext("2d")!;
   const cancel = () => { void output.cancel(); };
@@ -68,9 +72,9 @@ export async function exportTimeline({ document, settings, videoUrl, voiceUrl, m
     const track = await input.getPrimaryVideoTrack();
     if (!track || !(await track.canDecode())) throw new Error(unsupported);
     const videoDuration = Math.max(.04, await track.computeDuration());
-    const sink = new mb.CanvasSink(track, { poolSize: 3 });
-    const video = new mb.CanvasSource(canvas, { codec: videoCodec, bitrate: document.resolution === "1080p" ? 8_000_000 : 4_000_000 });
-    const audio = new mb.AudioBufferSource({ codec: audioCodec, bitrate: 160_000 });
+    const sink = new CanvasSink(track, { poolSize: 3 });
+    const video = new CanvasSource(canvas, { codec: videoCodec, bitrate: document.resolution === "1080p" ? 8_000_000 : 4_000_000 });
+    const audio = new AudioBufferSource({ codec: audioCodec, bitrate: 160_000 });
     output.addVideoTrack(video, { frameRate: FPS }); output.addAudioTrack(audio);
     await output.start();
     await audio.add(mixed); audio.close();

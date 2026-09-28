@@ -1,4 +1,5 @@
 import { ownedAsset, mediaError } from './media';
+import { findByIdempotencyKey } from "./db";
 import { jobStorage, releaseJobStorage } from './media-storage';
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
@@ -50,7 +51,7 @@ videos.post("/", async (c) => {
   const form = await c.req.formData();
   const d = z.object({ sourceId: z.uuid(), idempotencyKey: z.uuid(), tier: z.enum(["low", "medium", "high"]), credits: z.coerce.number().int().positive() })
     .parse(Object.fromEntries(form));
-  const previous = await c.env.DB.prepare("SELECT id,kind FROM jobs WHERE user_id=? AND idempotency_key=?").bind(user.id, d.idempotencyKey).first<any>();
+  const previous = await findByIdempotencyKey<{ id: string; kind: string }>(c.env, "jobs", user.id, d.idempotencyKey, "id,kind");
   if (previous) {
     if (previous.kind !== "video") throw new HTTPException(409, { message: "Невалидна заявка. Обновете страницата." });
     return c.json({ id: previous.id });
@@ -96,7 +97,7 @@ videos.post("/", async (c) => {
   } catch (e) {
     if (String(e).includes("QUOTA_EXCEEDED")) throw new HTTPException(402, { message: "Недостатъчно кредити за това видео. Изберете по-висок план." });
     if (String(e).includes("UNIQUE")) {
-      const existing = await c.env.DB.prepare("SELECT id FROM jobs WHERE user_id=? AND idempotency_key=?").bind(user.id, d.idempotencyKey).first<any>();
+      const existing = await findByIdempotencyKey(c.env, "jobs", user.id, d.idempotencyKey);
       if (existing) return c.json({ id: existing.id });
       throw new HTTPException(409, { message: "Вече се създава запис. Изчакайте той да завърши." });
     }

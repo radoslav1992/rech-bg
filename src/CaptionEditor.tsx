@@ -26,7 +26,7 @@ export function CaptionEditor({ audioId, video, uploaded = false }: { audioId: s
   };
   return <section className="vs-card caption-editor"><div className="sub-heading"><h2><Captions size={22} /> Думите вече се виждат.</h2><span>03 / ЕКСПОРТ</span></div>
     <p className="caption-intro">Изберете визия. Направете я своя. Изтеглете видео, готово за публикуване.</p>
-    {error && <Notice>{error}</Notice>}
+    {error && <Notice error>{error}</Notice>}
     {!loaded ? <p>Зареждане на субтитрите…</p> : <>
       {!document.words.length && <Notice>За този запис няма автоматични времена. Можете да добавите думите и времената ръчно. Аудиото остава готово.</Notice>}
       <div className="caption-workbench">

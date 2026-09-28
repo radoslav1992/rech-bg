@@ -10,7 +10,8 @@ export function CaptionPreview({ document, url }: { document: CaptionDocument; u
   const groups = useMemo(() => captionGroups(url ? document.words : demoWords), [url, document.words]);
   useEffect(() => { setFailed(false); }, [url]);
   useEffect(() => {
-    let frame = 0, started = performance.now();
+    let frame = 0;
+    const started = performance.now();
     const paint = (now: number) => {
       const c = canvas.current;
       if (c) {

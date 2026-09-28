@@ -20,7 +20,7 @@ import {
   Video,
 } from "lucide-react";
 
-import { jobsChanged, jobStatus } from "./JobActivity";
+import { jobsChanged, jobStatus, useJobs } from "./JobActivity";
 import { voiceList } from "../shared/catalog";
 import { segments } from "../shared/text";
 import {
@@ -77,14 +77,18 @@ export function Studio() {
       .then((d) => setVoices(d.voices))
       .catch(() => {});
   }, []);
+  const { jobs: activityJobs } = useJobs();
   useEffect(() => {
     projectId.current = id;
+    // Ignore responses for a project the user already navigated away from.
+    let live = true;
     setJob(null);
     setHistory([]);
     if (id) {
       setLoading(true);
       api("/projects/" + id)
         .then(({ project: p }) => {
+          if (!live) return;
           if (p.mode === "studio") { navigate("/app/video-studio/" + id + location.search, { replace: true }); return; }
           setTitle(p.title);
           setMode(p.mode);
@@ -94,10 +98,11 @@ export function Studio() {
           setPause(p.pause_ms);
           setDirty(false);
         })
-        .catch((e) => setError(e.message))
-        .finally(() => setLoading(false));
+        .catch((e) => live && setError(e.message))
+        .finally(() => live && setLoading(false));
       api("/jobs")
         .then((d) => {
+          if (!live) return;
           const list = d.jobs.filter((j: Job) => j.project_id === id);
           setHistory(list);
           setJob(list.find((j: Job) => j.id === params.get("job")) || list[0] || null);
@@ -125,35 +130,42 @@ export function Studio() {
       setSecond("boris");
       setDirty(false);
     }
+    return () => {
+      live = false;
+    };
   }, [id, params.toString()]);
+  // Keep this project's history in step with the shared job list instead of fetching it again.
+  useEffect(() => {
+    const current = projectId.current;
+    if (current && activityJobs.length)
+      setHistory(activityJobs.filter((j) => j.project_id === current));
+  }, [activityJobs]);
   useEffect(() => {
     if (!job || !["queued", "running"].includes(job.status)) return;
-    let stopped = false;
-    const timer = setInterval(
-      () =>
-        api("/jobs/" + job.id)
-          .then(({ job: j }) => {
-            if (stopped) return;
-            setJob(j);
-            if (["completed", "failed"].includes(j.status)) {
-              requestKey.current = crypto.randomUUID();
-              void refresh();
-              jobsChanged();
-              api("/jobs")
-                .then((d) =>
-                  setHistory(
-                    d.jobs.filter(
-                      (x: Job) => x.project_id === projectId.current,
-                    ),
-                  ),
-                )
-                .catch(() => {});
-            }
-          })
-          .catch((e) => setError(e.message)),
-      3500,
-    );
-    return () => { stopped = true; clearInterval(timer); };
+    let stopped = false, inflight = false, failure = "";
+    const poll = async () => {
+      if (inflight || document.hidden) return;
+      inflight = true;
+      try {
+        const { job: j } = await api<{ job: Job }>("/jobs/" + job.id);
+        if (stopped) return;
+        // Clear only an error this poll produced, never one from saving or generating.
+        if (failure) { const shown = failure; setError((e) => (e === shown ? "" : e)); failure = ""; }
+        setJob(j);
+        if (["completed", "failed"].includes(j.status)) {
+          requestKey.current = crypto.randomUUID();
+          // The shared job list refreshes credits and this project's history.
+          jobsChanged();
+        }
+      } catch (e) {
+        if (!stopped) { failure = (e as Error).message; setError(failure); }
+      } finally {
+        inflight = false;
+      }
+    };
+    const timer = setInterval(poll, 3500);
+    document.addEventListener("visibilitychange", poll);
+    return () => { stopped = true; clearInterval(timer); document.removeEventListener("visibilitychange", poll); };
   }, [job?.id, job?.status]);
   useEffect(() => {
     if (!dirty) return;
@@ -242,6 +254,8 @@ export function Studio() {
   const selected = voices.find((v) => v.id === voice)!;
   return (
     <div className="studio-page">
+      {/* The visible title is an editable input; give the page a heading for screen readers. */}
+      <h1 className="sr-only">Аудио студио — {title || "нов проект"}</h1>
       <div className="studio-heading">
         <div>
           <Link to="/app/projects" className="breadcrumb">
@@ -283,7 +297,7 @@ export function Studio() {
           Запазете
         </Button>
       </div>
-      {error && <Notice>{error}</Notice>}
+      {error && <Notice error>{error}</Notice>}
       {notice && <Notice good>{notice}</Notice>}
       {loading ? (
         <div className="empty-state">Зареждане на проекта…</div>
@@ -302,6 +316,7 @@ export function Studio() {
                     <button
                       key={m as string}
                       className={mode === m ? "active" : ""}
+                      aria-pressed={mode === m}
                       onClick={() => edit(() => setMode(m as string))}
                     >
                       <Icon size={17} />
@@ -477,6 +492,7 @@ export function Studio() {
                     <button
                       key={v.id}
                       className={v.id === voice ? "active" : ""}
+                      aria-pressed={v.id === voice}
                       onClick={() => edit(() => setVoice(v.id))}
                     >
                       <span className={"voice-avatar " + v.color}>
@@ -531,6 +547,10 @@ export function Studio() {
                 Сценарий
               </button>
             </div>
+            {/* Always mounted so screen readers announce each status change. */}
+            <p className="sr-only" role="status">
+              {job ? `${job.title}: ${jobStatus(job)}` : ""}
+            </p>
             {!job ? (
               <div className="output-empty">
                 <Headphones size={24} />
@@ -561,7 +581,7 @@ export function Studio() {
                 </a>
               </div>
             ) : job.status === "failed" ? (
-              <Notice>{job.error}</Notice>
+              <Notice error>{job.error}</Notice>
             ) : (
               <div className="output-empty">
                 <AudioLines className="pulse" size={32} />

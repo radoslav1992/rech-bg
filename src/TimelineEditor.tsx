@@ -1,7 +1,7 @@
 import { BackgroundExport } from "./MediaTools";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { Captions, Download, Film, Image as ImageIcon, Mic, Music, Pause, Play, SkipBack, Trash2, Upload, ZoomIn, ZoomOut } from "lucide-react";
-import { api, Button, Notice, useAuth, type Job } from "./lib";
+import { api, Button, Disclosure, Notice, useAuth, type Job } from "./lib";
 import { captionGroups, defaultCaptions, subtitleFile, type CaptionDocument } from "../shared/captions";
 import { downloadBlob, drawCaptions, fitSource, frameSize } from "./caption-render";
 import { CaptionStyles } from "./CaptionStyles";
@@ -242,10 +242,12 @@ export function TimelineEditor({ audio, video, pendingVideo, portraitUrl }: { au
   const musicBegin = Math.max(0, musicStart), musicEnd = Math.min(length, musicStart + (musicDuration || length));
   const visualLabel = video ? "Видео аватар" : pendingVideo ? "Видеото се създава" : portraitUrl ? "Портрет" : "Без аватар";
 
+  // Space toggles playback anywhere in the editor, like other editors; the controls themselves stay native buttons.
+  // eslint-disable-next-line jsx-a11y/no-static-element-interactions
   return <section className="vs-card timeline-editor" onKeyDown={e => { if (e.key === " " && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLButtonElement)) { e.preventDefault(); toggle(); } }}>
     <div className="sub-heading"><h2><Film size={22} /> Монтаж</h2><span>03 / МОНТАЖ И ЕКСПОРТ</span></div>
     <p className="caption-intro">Подредете гласа, субтитрите и музиката. Докато видеото не е готово, прегледът показва избрания портрет. Всичко се обработва във вашия браузър.</p>
-    {error && <Notice>{error}</Notice>}
+    {error && <Notice error>{error}</Notice>}
     {!loaded ? <p>Зареждане на монтажа…</p> : <>
       <div className="tl-workbench">
         <div className="tl-stage">
@@ -313,12 +315,14 @@ export function TimelineEditor({ audio, video, pendingVideo, portraitUrl }: { au
           {settings.speechStart > 0 && <div className="tl-hold" style={at(0, settings.speechStart)} title="Първият кадър се задържа" />}
           <button type="button" className={`tl-clip tl-visual${selection.kind === "speech" ? " selected" : ""}${video ? " ready" : ""}`} style={{ ...at(settings.speechStart, speechDuration), ...(portraitUrl ? { backgroundImage: `url("${portraitUrl}")` } : {}) }}
             aria-label={`${visualLabel}, начало ${settings.speechStart.toFixed(1)} сек.`} onPointerDown={e => { const s = settings.speechStart; drag(e, pxPerSecond, d => moveSpeech(s, d), () => { setSelection({ kind: "speech" }); setPanel("clip"); }); }}
+            onClick={e => { if (e.detail === 0) { setSelection({ kind: "speech" }); setPanel("clip"); } }}
             onKeyDown={e => { const d = nudge(e); if (d) { e.preventDefault(); moveSpeech(settings.speechStart, d); } }}><span>{video ? <Film size={13} /> : <ImageIcon size={13} />} {visualLabel}</span></button>
           {settings.tail > 0 && <div className="tl-hold" style={at(settings.speechStart + speechDuration, settings.tail)} title="Последният кадър се задържа" />}
         </div></div>
         <div className="tl-row"><div className="tl-label"><Mic size={15} /> Глас</div><div className="tl-lane" style={laneStyle} onPointerDown={seekFromLane}>
           <button type="button" className={`tl-clip tl-voice${selection.kind === "speech" ? " selected" : ""}`} style={at(settings.speechStart, speechDuration)} aria-label={`Глас, ${speechDuration.toFixed(1)} сек.`}
             onPointerDown={e => { const s = settings.speechStart; drag(e, pxPerSecond, d => moveSpeech(s, d), () => { setSelection({ kind: "speech" }); setPanel("clip"); }); }}
+            onClick={e => { if (e.detail === 0) { setSelection({ kind: "speech" }); setPanel("clip"); } }}
             onKeyDown={e => { const d = nudge(e); if (d) { e.preventDefault(); moveSpeech(settings.speechStart, d); } }}><WaveShape wave={voiceWave} /><span>Глас · {speechDuration.toFixed(1)} сек.</span></button>
         </div></div>
         <div className="tl-row"><div className="tl-label"><Captions size={15} /> Субтитри</div><div className="tl-lane" style={laneStyle} onPointerDown={seekFromLane}>
@@ -326,11 +330,13 @@ export function TimelineEditor({ audio, video, pendingVideo, portraitUrl }: { au
           {groups.map((g, i) => <button type="button" key={groupStarts[i]} className={`tl-clip tl-caption${selection.kind === "caption" && selection.group === i ? " selected" : ""}${document.enabled ? "" : " muted"}`}
             style={at(settings.speechStart + g[0].start, g.at(-1)!.end - g[0].start)} title={g.map(w => w.text).join(" ")}
             onPointerDown={e => { const words = document.words; drag(e, pxPerSecond, d => moveGroup(i, words, d), () => { setSelection({ kind: "caption", group: i }); setPanel("clip"); seek(settings.speechStart + g[0].start); }); }}
+            onClick={e => { if (e.detail === 0) { setSelection({ kind: "caption", group: i }); setPanel("clip"); seek(settings.speechStart + g[0].start); } }}
             onKeyDown={e => { const d = nudge(e); if (d) { e.preventDefault(); moveGroup(i, document.words, d); } }}>{g.map(w => w.text).join(" ")}</button>)}
         </div></div>
         <div className="tl-row"><div className="tl-label"><Music size={15} /> Музика</div><div className="tl-lane" style={laneStyle} onPointerDown={seekFromLane}>
           {settings.music && music ? <button type="button" className={`tl-clip tl-music${selection.kind === "music" ? " selected" : ""}`} style={at(musicBegin, musicEnd - musicBegin)} aria-label={`Музика ${settings.music.name}`}
             onPointerDown={e => { const s = musicStart; drag(e, pxPerSecond, d => moveMusic(s, d), () => { setSelection({ kind: "music" }); setPanel("clip"); }); }}
+            onClick={e => { if (e.detail === 0) { setSelection({ kind: "music" }); setPanel("clip"); } }}
             onKeyDown={e => { const d = nudge(e); if (d) { e.preventDefault(); moveMusic(musicStart, d); } }}>
             <WaveShape wave={musicWave && musicDuration ? { duration: musicDuration, peaks: musicWave.peaks.slice(Math.floor((musicBegin - musicStart) / musicDuration * musicWave.peaks.length), Math.ceil((musicEnd - musicStart) / musicDuration * musicWave.peaks.length)) } : null} />
             <span><Music size={13} /> {settings.music.name} · {Math.round(settings.music.volume * 100)}%</span></button>
@@ -339,7 +345,7 @@ export function TimelineEditor({ audio, video, pendingVideo, portraitUrl }: { au
         </div>
       </div>
       <input ref={musicInput} type="file" accept="audio/*" hidden style={{ display: "none" }} onChange={e => { void addMusic(e.target.files?.[0]); e.target.value = ""; }} />
-      <p className="tl-hint">Плъзгайте клиповете, за да ги подредите. Щракнете върху клип, за да го редактирате. Интервал пуска и спира прегледа; стрелките местят избран клип.</p>
+      <p className="tl-hint">Плъзгайте клиповете, за да ги подредите. Щракнете върху клип (или Enter от клавиатурата), за да го редактирате. Интервал пуска и спира прегледа; стрелките местят избран клип.</p>
 
       <details className="vs-word-editor"><summary>Думи и времена ({document.words.length})</summary><p>Времената са в секунди от началото на гласа.</p><fieldset disabled={exporting}>
         {document.words.map((word, i) => <div className="vs-word" key={i}><input aria-label={`Дума ${i + 1}`} value={word.text} maxLength={80} onChange={e => edit({ words: document.words.map((w, n) => n === i ? { ...w, text: e.target.value } : w) })} /><input aria-label={`Начало ${i + 1}`} type="number" min="0" step="0.01" value={word.start} onChange={e => edit({ words: document.words.map((w, n) => n === i ? { ...w, start: Number(e.target.value) } : w) })} /><input aria-label={`Край ${i + 1}`} type="number" min="0" step="0.01" value={word.end} onChange={e => edit({ words: document.words.map((w, n) => n === i ? { ...w, end: Number(e.target.value) } : w) })} /><button className="btn" aria-label={`Изтрий дума ${i + 1}`} onClick={() => edit({ words: document.words.filter((_, n) => n !== i) })}>×</button></div>)}
@@ -354,7 +360,7 @@ export function TimelineEditor({ audio, video, pendingVideo, portraitUrl }: { au
       {!video && <p className="vs-fine">Експортът се отключва, когато видео аватарът е готов. Дотогава можете да подготвите субтитрите, музиката и подредбата.</p>}
       {exporting && <div className="caption-export-progress" role="status"><progress value={progress} max={1} aria-label="Експорт на видео" /><span>{Math.round(progress * 100)}% · Сглобяваме видеото, гласа, музиката и субтитрите</span><Button className="btn" onClick={() => abort.current?.abort()}>Спри експорта</Button></div>}
       <p className="vs-fine">Експортът в браузъра е безплатен. Оставете страницата отворена до завършване; препоръчваме Chrome или Edge на компютър.</p>
-      {video && <details className="tl-more"><summary>Експорт на сървъра</summary><p className="vs-fine">Фоновият експорт включва само видеото и субтитрите — без музиката и отместванията от монтажа.</p><BackgroundExport sourceId={video.id} document={document} onSave={() => persist(document)} /></details>}
+      {video && <Disclosure className="tl-more" summary="Експорт на сървъра"><p className="vs-fine">Фоновият експорт включва само видеото и субтитрите — без музиката и отместванията от монтажа.</p><BackgroundExport sourceId={video.id} document={document} onSave={() => persist(document)} /></Disclosure>}
     </>}
     {video ? <video key={videoUrl} ref={el => { voiceEl.current = el; }} src={videoUrl} className="tl-media" playsInline preload="auto" muted={false} aria-hidden="true" />
       : <audio key={voiceUrl} ref={el => { voiceEl.current = el; }} src={voiceUrl} preload="auto" aria-hidden="true" />}

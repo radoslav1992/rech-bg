@@ -49,6 +49,8 @@ export type DbUser = {
 };
 export type ContextVars = { user: DbUser; session: string };
 export const now = () => Math.floor(Date.now() / 1000);
+/** Durations in seconds, matching now(). */
+export const MINUTE = 60, HOUR = 3600, DAY = 86400;
 export const uid = () => crypto.randomUUID();
 export function ready(e: Env) {
   return !!(

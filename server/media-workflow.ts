@@ -286,7 +286,7 @@ export class MediaGeneration extends WorkflowEntrypoint<
               end = finish;
               return {
                 text: w.text
-                  .replace(/[\[\]\r\n<>]/g, "")
+                  .replace(/[[\]\r\n<>]/g, "")
                   .trim()
                   .slice(0, 80),
                 start,

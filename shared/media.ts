@@ -6,6 +6,16 @@ export const mediaPlans: Record<string, { bytes: number; days: number }> = {
   studio: { bytes: 20 * 1024 * MB, days: 180 },
 };
 export const uploadChunk = 8 * MB;
+/**
+ * Storage reserved for a generated WAV before synthesis; the finished file must fit in it.
+ * Upper bound: 48 kHz 16-bit mono (the highest rate accepted) at 8 characters per second, plus
+ * pauses and a margin, capped at the previous fixed 96 MB so a short job no longer blocks a
+ * small plan's storage.
+ */
+export function audioReserveBytes(chars: number, parts: number, pauseMs: number) {
+  const seconds = chars / 8 + (Math.max(0, parts - 1) * pauseMs) / 1000 + 10;
+  return Math.min(96 * MB, Math.ceil(seconds * 96000) + 44);
+}
 export const uploadLimit = 500 * MB;
 export const maxVideoSeconds = 600;
 export function mediaCredits(

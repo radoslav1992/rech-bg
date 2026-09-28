@@ -52,7 +52,7 @@ beforeEach(async () => {
   sqlite.prepare("INSERT INTO users VALUES('other','other@example.com','Other','hash',1,NULL,?)").run(now());
   sqlite.prepare("INSERT INTO sessions VALUES(?,'u',?)").run(await sha("test-session"), now() + 3600);
   sqlite.prepare("INSERT INTO projects VALUES(?,'u','Story','tts','Hello','mila','boris',400,?,?)").run(projectId, now(), now());
-  sqlite.prepare("INSERT INTO usage_windows VALUES('u:trial','u',250000,0)").run();
+  sqlite.prepare("INSERT INTO usage_windows(id,user_id,quota,used) VALUES('u:trial','u',250000,0)").run();
   sqlite.prepare("INSERT INTO jobs(id,user_id,project_id,window_id,idempotency_key,title,mode,script,voice,second_voice,pause_ms,chars,status,audio_key,duration,created_at,updated_at) VALUES(?,'u',?,'u:trial',?,'Story','tts','Hello','mila','boris',400,100,'completed',?,30,?,?)")
     .run(sourceId, projectId, sourceId, `audio/u/${sourceId}.wav`, now(), now());
   await env.AUDIO.put(`audio/u/${sourceId}.wav`, new Uint8Array(44));
@@ -620,7 +620,7 @@ describe("Video workflow and private assets", () => {
   });
   it("refunds the original window exactly once when provider submission fails", async () => {
     const id = await create();
-    sqlite.prepare("INSERT INTO usage_windows VALUES('next-period','u',100000,0)").run();
+    sqlite.prepare("INSERT INTO usage_windows(id,user_id,quota,used) VALUES('next-period','u',100000,0)").run();
     const mock = vi.fn().mockRejectedValue(new Error("secret provider timeout")); vi.stubGlobal("fetch", mock);
     const flow = new (VideoGeneration as any)({}, env);
     await expect(flow.run({ payload: { jobId: id } }, step)).rejects.toThrow();

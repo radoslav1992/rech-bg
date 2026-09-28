@@ -1,7 +1,5 @@
-import { AvatarLibraryAdmin } from "./AvatarLibrary";
-import { StudioVoiceAdmin } from "./StudioVoiceAdmin";
-import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { lazy, Suspense, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Check,
   Download,
@@ -14,6 +12,9 @@ import {
 } from "lucide-react";
 import { voiceList, sampleSentence } from "../shared/catalog";
 import { api, post, Button, Notice, useAuth, type Voice } from "./lib";
+// Admin-only panels load only for admins.
+const AvatarLibraryAdmin = lazy(() => import("./AvatarLibrary").then(m => ({ default: m.AvatarLibraryAdmin })));
+const StudioVoiceAdmin = lazy(() => import("./StudioVoiceAdmin").then(m => ({ default: m.StudioVoiceAdmin })));
 export function SettingsPage() {
   const { user, refresh } = useAuth();
   const navigate = useNavigate();
@@ -44,7 +45,7 @@ export function SettingsPage() {
         <h1>Настройки</h1>
         <p>Вашият профил, сигурност и лични данни.</p>
       </div>
-      {message && <Notice good={good}>{message}</Notice>}
+      {message && <Notice good={good} error={!good}>{message}</Notice>}
       <section className="settings-card">
         <h2>
           <UserRound size={21} />
@@ -177,7 +178,7 @@ export function SettingsPage() {
           Изтеглете данните
         </a>
       </section>
-      {user?.admin && <><AvatarLibraryAdmin /><StudioVoiceAdmin /><AdminSettings /></>}
+      {user?.admin && <Suspense fallback={<p role="status">Зареждане…</p>}><AvatarLibraryAdmin /><StudioVoiceAdmin /><AdminSettings /></Suspense>}
       <section className="settings-card danger-zone">
         <h2>
           <Trash2 size={21} />

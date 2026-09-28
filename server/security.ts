@@ -50,25 +50,69 @@ export function safeEqual(a: string, b: string) {
     diff |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
   return diff === 0;
 }
+type Ctx = Context<{ Bindings: Env; Variables: ContextVars }>;
+export const clientIp = (c: Ctx) => c.req.header("CF-Connecting-IP") || "local";
+export const tooMany = () =>
+  new HTTPException(429, {
+    message: "Твърде много опити. Опитайте отново по-късно.",
+  });
+async function bucketKey(scope: string, identity: string, seconds: number) {
+  const bucket = Math.floor(now() / seconds);
+  return {
+    key: await sha(scope + ":" + identity + ":" + bucket),
+    expires: (bucket + 1) * seconds,
+  };
+}
+/** Counts one hit and throws 429 once the bucket exceeds `max`. */
 export async function rate(
-  c: Context<{ Bindings: Env; Variables: ContextVars }>,
+  c: Ctx,
   scope: string,
   max = 20,
   seconds = 3600,
   identity?: string,
 ) {
-  const ip = identity || c.req.header("CF-Connecting-IP") || "local";
-  const bucket = Math.floor(now() / seconds);
-  const key = await sha(scope + ":" + ip + ":" + bucket);
-  const r = await c.env.DB.prepare(
+  if ((await hit(c.env, scope, seconds, identity || clientIp(c))) > max)
+    throw tooMany();
+}
+/** Adds a hit without enforcing a limit, for counters that only record failures. */
+export async function hit(
+  env: Env,
+  scope: string,
+  seconds: number,
+  identity: string,
+) {
+  const { key, expires } = await bucketKey(scope, identity, seconds);
+  const r = await env.DB.prepare(
     "INSERT INTO rate_limits(key,hits,expires_at) VALUES (?,1,?) ON CONFLICT(key) DO UPDATE SET hits=hits+1 RETURNING hits",
   )
-    .bind(key, (bucket + 1) * seconds)
+    .bind(key, expires)
     .first<{ hits: number }>();
-  if (r && r.hits > max)
-    throw new HTTPException(429, {
-      message: "Твърде много опити. Опитайте отново по-късно.",
-    });
+  return r?.hits || 0;
+}
+/** Throws 429 if a recorded counter already reached `max`, without adding a hit. */
+export async function limited(
+  env: Env,
+  scope: string,
+  max: number,
+  seconds: number,
+  identity: string,
+) {
+  const { key } = await bucketKey(scope, identity, seconds);
+  const r = await env.DB.prepare("SELECT hits FROM rate_limits WHERE key=?")
+    .bind(key)
+    .first<{ hits: number }>();
+  return (r?.hits || 0) >= max;
+}
+/** Runs work after the response when the runtime allows it, otherwise inline. */
+export async function defer(c: Ctx, work: Promise<unknown>) {
+  let ctx: { waitUntil?: (p: Promise<unknown>) => void } | undefined;
+  try {
+    ctx = c.executionCtx;
+  } catch {
+    ctx = undefined;
+  }
+  if (typeof ctx?.waitUntil === "function") ctx.waitUntil(work);
+  else await work;
 }
 export async function sendMail(
   env: Env,

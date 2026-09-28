@@ -54,6 +54,8 @@ export type Job = {
 export const AuthContext = createContext<{
   user: User | null;
   loading: boolean;
+  /** The last /auth/me request failed (network or server), which is not the same as signed out. */
+  failed?: boolean;
   refresh: () => Promise<void>;
 }>({ user: null, loading: true, refresh: async () => {} });
 export const useAuth = () => useContext(AuthContext);
@@ -130,15 +132,39 @@ export function Button({
 export function Notice({
   children,
   good = false,
+  error = false,
 }: {
   children: ReactNode;
   good?: boolean;
+  /** Announce immediately as an error instead of a polite status message. */
+  error?: boolean;
 }) {
   return (
-    <div className={"notice " + (good ? "good" : "")} role="status">
+    <div className={"notice " + (good ? "good" : "")} role={error ? "alert" : "status"}>
       {good ? <Check size={18} /> : null}
       {children}
     </div>
+  );
+}
+/** A <details> whose content mounts on first open, so hidden panels do not load or poll. */
+export function Disclosure({
+  className,
+  summary,
+  children,
+}: {
+  className?: string;
+  summary: ReactNode;
+  children: ReactNode;
+}) {
+  const [opened, setOpened] = useState(false);
+  return (
+    <details
+      className={className}
+      onToggle={(e) => e.currentTarget.open && setOpened(true)}
+    >
+      <summary>{summary}</summary>
+      {opened && children}
+    </details>
   );
 }
 let currentAudio: HTMLAudioElement | null = null;

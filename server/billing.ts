@@ -3,8 +3,9 @@ import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { plans, type PlanId } from "../shared/catalog";
 import type { Env, ContextVars, DbUser } from "./types";
-import { now, ready, uid } from "./types";
-import { origin, rate } from "./security";
+import { now, ready, uid, DAY } from "./types";
+import { origin, rate, sha } from "./security";
+import { z } from "zod";
 export const billing = new Hono<{ Bindings: Env; Variables: ContextVars }>();
 export function stripe(env: Env) {
   if (!env.STRIPE_SECRET_KEY)
@@ -16,7 +17,11 @@ export function stripe(env: Env) {
     maxNetworkRetries: 2,
   });
 }
-function priceIds(e: Env): Record<string, string | undefined> {
+export const RENEWAL_GRACE = 3 * DAY;
+const paidPlans = ["starter", "creator", "studio"] as const;
+/** Identifies a trial across account deletion without keeping the address itself. */
+export const trialKey = (email: string) => sha("trial:" + email.trim().toLowerCase());
+function priceIds(e: Env): Record<(typeof paidPlans)[number], string | undefined> {
   return {
     starter: e.STRIPE_PRICE_STARTER,
     creator: e.STRIPE_PRICE_CREATOR,
@@ -29,16 +34,22 @@ export async function allowance(e: Env, u: DbUser) {
   )
     .bind(u.id)
     .first<any>();
-  const active = sub && sub.status === "active" && sub.period_end > now();
+  // A renewing subscription keeps its last paid period until Stripe confirms the new invoice.
+  const active =
+    sub &&
+    sub.status === "active" &&
+    sub.period_end + (sub.cancel_at_period_end ? 0 : RENEWAL_GRACE) > now();
   const plan =
     plans.find((p) => p.id === (active ? sub.plan : "free")) || plans[0];
   const window = active
     ? `${u.id}:${sub.id}:${sub.period_start}`
     : `${u.id}:trial`;
+  // Same plan: never shrink (keeps manual grants). Plan change inside a period: use the new plan's allowance.
+  // A new trial window starts from what a deleted account with the same email already used.
   await e.DB.prepare(
-    "INSERT INTO usage_windows(id,user_id,quota) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET quota=MAX(quota,excluded.quota)",
+    "INSERT INTO usage_windows(id,user_id,quota,plan,used) VALUES (?1,?2,?3,?4,CASE WHEN ?4='free' THEN COALESCE((SELECT used FROM trial_history WHERE email_hash=?5),0) ELSE 0 END) ON CONFLICT(id) DO UPDATE SET quota=CASE WHEN usage_windows.plan IS NULL OR usage_windows.plan=excluded.plan THEN MAX(usage_windows.quota,excluded.quota) ELSE excluded.quota END,plan=excluded.plan",
   )
-    .bind(window, u.id, plan.chars)
+    .bind(window, u.id, plan.chars, plan.id, await trialKey(u.email))
     .run();
   const usage = await e.DB.prepare(
     "SELECT used,quota FROM usage_windows WHERE id=?",
@@ -65,9 +76,10 @@ billing.post("/checkout", async (c) => {
       message: "Абонаментите все още не са активирани.",
     });
   await rate(c, "checkout", 8, 3600, u.id);
-  let { plan } = await c.req.json();
-  let id = priceIds(c.env)[plan];
-  if (!id)
+  const parsed = z.object({ plan: z.enum(paidPlans) }).safeParse(await c.req.json());
+  const requested = parsed.success ? parsed.data.plan : null;
+  let id = requested && priceIds(c.env)[requested];
+  if (!requested || !id)
     throw new HTTPException(400, { message: "Невалиден или неактивен план." });
   const s = stripe(c.env);
   let customer = u.stripe_customer;
@@ -102,14 +114,26 @@ billing.post("/checkout", async (c) => {
   await c.env.DB.prepare(
     "INSERT INTO checkout_intents(user_id,plan,intent_id,expires_at) VALUES (?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET plan=excluded.plan,intent_id=excluded.intent_id,expires_at=excluded.expires_at WHERE checkout_intents.expires_at<?",
   )
-    .bind(u.id, plan, uid(), now() + 1860, now())
+    .bind(u.id, requested, uid(), now() + 1860, now())
     .run();
   const intent = await c.env.DB.prepare(
     "SELECT * FROM checkout_intents WHERE user_id=?",
   )
     .bind(u.id)
     .first<any>();
-  plan = intent.plan;
+  if (intent.plan !== requested) {
+    // Close the checkout for the earlier choice so only one subscription can ever be started.
+    const open = await s.checkout.sessions.list({ customer, status: "open", limit: 100 });
+    for (const session of open.data) await s.checkout.sessions.expire(session.id);
+    intent.plan = requested;
+    intent.intent_id = uid();
+    await c.env.DB.prepare(
+      "UPDATE checkout_intents SET plan=?,intent_id=? WHERE user_id=?",
+    )
+      .bind(intent.plan, intent.intent_id, u.id)
+      .run();
+  }
+  const plan = intent.plan as (typeof paidPlans)[number];
   id = priceIds(c.env)[plan];
   if (!id)
     throw new HTTPException(503, { message: "Планът временно не е достъпен." });
@@ -210,18 +234,42 @@ export async function webhook(request: Request, e: Env) {
     )
       .bind(customer)
       .first<{ id: string }>();
+    if (
+      !user &&
+      sub.metadata?.user_id &&
+      !["canceled", "incomplete_expired"].includes(sub.status) &&
+      !(await e.DB.prepare("SELECT id FROM users WHERE id=?")
+        .bind(sub.metadata.user_id)
+        .first())
+    ) {
+      // Started by an account that no longer exists (for example, paid after deletion): nobody can use or cancel it.
+      await s.subscriptions.cancel(sub.id);
+      console.error("Cancelled subscription of a deleted account; review for refund", {
+        subscription: sub.id,
+      });
+    }
     if (user) {
       const item = sub.items.data[0];
       const plan = Object.entries(priceIds(e)).find(
         ([, v]) => v === item?.price.id,
       )?.[0] as PlanId | undefined;
       const invoice = sub.latest_invoice as Stripe.Invoice | null;
-      const status =
+      const unpaid =
         sub.status === "active" &&
-        (!invoice || typeof invoice !== "object" || invoice.status !== "paid")
-          ? "past_due"
-          : sub.status;
-      if (plan)
+        (!invoice || typeof invoice !== "object" || invoice.status !== "paid");
+      // A renewal invoice is draft/open for a while after the period rolls over. Keep the stored,
+      // paid period (allowance() grants a grace period) instead of revoking access until it is paid.
+      const renewalPending =
+        unpaid &&
+        typeof invoice === "object" &&
+        invoice?.billing_reason === "subscription_cycle" &&
+        !!(await e.DB.prepare(
+          "SELECT id FROM subscriptions WHERE id=? AND status='active'",
+        )
+          .bind(sub.id)
+          .first());
+      const status = unpaid ? "past_due" : sub.status;
+      if (plan && !renewalPending)
         statements.push(
           e.DB.prepare(
             "INSERT INTO subscriptions(id,user_id,plan,status,period_start,period_end,cancel_at_period_end,event_created) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET plan=excluded.plan,status=excluded.status,period_start=excluded.period_start,period_end=excluded.period_end,cancel_at_period_end=excluded.cancel_at_period_end,event_created=excluded.event_created WHERE excluded.event_created>=subscriptions.event_created",

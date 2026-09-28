@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { findByIdempotencyKey, hasActiveJob, hasActiveMediaTask } from "./db";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
 import type { ContextVars, Env, DbUser } from "./types";
@@ -169,12 +170,7 @@ media.get("/assets/:id/file", async (c) => {
 media.delete("/assets/:id", async (c) => {
   const id = c.req.param("id"),
     user = c.get("user").id;
-  const busy = await c.env.DB.prepare(
-    "SELECT id FROM media_tasks WHERE user_id=? AND status IN ('queued','running')",
-  )
-    .bind(user)
-    .first();
-  if (busy)
+  if (await hasActiveMediaTask(c.env, user))
     throw new HTTPException(409, {
       message: "Изчакайте активната обработка, преди да изтривате файлове.",
     });
@@ -186,11 +182,7 @@ media.delete("/assets/:id", async (c) => {
   if (!a) throw new HTTPException(404);
   if (
     a.job_id &&
-    (await c.env.DB.prepare(
-      "SELECT id FROM jobs WHERE user_id=? AND status IN ('queued','running')",
-    )
-      .bind(user)
-      .first())
+    (await hasActiveJob(c.env, user))
   )
     throw new HTTPException(409, { message: "Изчакайте текущия запис." });
   const claim = await c.env.DB.prepare(
@@ -337,11 +329,7 @@ export async function createMediaTask(
     outputKind?: string;
   },
 ) {
-  const prior = await e.DB.prepare(
-    "SELECT id FROM media_tasks WHERE user_id=? AND idempotency_key=?",
-  )
-    .bind(user.id, d.key)
-    .first<any>();
+  const prior = await findByIdempotencyKey(e, "media_tasks", user.id, d.key);
   if (prior) return prior.id as string;
   const a = await mediaAllowance(e, user),
     id = uid(),
@@ -389,11 +377,7 @@ export async function createMediaTask(
   try {
     await e.DB.batch(statements);
   } catch (err) {
-    const previous = await e.DB.prepare(
-      "SELECT id FROM media_tasks WHERE user_id=? AND idempotency_key=?",
-    )
-      .bind(user.id, d.key)
-      .first<any>();
+    const previous = await findByIdempotencyKey(e, "media_tasks", user.id, d.key);
     if (previous) return previous.id;
     mediaError(err);
   }
@@ -559,11 +543,7 @@ media.post("/exports", async (c) => {
       document: z.unknown(),
     })
     .parse(await c.req.json());
-  const previous = await c.env.DB.prepare(
-    "SELECT id FROM media_tasks WHERE user_id=? AND idempotency_key=?",
-  )
-    .bind(c.get("user").id, d.idempotencyKey)
-    .first<any>();
+  const previous = await findByIdempotencyKey(c.env, "media_tasks", c.get("user").id, d.idempotencyKey);
   if (previous) return c.json({ id: previous.id });
   const s = await exportSource(c.env, c.get("user").id, d.sourceId),
     doc = validDocument(d.document, s.duration);

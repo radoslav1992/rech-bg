@@ -104,8 +104,8 @@ export function VideoPanel({ jobs, approved, activeJob, submissionBlocked, onCre
         </div>
         {emailAvailable && <label className="checkbox-label"><input type="checkbox" checked={notifyEmail} onChange={e => edit(() => setNotifyEmail(e.target.checked))} /> Уведоми ме по имейл, когато видеото е готово или ако възникне грешка.</label>}
       </fieldset>
-      {durationError && <Notice>{durationError}</Notice>}
-      {error && <Notice>{error}</Notice>}
+      {durationError && <Notice error>{durationError}</Notice>}
+      {error && <Notice error>{error}</Notice>}
       <div className="generate-bar">
         <div><strong>{number(cost)} кредита за видеото</strong><small>Налични: {number(remaining)} кредита</small></div>
         <Button className="btn dark" busy={busy} disabled={picking || submissionBlocked || !!activeJob || !source || !approved || !enabled || !available[tier] || !user?.verified || !cost || cost > remaining || (!image && !selectedAsset) || !consent} onClick={generate}>

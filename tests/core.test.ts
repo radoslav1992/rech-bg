@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { decodeAudio, wavHeader, segments, voiceMap } from "../server/audio";
 import { hashPassword, checkPassword, sha } from "../server/security";
 import { database, bucket } from "./helpers";
@@ -84,7 +84,7 @@ describe("Authentication and actual SQL quota invariants", () => {
   it("reserves atomically, prevents concurrent jobs, refunds once and never resets spent trial credits", async () => {
     const { db, sqlite } = database();
     sqlite.exec(
-      "INSERT INTO users VALUES('u','u@test.invalid','Тест','hash',1,NULL,1); INSERT INTO projects VALUES('p','u','Тест','tts','Текст','mila','boris',400,1,1); INSERT INTO usage_windows VALUES('u:trial','u',1000,0)",
+      "INSERT INTO users VALUES('u','u@test.invalid','Тест','hash',1,NULL,1); INSERT INTO projects VALUES('p','u','Тест','tts','Текст','mila','boris',400,1,1); INSERT INTO usage_windows(id,user_id,quota,used) VALUES('u:trial','u',1000,0)",
     );
     await jobSql(db, "j1");
     expect(sqlite.prepare("SELECT used FROM usage_windows").get()?.used).toBe(
@@ -300,7 +300,7 @@ describe("Authenticated API and generation workflow", () => {
   });
   it("only exposes a completed audio file to its owner", async () => {
     sqlite
-      .prepare("INSERT INTO usage_windows VALUES(?,?,?,?)")
+      .prepare("INSERT INTO usage_windows(id,user_id,quota,used) VALUES(?,?,?,?)")
       .run("u:trial", "u", 1000, 0);
     await jobSql(env.DB, "test-audio");
     await env.AUDIO.put("audio/u/test-audio.wav", wav());
@@ -317,7 +317,7 @@ describe("Authenticated API and generation workflow", () => {
   });
   it("runs the actual workflow through synthesis, WAV assembly, private storage and completion", async () => {
     sqlite
-      .prepare("INSERT INTO usage_windows VALUES(?,?,?,?)")
+      .prepare("INSERT INTO usage_windows(id,user_id,quota,used) VALUES(?,?,?,?)")
       .run("u:trial", "u", 1000, 0);
     await jobSql(env.DB, "workflow");
     vi.stubGlobal(
@@ -349,7 +349,7 @@ describe("Authenticated API and generation workflow", () => {
   });
   it("refunds a failed synthesis and does not expose provider errors", async () => {
     sqlite
-      .prepare("INSERT INTO usage_windows VALUES(?,?,?,?)")
+      .prepare("INSERT INTO usage_windows(id,user_id,quota,used) VALUES(?,?,?,?)")
       .run("u:trial", "u", 1000, 0);
     await jobSql(env.DB, "failure");
     env.AI.run.mockRejectedValue(new Error("secret provider error"));

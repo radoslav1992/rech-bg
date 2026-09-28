@@ -4306,3 +4306,18 @@ label,
 .studio-admin-toolbar label { flex: 1; margin: 0; min-width: 0; }
 .studio-admin-toolbar .btn { flex-shrink: 0; }
 @media (max-width: 600px) { .studio-admin-toolbar { flex-direction: column; align-items: stretch; } }
+/* Route changes move focus to the page heading for screen readers; no ring for that programmatic focus. */
+main[tabindex="-1"]:focus,
+main h1[tabindex="-1"]:focus {
+  outline: none;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
