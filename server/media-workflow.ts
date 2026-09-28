@@ -177,6 +177,8 @@ export class MediaGeneration extends WorkflowEntrypoint<
                 background: x.background || null,
               })),
               music: timeline.music,
+              intro: timeline.intro || null,
+              outro: timeline.outro || null,
               layers: (timeline.layers || []).map((l: any) => l.kind === "image"
                 ? { kind: "image", input: l.input, start: l.start, end: l.end, anchor: anchor(l.position), width: l.width, opacity: l.opacity }
                 : { kind: "broll", input: l.input, start: l.start, end: l.end, trim: l.trim, still: l.still }),

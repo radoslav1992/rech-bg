@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Film, Image as ImageIcon, Trash2, Type, Upload } from "lucide-react";
+import { Film, Image as ImageIcon, Palette, Trash2, Type, Upload } from "lucide-react";
 import { Button } from "./lib";
 import { uploadMedia } from "./MediaTools";
 import { formatTime } from "./timeline";
@@ -45,8 +45,9 @@ export function MediaPicker({ assets, video = false, value, onPick, disabled }: 
   </div>;
 }
 
-export function LayerAddBar({ onAdd, disabled }: { onAdd: (type: Layer["type"]) => void; disabled?: boolean }) {
+export function LayerAddBar({ onAdd, onLogo, disabled }: { onAdd: (type: Layer["type"]) => void; onLogo?: () => void; disabled?: boolean }) {
   return <div className="tl-inline-actions tl-layer-add" role="group" aria-label="Добави слой">
+    {onLogo && <button type="button" className="btn" disabled={disabled} onClick={onLogo}><Palette size={15} /> Лого на бранда</button>}
     <button type="button" className="btn" disabled={disabled} onClick={() => onAdd("text")}><Type size={15} /> Текст</button>
     <button type="button" className="btn" disabled={disabled} onClick={() => onAdd("image")}><ImageIcon size={15} /> Изображение</button>
     <button type="button" className="btn" disabled={disabled} onClick={() => onAdd("broll")}><Film size={15} /> B-roll</button>

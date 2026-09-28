@@ -14,6 +14,7 @@ import { billingFailure } from "./billing-errors";
 import { withDefaults } from "./config";
 import { studio } from "./studio";
 import { studioProjects } from "./studio-projects";
+import { studioBrand } from "./studio-brand";
 import { videos, videoInputs } from "./video";
 import { media, mediaInputs } from "./media";
 import { publicRoutes } from "./routes/public";
@@ -100,6 +101,7 @@ app.use("/api/*", async (c, next) => {
 app.route("/api/billing", billing);
 app.route("/api/videos", videos);
 app.route("/api/video-studio/projects", studioProjects);
+app.route("/api/video-studio", studioBrand);
 app.route("/api/video-studio", studio);
 app.route("/api/media", media);
 app.route("/api/avatars", avatars);

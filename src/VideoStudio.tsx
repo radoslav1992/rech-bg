@@ -15,6 +15,7 @@ import { readLocalFile, removeLocalFile, takeLocalTimeline } from "./timeline";
 import { portraitUrl as referenceUrl, useProjectDocument } from "./project-document";
 import { newScene, sceneTimeline, scriptFingerprint, withScene, withTimeline, type ProjectPortrait } from "../shared/project";
 import { SceneStrip, type SceneStatus } from "./SceneStrip";
+import { BrandPanel, TemplatePicker, useBrandKit } from "./BrandPanel";
 import { defaultCaptions } from "../shared/captions";
 import { BackgroundExport } from "./MediaTools";
 import "./video-studio.css";
@@ -38,6 +39,9 @@ export function VideoStudio() {
   const projectId = useRef(id), key = useRef(crypto.randomUUID()), editor = useRef<HTMLTextAreaElement>(null), skipLoad = useRef("");
   // The project (scenes, timeline, portrait and music references) is saved on the server.
   const project = useProjectDocument(id);
+  const brand = useBrandKit();
+  // Bumped when captions of existing recordings change outside the editor (e.g. applying the brand).
+  const [captionsVersion, setCaptionsVersion] = useState(0);
   const [sceneIndex, setSceneIndex] = useState(0);
   const scenes = project.doc?.scenes || [];
   const sceneAt = Math.min(sceneIndex, Math.max(0, scenes.length - 1));
@@ -279,6 +283,7 @@ export function VideoStudio() {
     <header className="vs-heading"><div><span className="eyebrow">ОТ СЦЕНАРИЙ ДО ПУБЛИКУВАНЕ</span><h1>Вашето видео студио.</h1><p>Глас с характер. Лице за историята. Думи, които се виждат.</p></div><Link className="btn" to="/app/studio"><Mic size={17} /> Само аудио</Link></header>
     <div className="vs-steps"><span><b>01</b> Сценарий и глас</span><ArrowRight size={18} /><span><b>02</b> Одобрение и видео</span><ArrowRight size={18} /><span><b>03</b> Монтаж и експорт</span></div>
     {error && <Notice error>{error}</Notice>}{pollingError && <Notice>{pollingError}</Notice>}
+    {!id && <TemplatePicker />}
     {id && project.doc && <SceneStrip scenes={scenes} statuses={sceneStatuses} selected={sceneAt} disabled={locked}
       onSelect={setSceneIndex} onAdd={addScene} onRemove={removeScene} onMove={moveScene}
       onRename={(i, title) => project.update(d => withScene(d, i, s => ({ ...s, title })))} />}
@@ -322,7 +327,7 @@ export function VideoStudio() {
     {videoJobs.length > 0 && <section className="vs-card"><h2>Вашите видеа</h2><select aria-label="Версия на видеото" value={video?.id || ""} onChange={e => { const next = videoJobs.find(j => j.id === e.target.value); setSelectedVideo(e.target.value); if (next?.source_job_id) setSelectedAudio(next.source_job_id); }}>{videoJobs.map(j => <option key={j.id} value={j.id}>{new Date(j.created_at * 1000).toLocaleString("bg")} · {jobStatus(j)}</option>)}</select>{video?.status === "failed" && <Notice error>{video.error}</Notice>}{video && ["queued", "running"].includes(video.status) && <Notice>{jobStatus(video)}. Продължаваме във фонов режим. Готовото видео ще се появи в този проект.</Notice>}</section>}
     {project.conflict && <Notice>{project.conflict}</Notice>}
     {project.error && <Notice error>{project.error}</Notice>}
-    {timelineAudio && id && project.doc && scene && <TimelineEditor key={timelineAudio.id} audio={timelineAudio} video={timelineVideo} pendingVideo={timelinePending} portraitUrl={portraitUrl}
+    {timelineAudio && id && project.doc && scene && <TimelineEditor key={`${timelineAudio.id}:${captionsVersion}`} brand={brand.kit} audio={timelineAudio} video={timelineVideo} pendingVideo={timelinePending} portraitUrl={portraitUrl}
       projectId={id} timeline={sceneTimeline(scene, project.doc.music)} musicAssetId={project.doc.music?.assetId ?? null}
       onTimeline={(change, musicAssetId) => project.update(d => withTimeline(d, change(sceneTimeline(d.scenes[sceneAt], d.music)), musicAssetId, sceneAt))}
       onFlush={project.flush} serverExport={!multi} sceneLabel={multi ? `сцена ${sceneAt + 1}` : ""}
@@ -333,5 +338,9 @@ export function VideoStudio() {
       <p>Сървърът свързва {scenes.length} сцени по ред — всяка със своето начало, задържане, глас и стил на субтитрите — и добавя музиката под цялото видео. {sceneStatuses.some(s => s.video !== "ready") && "Експортът се отключва, когато всяка сцена има готово видео."}</p>
       <BackgroundExport sourceId={id} projectId={id} document={defaultCaptions} onSave={project.flush} />
     </section>}
+    {brand.kit && <Disclosure className="vs-card" summary="Бранд, интро и шаблони">
+      <BrandPanel kit={brand.kit} onSaveKit={brand.save} projectId={id} doc={project.doc} update={project.update}
+        captionSource={timelineAudio?.id || null} sceneLengths={sceneStatuses.map(s => s.seconds)} onCaptionsChanged={() => setCaptionsVersion(v => v + 1)} />
+    </Disclosure>}
   </div>;
 }

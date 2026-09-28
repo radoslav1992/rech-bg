@@ -98,6 +98,17 @@ The **scene background** (Формат → Фон на сцената) is a colo
 
 Drawing order everywhere: background → avatar → B-roll → images → text → captions. The preview and the browser export draw layers on the canvas (`src/layers-render.ts`); the server render uses FFmpeg overlays and libass for text (`renderer/server.py`, `server/caption-ass.ts`), so fonts and line wrapping can differ slightly. A scene with **video** B-roll exports on the server only; text, images and still B-roll also export in the browser. Layer files are media assets and follow the plan's storage retention; a missing file is reported by the export with the scene number. No migration is needed; layers live in the project document.
 
+## Brand kit, intro/outro and templates
+
+Open **Бранд, интро и шаблони** in the video studio.
+
+- **Brand kit** (one per account): name, three colours (new text layers use the text and box colours), a logo (JPG/PNG with position, width, opacity — "Лого на бранда" in the layer buttons adds it to the scene), a caption look taken from the selected scene, and an intro and outro.
+- **Intro/outro**: an image held for 1–15 seconds, or a video clip cut to that length (it keeps its own sound; otherwise silence). The server export adds them before the first and after the last scene; the music plays across them; captions, layers and ducking after the intro are shifted accordingly. The preview and the browser export show only the scenes. They count toward the 10-minute limit and the export price.
+- **Приложи бранда** sets the project's intro, outro and caption look, and rewrites the look of existing recordings' captions (words and timing stay). New recordings in the project start with that look. "Добави логото към всички сцени" adds the logo layer to every scene.
+- **Templates**: "Запази като шаблон" stores the project's scenes, scripts, voices, layers, backgrounds, timing, music, intro/outro and caption look — never its paid recordings or videos (up to 50 per account). A new video project offers "Започнете от шаблон", which creates the project with fresh scenes; each scene's voice and video are then generated as usual. Files a template refers to follow the media retention rules; an expired file is reported at export.
+
+Migration `0006_brand_templates.sql` adds the `brand_kits` and `studio_templates` tables. The renderer image changes (intro/outro segments), so deploy with a full `wrangler deploy`.
+
 ## Timeline
 
 The timeline is edited in the browser (`src/TimelineEditor.tsx`) and saved on the server as part of the project document (`project_documents`, migration `0005`; format in `shared/project.ts`). The document is small JSON: scenes (the voice recording and video job IDs, a portrait reference, voice offset, end hold and voice volume) and the project music (a media asset ID plus start, volume, ducking and fades). It only references media; nothing heavy is stored in it. Edits save automatically after a short pause. A revision number protects against two tabs or devices overwriting each other: the later save gets the newer version and a notice instead of silently replacing it. Phase 1 edits one scene; the format already holds up to 20.

@@ -257,3 +257,7 @@ npx wrangler d1 migrations apply rech-bg --remote
 Приложете `migrations/0005_project_documents.sql` преди deployment на тази версия (в D1 Console или с `npx wrangler d1 migrations apply rech-bg --remote`, ако използвате проследяване на миграциите). Тя създава само новата таблица `project_documents` и индекс; съществуващите данни не се променят. Изпълнението е безопасно и повторно (`IF NOT EXISTS`).
 
 Сървърният експорт с музика и монтаж използва нова операция на рендера. Направете пълен `wrangler deploy` (не `--containers-rollout=none`), за да се публикува обновеният контейнер. Докато контейнерът не е обновен, тези експорти се отказват и кредитите се връщат; обикновеният експорт на субтитри работи както досега.
+
+## 11. Миграция 0006: бранд комплект и шаблони
+
+Приложете `migrations/0006_brand_templates.sql` преди deployment (в D1 Console или с `npx wrangler d1 migrations apply rech-bg --remote`, ако използвате проследяване). Тя създава само таблиците `brand_kits` и `studio_templates` и индекс; изпълнението е безопасно и повторно (`IF NOT EXISTS`). Рендерът се променя (интро и финал), затова е нужен пълен `npx wrangler deploy`.
