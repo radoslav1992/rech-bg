@@ -80,7 +80,7 @@ it("persists independent additions, edits and tombstones without resetting hidde
 it("creates a normal video input copy from a library portrait without extra library credits", async () => {
   const p = crypto.randomUUID(), source = crypto.randomUUID(), time = now();
   sqlite.prepare("INSERT INTO projects VALUES(?,'u','Story','tts','Hello','mila','boris',400,?,?)").run(p,time,time);
-  sqlite.exec("INSERT INTO usage_windows VALUES('u:trial','u',250000,0)");
+  sqlite.exec("INSERT INTO usage_windows(id,user_id,quota,used) VALUES('u:trial','u',250000,0)");
   sqlite.prepare("INSERT INTO jobs(id,user_id,project_id,window_id,idempotency_key,title,mode,script,voice,second_voice,pause_ms,chars,status,audio_key,duration,created_at,updated_at) VALUES(?,'u',?,'u:trial',?,'Story','tts','Hello','mila','boris',400,0,'completed',?,5,?,?)").run(source,p,source,`audio/u/${source}.wav`,time,time);
   await env.AUDIO.put(`audio/u/${source}.wav`, new Uint8Array(44));
   const portrait = await request("/avatars/mila/image");

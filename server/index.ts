@@ -11,7 +11,7 @@ import type { Env, ContextVars, DbUser } from "./types";
 import { uid, now, ready } from "./types";
 import { sha, rate, checkPassword, hashPassword } from "./security";
 import { auth, isAdmin } from "./auth";
-import { billing, webhook, allowance, stripe } from "./billing";
+import { billing, webhook, allowance, stripe, trialKey } from "./billing";
 import { billingFailure } from "./billing-errors";
 import { segments, voiceMap, TTS_MODEL, decodeAudio, wavHeader } from "./audio";
 import { withDefaults } from "./config";
@@ -535,6 +535,15 @@ app.delete("/api/settings/account", async (c) => {
         message:
           "Първо прекратете абонамента и изчакайте края на платения период.",
       });
+    // An open checkout could still be paid after the account is gone. The webhook also cancels
+    // any such subscription, but closing the sessions first keeps the customer from being charged.
+    const open = await stripe(c.env).checkout.sessions.list({
+      customer: u.stripe_customer,
+      status: "open",
+      limit: 100,
+    });
+    for (const session of open.data)
+      await stripe(c.env).checkout.sessions.expire(session.id);
   }
   if (
     await c.env.DB.prepare(
@@ -558,12 +567,17 @@ app.delete("/api/settings/account", async (c) => {
       "INSERT OR IGNORE INTO cleanup_tasks(prefix,created_at) SELECT ?,? WHERE " +
         noActive,
     ).bind(`segments/${u.id}/`, now(), u.id),
+    c.env.DB.prepare(
+      "INSERT INTO trial_history(email_hash,used) SELECT ?,used FROM usage_windows WHERE id=? AND " +
+        noActive +
+        " ON CONFLICT(email_hash) DO UPDATE SET used=MAX(trial_history.used,excluded.used)",
+    ).bind(await trialKey(u.email), `${u.id}:trial`, u.id),
     c.env.DB.prepare("DELETE FROM users WHERE id=? AND " + noActive).bind(
       u.id,
       u.id,
     ),
   ]);
-  if (!results[2].meta.changes)
+  if (!results[3].meta.changes)
     throw new HTTPException(409, {
       message: "Има активен запис. Изчакайте и опитайте отново.",
     });

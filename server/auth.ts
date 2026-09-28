@@ -10,6 +10,11 @@ import {
   token,
   sha,
   rate,
+  hit,
+  limited,
+  tooMany,
+  clientIp,
+  defer,
   sendMail,
   origin,
 } from "./security";
@@ -152,10 +157,19 @@ async function createSession(c: any, userId: string) {
     maxAge: 2592000,
   });
 }
+// Only failed passwords count toward the per-email limits, so a correct login is never blocked by
+// someone else's attempts from one address. The global per-email ceiling still caps distributed guessing.
+const LOGIN_FAILURES_PER_ADDRESS = 10;
+const LOGIN_FAILURES_PER_EMAIL = 100;
 auth.post("/login", async (c) => {
   await rate(c, "login", 20);
   const { email, password } = credentials.parse(await c.req.json());
-  await rate(c, "login-email", 15, 3600, email);
+  const pair = email + ":" + clientIp(c);
+  if (
+    (await limited(c.env, "login-fail", LOGIN_FAILURES_PER_ADDRESS, 3600, pair)) ||
+    (await limited(c.env, "login-fail-email", LOGIN_FAILURES_PER_EMAIL, 3600, email))
+  )
+    throw tooMany();
   const user = await c.env.DB.prepare("SELECT * FROM users WHERE email=?")
     .bind(email)
     .first<DbUser>();
@@ -164,8 +178,11 @@ auth.post("/login", async (c) => {
     user?.password_hash ||
       "pbkdf2:100000:00000000000000000000000000000000:0000000000000000000000000000000000000000000000000000000000000000",
   );
-  if (!user || !valid)
+  if (!user || !valid) {
+    await hit(c.env, "login-fail", 3600, pair);
+    await hit(c.env, "login-fail-email", 3600, email);
     throw new HTTPException(401, { message: "Невалиден имейл или парола." });
+  }
   await createSession(c, user.id);
   return c.json({ ok: true });
 });
@@ -183,15 +200,20 @@ auth.post("/forgot", async (c) => {
   const { email } = z
     .object({ email: z.email().transform((s) => s.toLowerCase().trim()) })
     .parse(await c.req.json());
-  const u = await c.env.DB.prepare("SELECT * FROM users WHERE email=?")
-    .bind(email)
-    .first<DbUser>();
-  if (u)
-    try {
-      await issue(c.env, u, "reset", origin(c.env, c.req.raw));
-    } catch {
-      console.error("Password reset email unavailable");
-    }
+  // The per-address cap stops inbox flooding from rotating IPs. The response is identical
+  // either way and the send happens after it, so neither timing nor status reveals an account.
+  if ((await hit(c.env, "forgot-email", 3600, email)) > 3)
+    return c.json({ ok: true });
+  const base = origin(c.env, c.req.raw);
+  await defer(
+    c,
+    (async () => {
+      const u = await c.env.DB.prepare("SELECT * FROM users WHERE email=?")
+        .bind(email)
+        .first<DbUser>();
+      if (u) await issue(c.env, u, "reset", base);
+    })().catch(() => console.error("Password reset email unavailable")),
+  );
   return c.json({ ok: true });
 });
 auth.post("/verify", async (c) => {
