@@ -6,7 +6,7 @@ import {
 import type { Env } from "./types";
 import { now } from "./types";
 import { withDefaults } from "./config";
-import { captionAss, renderDimensions } from "./caption-ass";
+import { captionAss, captionAssScenes, renderDimensions } from "./caption-ass";
 import { defaultCaptions } from "../shared/captions";
 import { MB } from "../shared/media";
 import { videoFetch } from "./video-http";
@@ -151,28 +151,36 @@ export class MediaGeneration extends WorkflowEntrypoint<
         // A studio timeline render sends every input (video, approved voice, optional music) and the arrangement.
         // Older renderers reject the unknown operation, so the task fails and refunds instead of dropping music.
         const timeline = task.kind === "export" && p.timeline ? p.timeline : null;
+        // Tasks queued before multi-scene projects describe a single scene with top-level fields.
+        const scenes: any[] | null = timeline ? timeline.scenes || [timeline] : null;
+        const ass = !p.document ? ""
+          : p.captions ? captionAssScenes(p.document, p.captions)
+          : captionAss(p.document, scenes?.[0].speechStart || 0);
         const request = {
           id,
           url: input(0),
           operation: timeline ? "timeline" : task.kind,
           width,
           height,
-          ass: p.document ? captionAss(p.document, timeline?.speechStart || 0) : "",
+          ass,
           fit: p.document?.fit || "contain",
           ...(timeline && {
             urls: p.inputs.map((_: string, i: number) => input(i)),
             timeline: {
-              speech_start: timeline.speechStart,
-              tail: timeline.tail,
-              voice_volume: timeline.voiceVolume,
-              speech_duration: timeline.speechDuration,
+              scenes: scenes!.map((x) => ({
+                speech_start: x.speechStart,
+                tail: x.tail,
+                voice_volume: x.voiceVolume,
+                speech_duration: x.speechDuration,
+              })),
               music: timeline.music,
             },
           }),
         };
         let finished = false,
           duration = 0;
-        for (let i = 0; i < 240; i++) {
+        // Up to ~60 minutes: a 10-minute multi-scene render on one CPU plus queueing behind other renders.
+        for (let i = 0; i < 360; i++) {
           const result = await step.do(
             `render-${i}`,
             {

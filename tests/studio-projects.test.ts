@@ -138,13 +138,14 @@ describe("server timeline render", () => {
     expect(payload.inputs).toEqual([`audio/u/${video}.mp4`, `audio/u/${audio}.wav`, `media/u/${music}/original`]);
     expect(payload.document.words).toEqual(words);
     expect(payload.timeline).toEqual({
-      speechStart: 1.5, tail: 2, voiceVolume: 0.9, speechDuration: 10,
+      scenes: [{ speechStart: 1.5, tail: 2, voiceVolume: 0.9, speechDuration: 10 }],
       music: { start: -3, volume: 0.4, duck: true, fade: true, ranges: [[1.7, 2.3], [4.5, 5]] },
     });
+    expect(payload.captions).toEqual([{ document: expect.objectContaining({ words }), offset: 1.5 }]);
     // The same key returns the same task; a later edit does not change the queued render.
     await save(doc({ tail: 0 }), 1);
     expect(await (await call(`/video-studio/projects/${project}/render`, "POST", { idempotencyKey: key, credits: 0 })).json()).toEqual({ id: task.id });
-    expect(JSON.parse((sqlite.prepare("SELECT payload FROM media_tasks").get() as any).payload).timeline.tail).toBe(2);
+    expect(JSON.parse((sqlite.prepare("SELECT payload FROM media_tasks").get() as any).payload).timeline.scenes[0].tail).toBe(2);
   });
   it("charges later renders per started minute, like other additional exports", async () => {
     await save(doc(), 0);
@@ -176,11 +177,86 @@ it("sends the timeline, every input and caption times shifted by the lead-in to 
   await new (MediaGeneration as any)({}, env).run({ payload: { taskId: task.id } }, step);
   expect(requests[0]).toMatchObject({
     operation: "timeline",
-    timeline: { speech_start: 1.5, tail: 2, voice_volume: 0.9, speech_duration: 10, music: { start: -3, duck: true } },
+    timeline: { scenes: [{ speech_start: 1.5, tail: 2, voice_volume: 0.9, speech_duration: 10 }], music: { start: -3, duck: true } },
   });
   expect(requests[0].urls).toHaveLength(3);
   expect(requests[0].urls.every((u: string) => u.startsWith(`https://rechbg.com/api/media-inputs/${task.id}/`))).toBe(true);
   // 0.2 s into the voice + 1.5 s lead-in.
-  expect(requests[0].ass).toContain("Dialogue: 0,0:00:01.70,");
+  expect(requests[0].ass).toContain("Dialogue: 0,0:00:01.70,0:00:02.30,S0,");
   expect(sqlite.prepare("SELECT status FROM media_tasks").get()).toEqual({ status: "completed" });
+});
+
+describe("multi-scene projects", () => {
+  const audio2 = crypto.randomUUID(), video2 = crypto.randomUUID();
+  beforeEach(async () => {
+    const job = sqlite.prepare("INSERT INTO jobs(id,user_id,project_id,window_id,idempotency_key,title,mode,script,voice,second_voice,pause_ms,chars,status,audio_key,duration,created_at,updated_at,kind,source_job_id,video_key) VALUES(?,'u',?,'w',?,'Видео','studio','Втора','studio-boris','boris',0,1,'completed',?,6,1,1,?,?,?)");
+    job.run(audio2, project, audio2, `audio/u/${audio2}.wav`, "audio", null, null);
+    job.run(video2, project, video2, null, "video", audio2, `audio/u/${video2}.mp4`);
+    await env.AUDIO.put(`audio/u/${video2}.mp4`, new Uint8Array(24));
+    await env.AUDIO.put(`audio/u/${audio}.captions.json`, JSON.stringify({ ...defaultCaptions, words: [{ text: "Първа", start: 0, end: 1 }] }));
+    await env.AUDIO.put(`audio/u/${audio2}.captions.json`, JSON.stringify({ ...defaultCaptions, style: "neon", words: [{ text: "Втора", start: 0.5, end: 1.5 }] }));
+  });
+  const twoScenes = (second: Partial<ProjectDoc["scenes"][0]> = {}): ProjectDoc => {
+    const d = doc();
+    d.scenes.push({ ...d.scenes[0], id: crypto.randomUUID(), title: "Край", script: "[calm] Втора сцена.", voice: "studio-boris",
+      history: [audio2], audioJobId: audio2, videoJobId: video2, speechStart: 0, tail: 1, voiceVolume: 1, ...second });
+    return d;
+  };
+  it("parses documents saved before scenes had scripts, and rejects duplicate scene IDs", async () => {
+    sqlite.prepare("INSERT INTO project_documents VALUES(?,'u',?,1,1)").run(project, JSON.stringify({
+      version: 1, music: null,
+      scenes: [{ id: crypto.randomUUID(), audioJobId: audio, videoJobId: video, portrait: null, speechStart: 0, tail: 0, voiceVolume: 1 }],
+    }));
+    const stored = await (await call(`/video-studio/projects/${project}/document`)).json() as any;
+    expect(stored.document.scenes[0]).toMatchObject({ script: "", voice: null, history: [], title: "" });
+    const d = twoScenes();
+    expect((await save({ ...d, scenes: [d.scenes[0], { ...d.scenes[1], id: d.scenes[0].id }] }, 1)).status).toBe(400);
+    expect((await save(twoScenes({ history: [crypto.randomUUID()] }), 1)).status).toBe(400);
+  });
+  it("generates a scene's recording from its own saved script and voice", async () => {
+    env.ELEVENLABS_API_KEY = "key";
+    env.GENERATION = { create: vi.fn() };
+    const d = twoScenes();
+    await save(d, 0);
+    const script = d.scenes[1].script;
+    const wrongPrice = await call("/generate", "POST", { projectId: project, idempotencyKey: crypto.randomUUID(), credits: 3, sceneId: d.scenes[1].id });
+    expect(wrongPrice.status).toBe(409);
+    const r = await call("/generate", "POST", { projectId: project, idempotencyKey: crypto.randomUUID(), credits: script.length * 3, sceneId: d.scenes[1].id });
+    expect(r.status).toBe(202);
+    const id = (await r.json() as any).id;
+    expect(sqlite.prepare("SELECT script,voice,title FROM jobs WHERE id=?").get(id)).toEqual({ script, voice: "studio-boris", title: "Видео · Сцена 2" });
+    expect((await call("/generate", "POST", { projectId: project, idempotencyKey: crypto.randomUUID(), credits: 3, sceneId: crypto.randomUUID() })).status).toBe(404);
+  });
+  it("renders all scenes in order as one video with music across them and each scene's captions", async () => {
+    await save(twoScenes(), 0);
+    const quote = await (await call(`/video-studio/projects/${project}/render/quote`)).json() as any;
+    expect(quote).toEqual({ credits: 0, length: 20.5 });
+    const r = await call(`/video-studio/projects/${project}/render`, "POST", { idempotencyKey: crypto.randomUUID(), credits: 0 });
+    expect(r.status).toBe(202);
+    const task = sqlite.prepare("SELECT * FROM media_tasks").get() as any;
+    expect(task.source_id).toBe(project);
+    const payload = JSON.parse(task.payload);
+    expect(payload.inputs).toEqual([`audio/u/${video}.mp4`, `audio/u/${audio}.wav`, `audio/u/${video2}.mp4`, `audio/u/${audio2}.wav`, `media/u/${music}/original`]);
+    expect(payload.timeline.scenes).toEqual([
+      { speechStart: 1.5, tail: 2, voiceVolume: 0.9, speechDuration: 10 },
+      { speechStart: 0, tail: 1, voiceVolume: 1, speechDuration: 6 },
+    ]);
+    // Scene 2 starts at 13.5 s; its word at 0.5–1.5 s is speech at 14–15 s on the final clock.
+    expect(payload.timeline.music.ranges).toEqual([[1.5, 2.5], [14, 15]]);
+    expect(payload.captions.map((c: any) => c.offset)).toEqual([1.5, 13.5]);
+    // Each scene keeps its caption look as its own ASS style.
+    const { captionAssScenes } = await import("../server/caption-ass");
+    const ass = captionAssScenes(payload.document, payload.captions);
+    expect(ass).toMatch(/Style: S0,/); expect(ass).toMatch(/Style: S1,/);
+    expect(ass).toContain("Dialogue: 0,0:00:14.00,");
+  });
+  it("names the scene that is not ready and caps the final length", async () => {
+    await save(twoScenes({ videoJobId: null }), 0);
+    const r = await call(`/video-studio/projects/${project}/render/quote`);
+    expect(r.status).toBe(400);
+    expect((await r.json() as any).error).toMatch(/^Сцена 2:/);
+    sqlite.prepare("UPDATE jobs SET duration=590 WHERE id=?").run(audio2);
+    await save(twoScenes(), 1);
+    expect(((await (await call(`/video-studio/projects/${project}/render/quote`)).json()) as any).error).toMatch(/10 минути/);
+  });
 });

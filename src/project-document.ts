@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./lib";
-import { newProjectDoc, type ProjectDoc, type ProjectPortrait } from "../shared/project";
+import { newProjectDoc, projectDocSchema, type ProjectDoc, type ProjectPortrait } from "../shared/project";
 
 export type SaveState = "saved" | "saving" | "dirty" | "error";
 type Stored = { document: ProjectDoc | null; revision: number };
@@ -13,6 +13,11 @@ export const portraitUrl = (p: ProjectPortrait | null) =>
  * and save after a short pause, one request at a time. If another tab or device saved first, the
  * server's version wins and `conflict` explains why the view changed.
  */
+/** Fills defaults for fields added after a document was saved (e.g. scene scripts), like the server does. */
+const normalize = (value: unknown): ProjectDoc | null => {
+  const parsed = projectDocSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+};
 export function useProjectDocument(projectId: string | undefined) {
   const [doc, setDoc] = useState<ProjectDoc | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("saved");
@@ -32,7 +37,8 @@ export function useProjectDocument(projectId: string | undefined) {
       if (state.current.projectId !== id) return;
       if (r.status === 409) {
         s.revision = body.revision; s.pending = null;
-        if (body.document) setDoc(body.document);
+        const latest = normalize(body.document);
+        if (latest) setDoc(latest);
         setConflict(body.error || ""); setSaveState("saved");
         return;
       }
@@ -57,7 +63,9 @@ export function useProjectDocument(projectId: string | undefined) {
     api<Stored>(endpoint(projectId)).then(r => {
       if (!live) return;
       state.current.revision = r.revision; state.current.loaded = true;
-      if (r.document) setDoc(r.document);
+      const stored = r.document && normalize(r.document);
+      if (r.document && !stored) { setError("Проектът не може да се зареди. Презаредете страницата."); return; }
+      if (stored) setDoc(stored);
       else { const first = newProjectDoc(); setDoc(first); state.current.pending = first; void save(); }
     }).catch(e => live && setError((e as Error).message));
     const flush = () => { void save(); };

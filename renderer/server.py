@@ -65,45 +65,59 @@ def music_gain(music, length, music_duration):
     return gain
 
 def timeline(job, payload, origin, width, height, scale, ass, output):
-    urls = payload.get('urls') or []
-    if not 2 <= len(urls) <= 3: raise ValueError('Invalid inputs')
+    """Joins scenes (video + approved voice each) with cuts, adds music under the whole video and burns captions.
+    Each scene holds its first frame for the lead-in and its last frame for the end hold."""
     t = payload['timeline']
-    speech_start, tail = number(t['speech_start'], 0, 10), number(t['tail'], 0, 10)
-    voice_volume, speech = number(t['voice_volume'], 0, 1), number(t['speech_duration'], 0.1, 600)
-    length = round(speech_start + speech + tail, 3)
+    # Tasks queued before multi-scene projects describe one scene with top-level fields.
+    scenes = t['scenes'] if 'scenes' in t else [t]
+    if not 1 <= len(scenes) <= 20: raise ValueError('Invalid scenes')
+    urls = payload.get('urls') or []
+    has_music = bool(t.get('music'))
+    if len(urls) != 2 * len(scenes) + (1 if has_music else 0): raise ValueError('Invalid inputs')
     files = []
     for i, url in enumerate(urls):
         path = os.path.join(job['dir'], f'input{i}')
         download(url, path, origin); files.append(path)
-    video_info = probe(files[0])
-    video = next((s for s in video_info.get('streams',[]) if s.get('codec_type')=='video'), None)
-    if not video or video.get('width',0)>4096 or video.get('height',0)>4096: raise ValueError('Invalid video')
-    # Like the browser export: use the video's own soundtrack (lip sync) only when it matches the approved voice.
-    soundtrack = next((s for s in video_info['streams'] if s.get('codec_type')=='audio'), None)
-    duration = float((soundtrack or {}).get('duration') or video_info.get('format',{}).get('duration') or 0)
-    voice = '0:a:0' if soundtrack and abs(duration - speech) <= 0.25 else '1:a:0'
-    ms = int(round(speech_start * 1000))
-    graph = [
-        f'[0:v:0]tpad=start_duration={speech_start:.3f}:start_mode=clone:stop_duration={length + 1:.3f}:stop_mode=clone,'
-        f'trim=duration={length:.3f},setpts=PTS-STARTPTS,{scale},setsar=1,ass={ass}[v]',
-        f'[{voice}]aformat=sample_rates=48000:channel_layouts=stereo,volume={voice_volume:.4f},adelay=delays={ms}:all=1,apad,atrim=duration={length:.3f}[voice]',
-    ]
+    graph, video_labels, voice_labels, total = [], '', '', 0.0
+    for i, scene in enumerate(scenes):
+        speech_start, tail = number(scene['speech_start'], 0, 10), number(scene['tail'], 0, 10)
+        voice_volume, speech = number(scene['voice_volume'], 0, 1), number(scene['speech_duration'], 0.1, 600)
+        length = round(speech_start + speech + tail, 3)
+        total += length
+        info = probe(files[2 * i])
+        video = next((s for s in info.get('streams',[]) if s.get('codec_type')=='video'), None)
+        if not video or video.get('width',0)>4096 or video.get('height',0)>4096: raise ValueError('Invalid video')
+        # Like the browser export: use the video's own soundtrack (lip sync) only when it matches the approved voice.
+        soundtrack = next((s for s in info['streams'] if s.get('codec_type')=='audio'), None)
+        duration = float((soundtrack or {}).get('duration') or info.get('format',{}).get('duration') or 0)
+        voice = f'{2 * i}:a:0' if soundtrack and abs(duration - speech) <= 0.25 else f'{2 * i + 1}:a:0'
+        ms = int(round(speech_start * 1000))
+        graph.append(f'[{2 * i}:v:0]tpad=start_duration={speech_start:.3f}:start_mode=clone:stop_duration={length + 1:.3f}:stop_mode=clone,'
+                     f'trim=duration={length:.3f},setpts=PTS-STARTPTS,fps=30,{scale},setsar=1,format=yuv420p[v{i}]')
+        graph.append(f'[{voice}]aformat=sample_rates=48000:channel_layouts=stereo,volume={voice_volume:.4f},adelay=delays={ms}:all=1,'
+                     f'apad,atrim=duration={length:.3f},asetpts=PTS-STARTPTS[a{i}]')
+        video_labels += f'[v{i}]'; voice_labels += f'[a{i}]'
+    total = round(total, 3)
+    if total > 600: raise ValueError('Video too long')
+    graph.append(f'{video_labels}concat=n={len(scenes)}:v=1:a=0,ass={ass}[v]')
+    graph.append(f'{voice_labels}concat=n={len(scenes)}:v=0:a=1[voice]')
     audio = '[voice]'
-    if len(files) == 3 and t.get('music'):
-        music_info = probe(files[2])
+    if has_music:
+        m = len(files) - 1
+        music_info = probe(files[m])
         music_duration = float(music_info.get('format',{}).get('duration') or 0)
         if not any(s.get('codec_type')=='audio' for s in music_info.get('streams',[])) or music_duration <= 0: raise ValueError('Invalid music')
         start = number(t['music']['start'], -3600, 3600)
         place = f'adelay=delays={int(round(start * 1000))}:all=1' if start >= 0 else f'atrim=start={-start:.3f},asetpts=PTS-STARTPTS'
-        graph.append(f"[2:a:0]aformat=sample_rates=48000:channel_layouts=stereo,{place},apad,atrim=duration={length:.3f},"
-                     f"volume='{music_gain(t['music'], length, music_duration)}':eval=frame[music]")
+        graph.append(f"[{m}:a:0]aformat=sample_rates=48000:channel_layouts=stereo,{place},apad,atrim=duration={total:.3f},"
+                     f"volume='{music_gain(t['music'], total, music_duration)}':eval=frame[music]")
         graph.append('[voice][music]amix=inputs=2:duration=first:normalize=0[mix]')
         audio = '[mix]'
     command(['ffmpeg','-nostdin','-v','error','-threads','1','-protocol_whitelist','file,pipe',*sum((['-i', f] for f in files), []),
              '-filter_complex',';'.join(graph),'-map','[v]','-map',audio,'-filter_threads','1','-r','30','-c:v','libx264','-preset','veryfast',
-             '-crf','23','-maxrate','4M','-bufsize','8M','-threads','1','-pix_fmt','yuv420p','-c:a','aac','-b:a','160k','-t',f'{length:.3f}',
-             '-movflags','+faststart',output],timeout=1500)
-    return length
+             '-crf','23','-maxrate','4M','-bufsize','8M','-threads','1','-pix_fmt','yuv420p','-c:a','aac','-b:a','160k','-t',f'{total:.3f}',
+             '-movflags','+faststart',output],timeout=3000)
+    return total
 
 def process(job, payload):
     try:

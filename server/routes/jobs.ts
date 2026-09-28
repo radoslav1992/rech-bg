@@ -1,5 +1,6 @@
 import type { Env, ContextVars } from "../types";
 import { Hono } from "hono";
+import { loadProjectDoc } from "../studio-projects";
 import { findByIdempotencyKey } from "../db";
 import { resolveStudioVoice } from "../studio-voices";
 import { HTTPException } from "hono/http-exception";
@@ -22,16 +23,29 @@ jobs.post("/api/generate", async (c) => {
     });
   await rate(c, "generate", 30, 3600, u.id);
   const d = z
-    .object({ projectId: z.uuid(), idempotencyKey: z.uuid(), credits: z.number().int().positive().optional() })
+    .object({ projectId: z.uuid(), idempotencyKey: z.uuid(), credits: z.number().int().positive().optional(), sceneId: z.uuid().optional() })
     .parse(await c.req.json());
   const previous = await findByIdempotencyKey(c.env, "jobs", u.id, d.idempotencyKey);
   if (previous) return c.json({ id: previous.id });
-  const p = await c.env.DB.prepare(
+  let p = await c.env.DB.prepare(
     "SELECT * FROM projects WHERE id=? AND user_id=?",
   )
     .bind(d.projectId, u.id)
     .first<any>();
   if (!p) throw new HTTPException(404, { message: "Проектът не е намерен." });
+  if (p.mode === "studio" && d.sceneId) {
+    // A scene of a multi-scene project: its script and voice come from the saved project document.
+    const scenes = (await loadProjectDoc(c.env, u.id, p.id))?.document.scenes || [];
+    const index = scenes.findIndex((s) => s.id === d.sceneId);
+    if (index < 0) throw new HTTPException(404, { message: "Сцената не е намерена. Запазете проекта и опитайте отново." });
+    const scene = scenes[index];
+    p = {
+      ...p,
+      script: scene.script || (index === 0 ? p.script : ""),
+      voice: scene.voice || p.voice,
+      title: scenes.length > 1 ? `${p.title} · Сцена ${index + 1}`.slice(0, 120) : p.title,
+    };
+  }
   if (p.mode === "studio" && !c.env.ELEVENLABS_API_KEY?.trim())
     throw new HTTPException(503, { message: "Озвучаването във видео студиото още не е активирано." });
   if (p.mode === "studio") await resolveStudioVoice(c.env, p.voice);

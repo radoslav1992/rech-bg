@@ -13,7 +13,10 @@ import { mergeJobs } from "./job-state";
 import { TimelineEditor } from "./TimelineEditor";
 import { readLocalFile, removeLocalFile, takeLocalTimeline } from "./timeline";
 import { portraitUrl as referenceUrl, useProjectDocument } from "./project-document";
-import { sceneTimeline, withTimeline, type ProjectPortrait } from "../shared/project";
+import { newScene, sceneTimeline, scriptFingerprint, withScene, withTimeline, type ProjectPortrait } from "../shared/project";
+import { SceneStrip, type SceneStatus } from "./SceneStrip";
+import { defaultCaptions } from "../shared/captions";
+import { BackgroundExport } from "./MediaTools";
 import "./video-studio.css";
 
 export function VideoStudio() {
@@ -33,7 +36,21 @@ export function VideoStudio() {
   const [localJobs, setLocalJobs] = useState<Job[]>([]);
   const [videoFormKey, setVideoFormKey] = useState(() => crypto.randomUUID());
   const projectId = useRef(id), key = useRef(crypto.randomUUID()), editor = useRef<HTMLTextAreaElement>(null), skipLoad = useRef("");
-  const jobs = mergeJobs(localJobs, allJobs).filter(j => j.project_id === id).sort((a, b) => b.created_at - a.created_at);
+  // The project (scenes, timeline, portrait and music references) is saved on the server.
+  const project = useProjectDocument(id);
+  const [sceneIndex, setSceneIndex] = useState(0);
+  const scenes = project.doc?.scenes || [];
+  const sceneAt = Math.min(sceneIndex, Math.max(0, scenes.length - 1));
+  const scene = scenes[sceneAt] || null;
+  const multi = scenes.length > 1;
+  // Recordings belong to the scene whose history lists them; older recordings belong to the first scene.
+  const projectJobs = mergeJobs(localJobs, allJobs).filter(j => j.project_id === id).sort((a, b) => b.created_at - a.created_at);
+  const audioOwner = (jobId: string) => {
+    const i = scenes.findIndex(s => s.history.includes(jobId) || s.audioJobId === jobId);
+    return i < 0 ? 0 : i;
+  };
+  const sceneOf = (j: Job) => audioOwner(j.kind === "video" ? j.source_job_id || "" : j.id);
+  const jobs = projectJobs.filter(j => sceneOf(j) === sceneAt);
   const audioJobs = jobs.filter(j => j.kind !== "video"), videoJobs = jobs.filter(j => j.kind === "video");
   const audio = audioJobs.find(j => j.id === selectedAudio) || audioJobs[0] || null;
   // Approval is page state; a voice that already has a video was approved before, so it stays approved after reload.
@@ -71,9 +88,6 @@ export function VideoStudio() {
     setAssisting(false); setAssistError(""); setUndo(null);
     return () => { assistRequest.current?.abort(); assistRequest.current = null; };
   }, [id]);
-  // The project (scenes, timeline, portrait and music references) is saved on the server.
-  const project = useProjectDocument(id);
-  const scene = project.doc?.scenes[0] || null;
   // A portrait picked before the first save, or an own file still uploading, previews locally.
   const [pendingPortrait, setPendingPortrait] = useState<{ file: Blob | null; ref: ProjectPortrait | null } | null>(null);
   const portraitProject = useRef(id);
@@ -81,7 +95,7 @@ export function VideoStudio() {
     if (portraitProject.current && portraitProject.current !== id) { setPortrait(null); setPendingPortrait(null); }
     portraitProject.current = id;
   }, [id]);
-  const savePortrait = async (file: Blob | null, ref: ProjectPortrait | null) => {
+  const savePortrait = async (file: Blob | null, ref: ProjectPortrait | null, index = sceneAt) => {
     let reference = ref;
     if (!reference && file) {
       try {
@@ -89,7 +103,7 @@ export function VideoStudio() {
         reference = { type: "asset", id: await uploadMedia(new File([file], name, { type: file.type }), "portrait", () => {}) };
       } catch { return; /* Stays a local preview; the video itself still uses the chosen file. */ }
     }
-    if (reference) project.update(d => ({ ...d, scenes: [{ ...d.scenes[0], portrait: reference }, ...d.scenes.slice(1)] }));
+    if (reference) project.update(d => withScene(d, index, s => ({ ...s, portrait: reference })));
   };
   useEffect(() => {
     if (!project.doc || !pendingPortrait) return;
@@ -112,13 +126,13 @@ export function VideoStudio() {
     if (!project.doc || !scene || !timelineAudio) return;
     const videoId = timelineVideo?.id ?? null;
     if (scene.audioJobId !== timelineAudio.id || scene.videoJobId !== videoId)
-      project.update(d => ({ ...d, scenes: [{ ...d.scenes[0], audioJobId: timelineAudio.id, videoJobId: videoId }, ...d.scenes.slice(1)] }));
-  }, [!!project.doc, timelineAudio?.id, timelineVideo?.id]);
+      project.update(d => withScene(d, sceneAt, s => ({ ...s, audioJobId: timelineAudio.id, videoJobId: videoId })));
+  }, [!!project.doc, sceneAt, timelineAudio?.id, timelineVideo?.id]);
   // One-time import of data that older versions kept only in this browser.
   useEffect(() => {
     if (!project.doc || !user || !id) return;
     const pristine = !project.doc.music && project.doc.scenes[0].speechStart === 0 && project.doc.scenes[0].tail === 0 && project.doc.scenes[0].voiceVolume === 1;
-    const local = timelineAudio && takeLocalTimeline(user.id, timelineAudio.id);
+    const local = sceneAt === 0 && timelineAudio && takeLocalTimeline(user.id, timelineAudio.id);
     if (local && pristine) {
       const musicKey = `music:${user.id}:${timelineAudio!.id}`;
       project.update(d => withTimeline(d, { ...local, music: null }));
@@ -136,7 +150,7 @@ export function VideoStudio() {
       readLocalFile(`portrait:${user.id}:${id}`).then(p => {
         if (!p) return;
         const asset = typeof p === "string" ? /^\/api\/media\/assets\/([0-9a-f-]{36})\/file$/.exec(p)?.[1] : undefined;
-        void savePortrait(typeof p === "string" ? null : p, asset ? { type: "asset", id: asset } : null)
+        void savePortrait(typeof p === "string" ? null : p, asset ? { type: "asset", id: asset } : null, 0)
           .then(() => removeLocalFile(`portrait:${user.id}:${id}`));
       });
     }
@@ -165,8 +179,57 @@ export function VideoStudio() {
   }, [id, params.get("job")]);
   useEffect(() => { if (!dirty) return; const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); }; window.addEventListener("beforeunload", warn); return () => window.removeEventListener("beforeunload", warn); }, [dirty]);
   const edit = (fn: () => void) => { fn(); setDirty(true); setSuggestion(""); setAssistError(""); setApproved(""); key.current = crypto.randomUUID(); };
+  // The editor shows the selected scene; its script and voice save with the project document.
+  useEffect(() => {
+    if (!project.doc || !scene) return;
+    if (scene.script !== script || scene.voice !== (voice || null))
+      project.update(d => withScene(d, sceneAt, s => ({ ...s, script, voice: voice || null })));
+  }, [script, voice]);
+  const sceneLoaded = useRef("");
+  useEffect(() => {
+    if (!project.doc || !scene || sceneLoaded.current === scene.id) return;
+    const first = sceneLoaded.current === "";
+    sceneLoaded.current = scene.id;
+    // The first scene of older projects keeps its script in the project itself.
+    if (first && sceneAt === 0 && !scene.script) return;
+    setScript(scene.script); if (scene.voice) setVoice(scene.voice);
+    setSelectedAudio(""); setSelectedVideo(""); setApproved(""); setSuggestion(""); setUndo(null);
+    setPortrait(null); setVideoFormKey(crypto.randomUUID()); key.current = crypto.randomUUID();
+  }, [!!project.doc, scene?.id]);
+  useEffect(() => { sceneLoaded.current = ""; setSceneIndex(0); }, [id]);
+  const addScene = () => {
+    project.update(d => ({ ...d, scenes: [...d.scenes, newScene({ voice: voice || null })] }));
+    setSceneIndex(scenes.length);
+  };
+  const removeScene = (i: number) => {
+    if (scenes.length < 2 || !confirm(`Да изтрием ли сцена ${i + 1}? Създадените записи остават в историята на проекта.`)) return;
+    project.update(d => ({ ...d, scenes: d.scenes.filter((_, n) => n !== i) }));
+    setSceneIndex(Math.max(0, i - 1));
+  };
+  const moveScene = (i: number, by: -1 | 1) => {
+    project.update(d => {
+      const next = [...d.scenes];
+      [next[i], next[i + by]] = [next[i + by], next[i]];
+      return { ...d, scenes: next };
+    });
+    setSceneIndex(i + by);
+  };
+  const sceneStatuses: SceneStatus[] = scenes.map((s, i) => {
+    const mine = projectJobs.filter(j => sceneOf(j) === i);
+    const audios = mine.filter(j => j.kind !== "video"), videos = mine.filter(j => j.kind === "video");
+    const current = audios.find(j => j.id === s.audioJobId) || audios[0];
+    const video = videos.find(j => j.id === s.videoJobId) || videos.find(j => j.source_job_id === current?.id);
+    const stale = !!current && !!s.audioFor && !!s.script && s.audioFor !== scriptFingerprint(s.voice, s.script);
+    return {
+      voice: !current ? "none" : ["queued", "running"].includes(current.status) ? "working" : current.status === "completed" ? (stale ? "stale" : "ready") : "none",
+      video: !video ? "none" : ["queued", "running"].includes(video.status) ? "working" : video.status === "completed" ? "ready" : "none",
+      seconds: current?.status === "completed" ? s.speechStart + current.duration + s.tail : 0,
+    };
+  });
   const save = async () => {
-    const body = { title, mode: "studio", script, voice, second_voice: "boris", pause_ms: 0 };
+    // The project row mirrors the first scene (older screens and the project list read it).
+    const first = sceneAt === 0 || !project.doc ? { script, voice } : { script: scenes[0].script || script, voice: scenes[0].voice || voice };
+    const body = { title, mode: "studio", script: first.script, voice: first.voice, second_voice: "boris", pause_ms: 0 };
     let savedId = projectId.current;
     if (savedId) await api("/projects/" + savedId, { method: "PUT", body: JSON.stringify(body) });
     else { const result = await post("/projects", body); savedId = result.id; projectId.current = savedId; skipLoad.current = savedId!; navigate("/app/video-studio/" + savedId, { replace: true }); }
@@ -176,7 +239,10 @@ export function VideoStudio() {
     setBusy(true); setError(""); setApproved("");
     try {
       const savedId = await save();
-      const { id: jobId } = await post("/generate", { projectId: savedId, idempotencyKey: key.current, credits: cost });
+      // Scenes generate from the saved document, so make sure the latest script is on the server.
+      if (project.doc && scene) await project.flush();
+      const { id: jobId } = await post("/generate", { projectId: savedId, idempotencyKey: key.current, credits: cost, ...(project.doc && scene ? { sceneId: scene.id } : {}) });
+      if (project.doc && scene) project.update(d => withScene(d, sceneAt, s => ({ ...s, history: [jobId, ...s.history.filter(h => h !== jobId)].slice(0, 20), audioFor: scriptFingerprint(voice || null, script) })));
       const { job } = await api("/jobs/" + jobId);
       setLocalJobs(j => [job, ...j.filter(x => x.id !== job.id)]); setSelectedAudio(jobId); setSelectedVideo("");
       key.current = crypto.randomUUID(); jobsChanged(); await refresh();
@@ -213,6 +279,10 @@ export function VideoStudio() {
     <header className="vs-heading"><div><span className="eyebrow">ОТ СЦЕНАРИЙ ДО ПУБЛИКУВАНЕ</span><h1>Вашето видео студио.</h1><p>Глас с характер. Лице за историята. Думи, които се виждат.</p></div><Link className="btn" to="/app/studio"><Mic size={17} /> Само аудио</Link></header>
     <div className="vs-steps"><span><b>01</b> Сценарий и глас</span><ArrowRight size={18} /><span><b>02</b> Одобрение и видео</span><ArrowRight size={18} /><span><b>03</b> Монтаж и експорт</span></div>
     {error && <Notice error>{error}</Notice>}{pollingError && <Notice>{pollingError}</Notice>}
+    {id && project.doc && <SceneStrip scenes={scenes} statuses={sceneStatuses} selected={sceneAt} disabled={locked}
+      onSelect={setSceneIndex} onAdd={addScene} onRemove={removeScene} onMove={moveScene}
+      onRename={(i, title) => project.update(d => withScene(d, i, s => ({ ...s, title })))} />}
+    {multi && <p className="vs-fine" role="status">Редактирате сцена {sceneAt + 1}{scene?.title ? ` · ${scene.title}` : ""}. Сценарият, гласът, аватарът и монтажът по-долу се отнасят за нея.</p>}
     {!enabled && <Notice>Видео студиото е подготвено. Премиум озвучаването ще бъде достъпно след активиране.</Notice>}
     <div className="vs-layout"><section className="vs-card vs-script"><div className="sub-heading"><h2><Film size={23} /> Дайте начало на историята</h2><span>01 / СЦЕНАРИЙ</span></div>
       <fieldset disabled={locked}><label>Име на проекта<input value={title} maxLength={120} onChange={e => edit(() => setTitle(e.target.value))} /></label>
@@ -254,7 +324,11 @@ export function VideoStudio() {
     {project.error && <Notice error>{project.error}</Notice>}
     {timelineAudio && id && project.doc && scene && <TimelineEditor key={timelineAudio.id} audio={timelineAudio} video={timelineVideo} pendingVideo={timelinePending} portraitUrl={portraitUrl}
       projectId={id} timeline={sceneTimeline(scene, project.doc.music)} musicAssetId={project.doc.music?.assetId ?? null}
-      onTimeline={(change, musicAssetId) => project.update(d => withTimeline(d, change(sceneTimeline(d.scenes[0], d.music)), musicAssetId))}
-      onFlush={project.flush} />}
+      onTimeline={(change, musicAssetId) => project.update(d => withTimeline(d, change(sceneTimeline(d.scenes[sceneAt], d.music)), musicAssetId, sceneAt))}
+      onFlush={project.flush} serverExport={!multi} sceneLabel={multi ? `сцена ${sceneAt + 1}` : ""} />}
+    {multi && id && <section className="vs-card"><h2>Цялото видео</h2>
+      <p>Сървърът свързва {scenes.length} сцени по ред — всяка със своето начало, задържане, глас и стил на субтитрите — и добавя музиката под цялото видео. {sceneStatuses.some(s => s.video !== "ready") && "Експортът се отключва, когато всяка сцена има готово видео."}</p>
+      <BackgroundExport sourceId={id} projectId={id} document={defaultCaptions} onSave={project.flush} />
+    </section>}
   </div>;
 }

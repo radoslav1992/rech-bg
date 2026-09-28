@@ -98,3 +98,23 @@ export function captionAss(doc: CaptionDocument, offset = 0) {
   }
   return ass;
 }
+/**
+ * One ASS script for several scenes on the final video's clock. Frame size comes from `base`; each scene
+ * keeps its own look as a separate style (S0, S1, …) and its captions are shifted by `offset`.
+ */
+export function captionAssScenes(base: CaptionDocument, scenes: { document: CaptionDocument; offset: number }[]) {
+  let header = "", styles = "", events = "";
+  scenes.forEach(({ document, offset }, i) => {
+    const ass = captionAss({ ...document, format: base.format, resolution: base.resolution }, offset);
+    const [head, rest] = ass.split("[V4+ Styles]\n");
+    const [styleBlock, eventBlock] = rest.split("[Events]\n");
+    if (!i) header = head;
+    const [format, style] = styleBlock.trim().split("\n");
+    if (!i) styles = format + "\n";
+    styles += style.replace(/^Style: Default,/, `Style: S${i},`) + "\n";
+    const [eventFormat, ...lines] = eventBlock.trim().split("\n");
+    if (!i) events = eventFormat + "\n";
+    for (const line of lines) if (line) events += line.replace(/^(Dialogue: 0,[^,]*,[^,]*,)Default,/, `$1S${i},`) + "\n";
+  });
+  return `${header}[V4+ Styles]\n${styles}\n[Events]\n${events}`;
+}

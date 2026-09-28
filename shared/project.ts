@@ -1,12 +1,16 @@
 import { z } from "zod";
 import { MAX_LEAD, MAX_TAIL, type TimelineSettings } from "./timeline";
+import { studioMaxChars } from "./studio";
 
 // A video studio project as stored on the server: small JSON that only references media
 // (recordings and videos by job ID, uploads by media asset ID). Captions stay per recording.
-// Phase 1 edits one scene; the array keeps the format ready for multi-scene projects.
+// Each scene has its own script, voice, portrait and recordings; the final video joins the scenes in order.
+// Scene fields added after the first release have defaults, so earlier documents still parse.
 export const PROJECT_DOC_VERSION = 1;
 export const MAX_SCENES = 20;
-export const MAX_DOC_BYTES = 64 * 1024;
+export const MAX_DOC_BYTES = 128 * 1024;
+/** Longest final video the server render joins (seconds). */
+export const MAX_PROJECT_SECONDS = 600;
 
 const round = (n: number) => Math.round(n * 100) / 100;
 const seconds = (max: number) => z.number().finite().min(0).max(max).transform(round);
@@ -18,6 +22,14 @@ export const portraitSchema = z.discriminatedUnion("type", [
 ]);
 export const sceneSchema = z.object({
   id: z.uuid(),
+  title: z.string().trim().max(80).default(""),
+  /** Script with emotion tags (validated like any studio script when it is generated). */
+  script: z.string().max(studioMaxChars).default(""),
+  voice: z.string().regex(/^studio-[a-z0-9][a-z0-9-]{0,79}$/).nullable().default(null),
+  /** Recordings generated for this scene, newest first. */
+  history: z.array(z.uuid()).max(20).default([]),
+  /** Fingerprint of the voice + script the selected recording was made from (shows a stale recording). */
+  audioFor: z.string().max(16).nullable().default(null),
   audioJobId: z.uuid().nullable(),
   videoJobId: z.uuid().nullable(),
   portrait: portraitSchema.nullable(),
@@ -43,19 +55,30 @@ export type ProjectScene = z.infer<typeof sceneSchema>;
 export type ProjectMusic = z.infer<typeof musicSchema>;
 export type ProjectDoc = z.infer<typeof projectDocSchema>;
 
-export function newScene(): ProjectScene {
-  return { id: crypto.randomUUID(), audioJobId: null, videoJobId: null, portrait: null, speechStart: 0, tail: 0, voiceVolume: 1 };
+export function newScene(fields: Partial<ProjectScene> = {}): ProjectScene {
+  return {
+    id: crypto.randomUUID(), title: "", script: "", voice: null, history: [], audioFor: null,
+    audioJobId: null, videoJobId: null, portrait: null, speechStart: 0, tail: 0, voiceVolume: 1, ...fields,
+  };
+}
+/** Short, stable fingerprint of what a recording says (FNV-1a), to spot a recording older than its script. */
+export function scriptFingerprint(voice: string | null, script: string) {
+  let h = 0x811c9dc5;
+  for (const ch of `${voice || ""}\n${script}`) { h ^= ch.codePointAt(0)!; h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(16).padStart(8, "0");
+}
+/** Updates one scene by index. */
+export function withScene(d: ProjectDoc, index: number, change: (s: ProjectScene) => ProjectScene): ProjectDoc {
+  return { ...d, scenes: d.scenes.map((s, i) => (i === index ? change(s) : s)) };
 }
 export function newProjectDoc(): ProjectDoc {
   return { version: PROJECT_DOC_VERSION, scenes: [newScene()], music: null };
 }
-/** Applies timeline editor settings to the first scene and the project music. */
-export function withTimeline(d: ProjectDoc, next: TimelineSettings, musicAssetId?: string | null): ProjectDoc {
-  const [scene, ...rest] = d.scenes;
+/** Applies timeline editor settings to one scene and the project music. */
+export function withTimeline(d: ProjectDoc, next: TimelineSettings, musicAssetId?: string | null, index = 0): ProjectDoc {
   const assetId = musicAssetId === undefined ? d.music?.assetId : musicAssetId;
   return {
-    ...d,
-    scenes: [{ ...scene, speechStart: next.speechStart, tail: next.tail, voiceVolume: next.voiceVolume }, ...rest],
+    ...withScene(d, index, (s) => ({ ...s, speechStart: next.speechStart, tail: next.tail, voiceVolume: next.voiceVolume })),
     music: next.music && assetId ? { assetId, ...next.music } : null,
   };
 }
