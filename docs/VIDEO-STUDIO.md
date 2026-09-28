@@ -86,6 +86,18 @@ Speech is generated per scene (`POST /api/generate` with `sceneId`): the server 
 
 **Цялото видео**: with more than one scene, the server export joins all scenes in order with cuts (each scene's lead-in, end hold, voice volume and caption style), normalized to the first scene's format, resolution and framing, with the project music under the whole video and ducking under every scene's speech. Every scene needs a finished avatar video first; the export names the scene that is not ready. The final video can be up to 10 minutes. It is priced as one video: the first render of the project is included, each further one 500 credits per started minute. The browser export in the timeline exports only the selected scene.
 
+## Layers and backgrounds
+
+Each scene can have up to 30 layers on its own clock, shown in the "Слоеве" track (one row per layer, drag to move, edit in "Избран клип"):
+
+- **Text** — titles and lower thirds: up to 200 characters with line breaks, 9 positions inside a 5% safe margin, size, colour, optional box and bold.
+- **Image** — a logo, sticker or product image (JPG/PNG from the media library or uploaded, up to 2 MB): position, width and opacity.
+- **B-roll** — a full-frame cutaway while the voice continues: a still image or a video clip from the media library (uploaded clips are checked automatically first); the clip can start later (trim) and its own sound is not used.
+
+The **scene background** (Формат → Фон на сцената) is a colour or an image that fills the space "contain" framing leaves around the avatar; with "cover" framing it is not visible. This is not background replacement behind the person — that needs matting and is not included.
+
+Drawing order everywhere: background → avatar → B-roll → images → text → captions. The preview and the browser export draw layers on the canvas (`src/layers-render.ts`); the server render uses FFmpeg overlays and libass for text (`renderer/server.py`, `server/caption-ass.ts`), so fonts and line wrapping can differ slightly. A scene with **video** B-roll exports on the server only; text, images and still B-roll also export in the browser. Layer files are media assets and follow the plan's storage retention; a missing file is reported by the export with the scene number. No migration is needed; layers live in the project document.
+
 ## Timeline
 
 The timeline is edited in the browser (`src/TimelineEditor.tsx`) and saved on the server as part of the project document (`project_documents`, migration `0005`; format in `shared/project.ts`). The document is small JSON: scenes (the voice recording and video job IDs, a portrait reference, voice offset, end hold and voice volume) and the project music (a media asset ID plus start, volume, ducking and fades). It only references media; nothing heavy is stored in it. Edits save automatically after a short pause. A revision number protects against two tabs or devices overwriting each other: the later save gets the newer version and a notice instead of silently replacing it. Phase 1 edits one scene; the format already holds up to 20.

@@ -371,7 +371,8 @@ export async function createMediaTask(
       now(),
     ),
   ];
-  for (const input of payload.inputs || [])
+  // Lock each input file once, even if a render uses it twice (e.g. as a background and an overlay).
+  for (const input of new Set<string>(payload.inputs || []))
     statements.push(
       e.DB.prepare(
         "INSERT INTO media_task_assets(task_id,asset_id) SELECT ?,id FROM media_assets WHERE object_key=? AND user_id=?",

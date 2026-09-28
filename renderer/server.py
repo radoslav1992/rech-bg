@@ -73,17 +73,33 @@ def timeline(job, payload, origin, width, height, scale, ass, output):
     if not 1 <= len(scenes) <= 20: raise ValueError('Invalid scenes')
     urls = payload.get('urls') or []
     has_music = bool(t.get('music'))
-    if len(urls) != 2 * len(scenes) + (1 if has_music else 0): raise ValueError('Invalid inputs')
+    layers = t.get('layers') or []
+    if len(layers) > 600: raise ValueError('Too many layers')
+    first_extra, music_input = 2 * len(scenes), len(urls) - 1 if has_music else len(urls)
+    if len(urls) < first_extra + (1 if has_music else 0) or len(urls) - first_extra > 41: raise ValueError('Invalid inputs')
+    def extra_input(value):
+        i = int(value)
+        if i != value or not first_extra <= i < music_input: raise ValueError('Invalid layer input')
+        return i
     files = []
     for i, url in enumerate(urls):
         path = os.path.join(job['dir'], f'input{i}')
         download(url, path, origin); files.append(path)
     graph, video_labels, voice_labels, total = [], '', '', 0.0
+    loops = {}  # background images are looped for their scene's length
+    fit_cover = payload.get('fit') == 'cover'
     for i, scene in enumerate(scenes):
         speech_start, tail = number(scene['speech_start'], 0, 10), number(scene['tail'], 0, 10)
         voice_volume, speech = number(scene['voice_volume'], 0, 1), number(scene['speech_duration'], 0.1, 600)
         length = round(speech_start + speech + tail, 3)
         total += length
+        background = scene.get('background') or {}
+        color = background.get('color')
+        if color is not None and not re.fullmatch(r'#[0-9a-fA-F]{6}', str(color)): raise ValueError('Invalid color')
+        bg_input = extra_input(background['input']) if 'input' in background else None
+        if bg_input is not None:
+            if bg_input in loops: raise ValueError('Background reused')
+            loops[bg_input] = length
         info = probe(files[2 * i])
         video = next((s for s in info.get('streams',[]) if s.get('codec_type')=='video'), None)
         if not video or video.get('width',0)>4096 or video.get('height',0)>4096: raise ValueError('Invalid video')
@@ -92,18 +108,55 @@ def timeline(job, payload, origin, width, height, scale, ass, output):
         duration = float((soundtrack or {}).get('duration') or info.get('format',{}).get('duration') or 0)
         voice = f'{2 * i}:a:0' if soundtrack and abs(duration - speech) <= 0.25 else f'{2 * i + 1}:a:0'
         ms = int(round(speech_start * 1000))
-        graph.append(f'[{2 * i}:v:0]tpad=start_duration={speech_start:.3f}:start_mode=clone:stop_duration={length + 1:.3f}:stop_mode=clone,'
-                     f'trim=duration={length:.3f},setpts=PTS-STARTPTS,fps=30,{scale},setsar=1,format=yuv420p[v{i}]')
+        clip = (f'[{2 * i}:v:0]tpad=start_duration={speech_start:.3f}:start_mode=clone:stop_duration={length + 1:.3f}:stop_mode=clone,'
+                f'trim=duration={length:.3f},setpts=PTS-STARTPTS,fps=30')
+        if fit_cover or (bg_input is None and color is None):
+            graph.append(f'{clip},{scale},setsar=1,format=yuv420p[v{i}]')
+        elif bg_input is None:
+            # Space left by "contain" framing shows the scene's background colour.
+            graph.append(f'{clip},scale={width}:{height}:force_original_aspect_ratio=decrease,'
+                         f'pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=0x{color[1:]},setsar=1,format=yuv420p[v{i}]')
+        else:
+            graph.append(f'[{bg_input}:v:0]fps=30,scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},setsar=1[bg{i}]')
+            graph.append(f'{clip},scale={width}:{height}:force_original_aspect_ratio=decrease,setsar=1[fg{i}]')
+            graph.append(f'[bg{i}][fg{i}]overlay=(W-w)/2:(H-h)/2:shortest=1,trim=duration={length:.3f},format=yuv420p[v{i}]')
         graph.append(f'[{voice}]aformat=sample_rates=48000:channel_layouts=stereo,volume={voice_volume:.4f},adelay=delays={ms}:all=1,'
                      f'apad,atrim=duration={length:.3f},asetpts=PTS-STARTPTS[a{i}]')
         video_labels += f'[v{i}]'; voice_labels += f'[a{i}]'
     total = round(total, 3)
     if total > 600: raise ValueError('Video too long')
-    graph.append(f'{video_labels}concat=n={len(scenes)}:v=1:a=0,ass={ass}[v]')
+    graph.append(f'{video_labels}concat=n={len(scenes)}:v=1:a=0[base0]')
+    current = 'base0'
+    # Layers on the final clock: B-roll cutaways and image overlays, then text and captions (ASS) on top.
+    for j, layer in enumerate(layers):
+        start, end = number(layer['start'], 0, 600), number(layer['end'], 0, 600)
+        if end <= start: raise ValueError('Invalid layer time')
+        source, enable = extra_input(layer['input']), f"enable='between(t,{start:.3f},{end:.3f})'"
+        if layer.get('kind') == 'broll':
+            cover = f'scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},setsar=1'
+            if layer.get('still'):
+                graph.append(f'[{source}:v:0]{cover},format=yuv420p[l{j}]')
+                graph.append(f'[{current}][l{j}]overlay=0:0:{enable}[c{j}]')
+            else:
+                trim = number(layer.get('trim', 0), 0, 600)
+                graph.append(f'[{source}:v:0]trim=start={trim:.3f}:duration={end - start:.3f},setpts=PTS-STARTPTS+{start:.3f}/TB,fps=30,{cover},format=yuv420p[l{j}]')
+                graph.append(f'[{current}][l{j}]overlay=0:0:{enable}:eof_action=pass[c{j}]')
+        elif layer.get('kind') == 'image':
+            ax, ay = layer['anchor']
+            if ax not in (0, 0.5, 1) or ay not in (0, 0.5, 1): raise ValueError('Invalid anchor')
+            w = int(round(number(layer['width'], 0.05, 1) * width / 2) * 2)
+            opacity = number(layer['opacity'], 0.1, 1)
+            graph.append(f'[{source}:v:0]scale={w}:-2,format=rgba,colorchannelmixer=aa={opacity:.3f}[l{j}]')
+            mx, my = round(width * 0.05), round(height * 0.05)
+            graph.append(f'[{current}][l{j}]overlay=x={mx}+{ax}*(main_w-overlay_w-{2 * mx}):y={my}+{ay}*(main_h-overlay_h-{2 * my}):{enable}[c{j}]')
+        else:
+            raise ValueError('Invalid layer')
+        current = f'c{j}'
+    graph.append(f'[{current}]ass={ass},format=yuv420p[v]')
     graph.append(f'{voice_labels}concat=n={len(scenes)}:v=0:a=1[voice]')
     audio = '[voice]'
     if has_music:
-        m = len(files) - 1
+        m = music_input
         music_info = probe(files[m])
         music_duration = float(music_info.get('format',{}).get('duration') or 0)
         if not any(s.get('codec_type')=='audio' for s in music_info.get('streams',[])) or music_duration <= 0: raise ValueError('Invalid music')
@@ -113,7 +166,11 @@ def timeline(job, payload, origin, width, height, scale, ass, output):
                      f"volume='{music_gain(t['music'], total, music_duration)}':eval=frame[music]")
         graph.append('[voice][music]amix=inputs=2:duration=first:normalize=0[mix]')
         audio = '[mix]'
-    command(['ffmpeg','-nostdin','-v','error','-threads','1','-protocol_whitelist','file,pipe',*sum((['-i', f] for f in files), []),
+    inputs = []
+    for i, f in enumerate(files):
+        if i in loops: inputs += ['-loop', '1', '-framerate', '30', '-t', f'{loops[i]:.3f}']
+        inputs += ['-i', f]
+    command(['ffmpeg','-nostdin','-v','error','-threads','1','-protocol_whitelist','file,pipe',*inputs,
              '-filter_complex',';'.join(graph),'-map','[v]','-map',audio,'-filter_threads','1','-r','30','-c:v','libx264','-preset','veryfast',
              '-crf','23','-maxrate','4M','-bufsize','8M','-threads','1','-pix_fmt','yuv420p','-c:a','aac','-b:a','160k','-t',f'{total:.3f}',
              '-movflags','+faststart',output],timeout=3000)

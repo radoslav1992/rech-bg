@@ -1,6 +1,9 @@
-import { BackgroundExport, uploadMedia } from "./MediaTools";
+import { BackgroundExport, uploadMedia, useMediaLibrary } from "./MediaTools";
+import { drawBackground, drawLayers, mediaUrl, type Visual } from "./layers-render";
+import { BackgroundControl, LayerAddBar, LayerInspector, layerNames, MediaPicker } from "./LayerTools";
+import { newTextLayer, type Layer, type SceneBackground } from "../shared/layers";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
-import { Captions, Download, Film, Image as ImageIcon, Mic, Music, Pause, Play, SkipBack, Trash2, Upload, ZoomIn, ZoomOut } from "lucide-react";
+import { Captions, Download, Film, Image as ImageIcon, Layers, Mic, Music, Pause, Play, SkipBack, Trash2, Upload, ZoomIn, ZoomOut } from "lucide-react";
 import { api, Button, Disclosure, Notice, type Job } from "./lib";
 import { captionGroups, defaultCaptions, subtitleFile, type CaptionDocument } from "../shared/captions";
 import { downloadBlob, drawCaptions, fitSource, frameSize } from "./caption-render";
@@ -12,9 +15,10 @@ import {
 import "./captions.css";
 import "./timeline.css";
 
-type Selection = { kind: "speech" } | { kind: "music" } | { kind: "caption"; group: number };
+type Selection = { kind: "speech" } | { kind: "music" } | { kind: "caption"; group: number } | { kind: "layer"; id: string };
 type Wave = { duration: number; peaks: number[] };
 const MAX_MUSIC_BYTES = 50 * 1024 * 1024;
+const LAYER_ROW = 34;
 
 async function waveform(blob: Blob, bins = 400): Promise<Wave> {
   const buffer = await new OfflineAudioContext(1, 1, 22050).decodeAudioData(await blob.arrayBuffer());
@@ -48,7 +52,8 @@ const nudge = (e: ReactKeyboardEvent) => e.key === "ArrowLeft" ? (e.shiftKey ? -
 
 // The arrangement (voice offset, end hold, volumes, music) is part of the server-saved project document;
 // the parent applies changes to it. Music is uploaded once to the user's media storage.
-export function TimelineEditor({ audio, video, pendingVideo, portraitUrl, projectId, timeline: settings, musicAssetId, onTimeline, onFlush, serverExport = true, sceneLabel = "" }: {
+export function TimelineEditor({ audio, video, pendingVideo, portraitUrl, projectId, timeline: settings, musicAssetId, onTimeline, onFlush, serverExport = true, sceneLabel = "",
+  layers = [], background = null, onLayers, onBackground }: {
   audio: Job; video: Job | null; pendingVideo: Job | null; portraitUrl: string; projectId: string;
   timeline: TimelineSettings; musicAssetId: string | null;
   onTimeline: (change: (s: TimelineSettings) => TimelineSettings, musicAssetId?: string | null) => void;
@@ -57,6 +62,11 @@ export function TimelineEditor({ audio, video, pendingVideo, portraitUrl, projec
   serverExport?: boolean;
   /** Set when editing one scene of several, e.g. "сцена 2". */
   sceneLabel?: string;
+  /** Text, image and B-roll layers of this scene, and its background. */
+  layers?: Layer[];
+  background?: SceneBackground | null;
+  onLayers?: (change: (layers: Layer[]) => Layer[]) => void;
+  onBackground?: (background: SceneBackground | null) => void;
 }) {
   const speechDuration = audio.duration;
   const endpoint = `/video-studio/captions/${audio.id}`, voiceUrl = `/api/jobs/${audio.id}/audio`, videoUrl = video ? `/api/jobs/${video.id}/video` : "";
@@ -78,8 +88,34 @@ export function TimelineEditor({ audio, video, pendingVideo, portraitUrl, projec
   const ranges = useMemo(() => speechRanges(document.words, settings, speechDuration), [document.words, settings, speechDuration]);
   const pxPerSecond = Math.max(8, laneWidth / Math.max(1, length)) * zoom;
   const pxRef = useRef(pxPerSecond); pxRef.current = pxPerSecond;
-  const live = useRef({ document, settings, groups, ranges, length, musicDuration: 0 });
-  live.current = { document, settings, groups, ranges, length, musicDuration: musicWave?.duration || length };
+  // Media used by layers and the background: images load once; B-roll videos play in step with the preview.
+  const { data: library } = useMediaLibrary();
+  const libraryAssets = library?.assets || [];
+  const visuals = useRef(new Map<string, HTMLImageElement | HTMLVideoElement>());
+  const wanted = [...layers.flatMap(l => l.type === "text" ? [] : [l.assetId]), ...(background?.type === "image" ? [background.assetId] : [])];
+  useEffect(() => {
+    const map = visuals.current;
+    for (const id of wanted) {
+      if (map.has(id)) continue;
+      const mime = libraryAssets.find(a => a.id === id)?.mime;
+      if (!mime) continue;
+      if (mime.startsWith("video/")) {
+        const v = window.document.createElement("video");
+        v.muted = true; v.playsInline = true; v.preload = "auto"; v.src = mediaUrl(id);
+        map.set(id, v);
+      } else { const img = new Image(); img.src = mediaUrl(id); map.set(id, img); }
+    }
+    for (const [id, el] of map) if (!wanted.includes(id)) { if (el instanceof HTMLVideoElement) el.pause(); map.delete(id); }
+  }, [wanted.join(","), libraryAssets.length]);
+  const visualOf = (id: string): Visual | null => {
+    const el = visuals.current.get(id);
+    if (el instanceof HTMLImageElement) return el.complete && el.naturalWidth ? { source: el, width: el.naturalWidth, height: el.naturalHeight } : null;
+    if (el instanceof HTMLVideoElement) return el.readyState >= 2 ? { source: el, width: el.videoWidth, height: el.videoHeight } : null;
+    return null;
+  };
+  const hasVideoBroll = layers.some(l => l.type === "broll" && !!libraryAssets.find(a => a.id === l.assetId)?.mime.startsWith("video/"));
+  const live = useRef({ document, settings, groups, ranges, length, musicDuration: 0, layers, background });
+  live.current = { document, settings, groups, ranges, length, musicDuration: musicWave?.duration || length, layers, background };
 
   // Captions come from the server (shared with SRT/VTT and background export); edits autosave.
   useEffect(() => {
@@ -171,7 +207,7 @@ export function TimelineEditor({ audio, video, pendingVideo, portraitUrl, projec
       }
     };
     const paint = (now: number) => {
-      const { document: doc, settings: s, groups: g, ranges: r, length: len, musicDuration } = live.current, c = clock.current;
+      const { document: doc, settings: s, groups: g, ranges: r, length: len, musicDuration, layers: ls, background: bg } = live.current, c = clock.current;
       if (c.playing) {
         time.current = c.base + (now - c.startedAt) / 1000;
         if (time.current >= len) { time.current = len; c.playing = false; c.base = len; setPlaying(false); }
@@ -184,7 +220,7 @@ export function TimelineEditor({ audio, video, pendingVideo, portraitUrl, projec
         const [w, h] = frameSize(doc.format);
         if (el.width !== w || el.height !== h) { el.width = w; el.height = h; }
         const ctx = el.getContext("2d")!;
-        ctx.fillStyle = "#171d17"; ctx.fillRect(0, 0, w, h);
+        drawBackground(ctx, w, h, bg, bg?.type === "image" ? visualOf(bg.assetId) : null);
         const v = voiceEl.current, img = portrait.current;
         if (v instanceof HTMLVideoElement && v.readyState >= 2) fitSource(ctx, v, v.videoWidth, v.videoHeight, w, h, doc.fit);
         else if (img?.complete && img.naturalWidth) fitSource(ctx, img, img.naturalWidth, img.naturalHeight, w, h, doc.fit);
@@ -194,6 +230,12 @@ export function TimelineEditor({ audio, video, pendingVideo, portraitUrl, projec
           ctx.fillStyle = "#abb4a5"; ctx.textAlign = "center"; ctx.font = `600 ${base * .035}px Arial`;
           ctx.fillText("Изберете аватар по-горе", w / 2, h * .62); ctx.textAlign = "start";
         }
+        for (const l of ls) {
+          if (l.type !== "broll") continue;
+          const v = visuals.current.get(l.assetId);
+          if (v instanceof HTMLVideoElement) sync(v, t - l.start + l.trim, Number.isFinite(v.duration) ? v.duration : 0, 0, c.playing && t >= l.start && t < l.end);
+        }
+        drawLayers(ctx, w, h, t, ls, l => l.type === "text" ? null : visualOf(l.assetId));
         drawCaptions(ctx, w, h, t - s.speechStart, doc, g);
       }
       if (playhead.current) playhead.current.style.transform = `translateX(${t * pxRef.current}px)`;
@@ -220,6 +262,32 @@ export function TimelineEditor({ audio, video, pendingVideo, portraitUrl, projec
   const removeMusic = () => { loadedMusic.current = null; setMusic(null); onTimeline(s => ({ ...s, music: null }), null); setSelection({ kind: "speech" }); };
   const moveSpeech = (start: number, delta: number) => change(s => ({ ...s, speechStart: Math.round(Math.min(MAX_LEAD, Math.max(0, start + delta)) * 100) / 100 }));
   const moveMusic = (start: number, delta: number) => change(s => s.music ? { ...s, music: { ...s.music, start: clampMusicStart(start + delta, musicWave?.duration || length, length) } } : s);
+  // Layers keep their length when moved and stay inside the scene.
+  const [adding, setAdding] = useState<"image" | "broll" | null>(null);
+  const moveLayer = (id: string, start: number, delta: number) => onLayers?.(ls => ls.map(l => {
+    if (l.id !== id) return l;
+    const duration = l.end - l.start, next = Math.round(Math.min(Math.max(0, start + delta), Math.max(0, length - duration)) * 100) / 100;
+    return { ...l, start: next, end: Math.round((next + duration) * 100) / 100 };
+  }));
+  const layerWindow = () => {
+    const start = Math.round(Math.min(Math.max(0, time.current), Math.max(0, length - 0.5)) * 100) / 100;
+    return [start, Math.round(Math.min(length, start + 3) * 100) / 100] as const;
+  };
+  const addLayer = (type: Layer["type"]) => {
+    if (type !== "text") { setAdding(type); setPanel("clip"); return; }
+    const layer = newTextLayer(...layerWindow());
+    onLayers?.(ls => [...ls, layer]); setSelection({ kind: "layer", id: layer.id }); setPanel("clip");
+  };
+  const addMediaLayer = (assetId: string) => {
+    const [start, end] = layerWindow(), id = crypto.randomUUID();
+    const layer: Layer = adding === "image"
+      ? { id, type: "image", assetId, start, end, position: "top-right", width: 0.25, opacity: 1 }
+      : { id, type: "broll", assetId, start, end, trim: 0 };
+    onLayers?.(ls => [...ls, layer]); setAdding(null); setSelection({ kind: "layer", id }); setPanel("clip");
+  };
+  const selectedLayer = selection.kind === "layer" ? layers.find(l => l.id === selection.id) : undefined;
+  // Choosing another clip cancels adding a layer.
+  useEffect(() => { if (selection.kind !== "layer") setAdding(null); }, [selection]);
   const moveGroup = (group: number, words: CaptionDocument["words"], delta: number) =>
     edit({ words: moveWords(words, groupStarts[group], groupStarts[group] + groups[group].length - 1, delta, speechDuration) });
 
@@ -229,7 +297,7 @@ export function TimelineEditor({ audio, video, pendingVideo, portraitUrl, projec
     if (clock.current.playing) toggle();
     try {
       await persist(document);
-      const blob = await exportTimeline({ document, settings, videoUrl, voiceUrl, music: settings.music ? music : null, speechDuration, onProgress: setProgress, signal: abort.current.signal });
+      const blob = await exportTimeline({ document, settings, videoUrl, voiceUrl, music: settings.music ? music : null, speechDuration, onProgress: setProgress, signal: abort.current.signal, layers, background });
       downloadBlob(blob, `rechbg-${video.id}-${document.format.replace(":", "x")}.mp4`);
     } catch (e) { if (!abort.current.signal.aborted) setError((e as Error).message); }
     finally { setExporting(false); }
@@ -275,22 +343,31 @@ export function TimelineEditor({ audio, video, pendingVideo, portraitUrl, projec
             <button type="button" aria-pressed={panel === "format"} onClick={() => setPanel("format")}>Формат</button>
           </div>
           {panel === "clip" && <fieldset disabled={exporting} className="tl-inspector">
-            {selection.kind === "speech" && <>
+            {adding && <>
+              <h3>{adding === "image" ? <ImageIcon size={17} /> : <Film size={17} />} Нов слой · {layerNames[adding]}</h3>
+              <p>{adding === "image" ? "Лого, стикер или продукт върху видеото." : "Кадър или клип на цял екран, докато гласът продължава."} Изберете файл:</p>
+              <MediaPicker assets={libraryAssets} video={adding === "broll"} onPick={addMediaLayer} />
+              <button type="button" className="btn" onClick={() => setAdding(null)}>Отказ</button>
+            </>}
+            {!adding && selectedLayer && <LayerInspector layer={selectedLayer} length={length} assets={libraryAssets}
+              onChange={next => onLayers?.(ls => ls.map(l => l.id === next.id ? next : l))}
+              onRemove={() => { onLayers?.(ls => ls.filter(l => l.id !== selectedLayer.id)); setSelection({ kind: "speech" }); }} />}
+            {!adding && selection.kind === "speech" && <>
               <h3><Mic size={17} /> Глас и аватар</h3>
               <p>Гласът, картината и субтитрите са свързани. Преместете ги по времевата линия, за да оставите начало само с музика.</p>
               <label>Сила на гласа · {Math.round(settings.voiceVolume * 100)}%<input type="range" min="0" max="1" step=".05" value={settings.voiceVolume} onChange={e => change(s => ({ ...s, voiceVolume: Number(e.target.value) }))} /></label>
               <label>Начало на гласа · {settings.speechStart.toFixed(1)} сек.<input type="range" min="0" max={MAX_LEAD} step=".1" value={settings.speechStart} onChange={e => change(s => ({ ...s, speechStart: Number(e.target.value) }))} /></label>
               <label>Задържане в края · {settings.tail.toFixed(1)} сек.<input type="range" min="0" max={MAX_TAIL} step=".1" value={settings.tail} onChange={e => change(s => ({ ...s, tail: Number(e.target.value) }))} /></label>
             </>}
-            {selection.kind === "music" && settings.music && <>
+            {!adding && selection.kind === "music" && settings.music && <>
               <h3><Music size={17} /> {settings.music.name}</h3>
               <label>Сила на музиката · {Math.round(settings.music.volume * 100)}%<input type="range" min="0" max="1" step=".05" value={settings.music.volume} onChange={e => change(s => s.music ? { ...s, music: { ...s.music, volume: Number(e.target.value) } } : s)} /></label>
               <label className="checkbox-label"><input type="checkbox" checked={settings.music.duck} onChange={e => change(s => s.music ? { ...s, music: { ...s.music, duck: e.target.checked } } : s)} /> По-тиха музика, докато се говори</label>
               <label className="checkbox-label"><input type="checkbox" checked={settings.music.fade} onChange={e => change(s => s.music ? { ...s, music: { ...s.music, fade: e.target.checked } } : s)} /> Плавно начало и край</label>
-              <p>Плъзнете клипа, за да изберете коя част от песента звучи. Музиката остава само на вашето устройство.</p>
+              <p>Плъзнете клипа, за да изберете коя част от песента звучи. Музиката е качена в проекта и е достъпна от всяко устройство.</p>
               <div className="tl-inline-actions"><button type="button" className="btn" onClick={() => musicInput.current?.click()}><Upload size={15} /> Смени</button><button type="button" className="btn" onClick={removeMusic}><Trash2 size={15} /> Премахни</button></div>
             </>}
-            {selectedGroup && selection.kind === "caption" && <>
+            {!adding && selectedGroup && selection.kind === "caption" && <>
               <h3><Captions size={17} /> Субтитър {selection.group + 1}</h3>
               <p>{formatTime(selectedGroup[0].start + settings.speechStart)} – {formatTime(selectedGroup.at(-1)!.end + settings.speechStart)} · плъзнете блока, за да го преместите.</p>
               <div className="tl-caption-words">{selectedGroup.map((w, n) => {
@@ -305,6 +382,7 @@ export function TimelineEditor({ audio, video, pendingVideo, portraitUrl, projec
             <label>Формат<select value={document.format} onChange={e => edit({ format: e.target.value as CaptionDocument["format"] })}><option value="9:16">9:16 · Reels и TikTok</option><option value="4:5">4:5 · Публикация</option><option value="1:1">1:1 · Квадрат</option><option value="16:9">16:9 · YouTube</option></select></label>
             <label>Позиция на субтитрите<select value={document.position} disabled={!document.enabled} onChange={e => edit({ position: e.target.value as CaptionDocument["position"] })}><option value="bottom">Долу · над бутоните</option><option value="middle">В средата</option><option value="top">Горе</option></select></label>
             <label>Резолюция<select value={document.resolution || "720p"} onChange={e => edit({ resolution: e.target.value as CaptionDocument["resolution"] })}><option>720p</option><option>1080p</option></select></label>
+            {onBackground && <BackgroundControl background={background} assets={libraryAssets} fit={document.fit || "contain"} onChange={onBackground} />}
             <label>Кадриране<select value={document.fit || "contain"} onChange={e => edit({ fit: e.target.value as CaptionDocument["fit"] })}><option value="contain">Целият кадър · с полета</option><option value="cover">Запълни · с изрязване</option></select></label>
           </fieldset>}
         </div>
@@ -332,6 +410,20 @@ export function TimelineEditor({ audio, video, pendingVideo, portraitUrl, projec
             onKeyDown={e => { const d = nudge(e); if (d) { e.preventDefault(); moveSpeech(settings.speechStart, d); } }}><span>{video ? <Film size={13} /> : <ImageIcon size={13} />} {visualLabel}</span></button>
           {settings.tail > 0 && <div className="tl-hold" style={at(settings.speechStart + speechDuration, settings.tail)} title="Последният кадър се задържа" />}
         </div></div>
+        {onLayers && <div className="tl-row tl-layers-row"><div className="tl-label"><Layers size={15} /> Слоеве</div><div className="tl-lane" style={{ ...laneStyle, height: `${Math.max(1, layers.length) * LAYER_ROW}px` }} onPointerDown={seekFromLane}>
+          {!layers.length && <span className="tl-empty">Текст, изображения и B-roll · бутоните са под линията.</span>}
+          {layers.map((l, index) => {
+            const name = l.type === "text" ? l.text : libraryAssets.find(a => a.id === l.assetId)?.name || layerNames[l.type];
+            const open = () => { setAdding(null); setSelection({ kind: "layer", id: l.id }); setPanel("clip"); };
+            // Each layer has its own row, so overlapping layers stay visible and draggable.
+            return <button type="button" key={l.id} className={`tl-clip tl-layer tl-layer-${l.type}${selection.kind === "layer" && selection.id === l.id ? " selected" : ""}`}
+              style={{ ...at(l.start, l.end - l.start), top: `${index * LAYER_ROW + 4}px`, bottom: "auto", height: `${LAYER_ROW - 8}px` }} aria-label={`${layerNames[l.type]} „${name}“, ${formatTime(l.start)} – ${formatTime(l.end)}`}
+              onPointerDown={e => { const start = l.start; drag(e, pxPerSecond, d => moveLayer(l.id, start, d), open); }}
+              onClick={e => { if (e.detail === 0) open(); }}
+              onKeyDown={e => { const d = nudge(e); if (d) { e.preventDefault(); moveLayer(l.id, l.start, d); } }}>
+              <span>{layerNames[l.type]} · {name}</span></button>;
+          })}
+        </div></div>}
         <div className="tl-row"><div className="tl-label"><Mic size={15} /> Глас</div><div className="tl-lane" style={laneStyle} onPointerDown={seekFromLane}>
           <button type="button" className={`tl-clip tl-voice${selection.kind === "speech" ? " selected" : ""}`} style={at(settings.speechStart, speechDuration)} aria-label={`Глас, ${speechDuration.toFixed(1)} сек.`}
             onPointerDown={e => { const s = settings.speechStart; drag(e, pxPerSecond, d => moveSpeech(s, d), () => { setSelection({ kind: "speech" }); setPanel("clip"); }); }}
@@ -359,6 +451,7 @@ export function TimelineEditor({ audio, video, pendingVideo, portraitUrl, projec
         </div>
       </div>
       <input ref={musicInput} type="file" accept="audio/mpeg,audio/wav,audio/mp4,audio/x-m4a,audio/aac,audio/ogg,.mp3,.wav,.m4a,.ogg" hidden style={{ display: "none" }} onChange={e => { void addMusic(e.target.files?.[0]); e.target.value = ""; }} />
+      {onLayers && <LayerAddBar onAdd={addLayer} disabled={exporting} />}
       <p className="tl-hint">Плъзгайте клиповете, за да ги подредите. Щракнете върху клип (или Enter от клавиатурата), за да го редактирате. Интервал пуска и спира прегледа; стрелките местят избран клип.</p>
 
       <details className="vs-word-editor"><summary>Думи и времена ({document.words.length})</summary><p>Времената са в секунди от началото на гласа.</p><fieldset disabled={exporting}>
@@ -367,10 +460,11 @@ export function TimelineEditor({ audio, video, pendingVideo, portraitUrl, projec
       </fieldset></details>
 
       <div className="vs-actions caption-export-actions">
-        <Button className="btn primary" busy={exporting} disabled={!video} onClick={render}><Download size={16} /> {exporting ? `Експорт · ${Math.round(progress * 100)}%` : sceneLabel ? "Експортирай сцената (MP4)" : "Експортирай MP4"}</Button>
+        <Button className="btn primary" busy={exporting} disabled={!video || hasVideoBroll} onClick={render}><Download size={16} /> {exporting ? `Експорт · ${Math.round(progress * 100)}%` : sceneLabel ? "Експортирай сцената (MP4)" : "Експортирай MP4"}</Button>
         {(["srt", "vtt"] as const).map(type => <Button key={type} className="btn" disabled={!document.words.length || exporting} onClick={() => downloadBlob(new Blob([subtitleFile(document.words, type)], { type: "text/plain;charset=utf-8" }), `rechbg.${type}`)}><Download size={16} /> {type.toUpperCase()}</Button>)}
         {video && <a className="btn" href={videoUrl} download>Оригинален MP4</a>}
       </div>
+      {video && hasVideoBroll && <p className="vs-fine">Сцената има видео B-roll: експортирайте я на сървъра (без да оставяте страницата отворена). Експортът в браузъра поддържа текст, изображения и B-roll от снимки.</p>}
       {!video && <p className="vs-fine">Експортът се отключва, когато видео аватарът е готов. Дотогава можете да подготвите субтитрите, музиката и подредбата.</p>}
       {exporting && <div className="caption-export-progress" role="status"><progress value={progress} max={1} aria-label="Експорт на видео" /><span>{Math.round(progress * 100)}% · Сглобяваме видеото, гласа, музиката и субтитрите</span><Button className="btn" onClick={() => abort.current?.abort()}>Спри експорта</Button></div>}
       <p className="vs-fine">Експортът в браузъра е безплатен. Оставете страницата отворена до завършване; препоръчваме Chrome или Edge на компютър.</p>

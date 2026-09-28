@@ -4,6 +4,7 @@ import {
   readableOn,
   type CaptionDocument,
 } from "../shared/captions";
+import { anchor, LAYER_MARGIN, type TextLayer } from "../shared/layers";
 export function renderDimensions(doc: CaptionDocument) {
   const short = doc.resolution === "1080p" ? 1080 : 720;
   const [a, b] = doc.format.split(":").map(Number);
@@ -117,4 +118,33 @@ export function captionAssScenes(base: CaptionDocument, scenes: { document: Capt
     for (const line of lines) if (line) events += line.replace(/^(Dialogue: 0,[^,]*,[^,]*,)Default,/, `$1S${i},`) + "\n";
   });
   return `${header}[V4+ Styles]\n${styles}\n[Events]\n${events}`;
+}
+/**
+ * Adds text layers (titles, lower thirds) to an ASS script as positioned events, before the captions so
+ * captions stay on top. Times are on the final video's clock. Matches the canvas drawing in the browser.
+ */
+export function withTextLayers(ass: string, texts: TextLayer[], width: number, height: number) {
+  if (!texts.length) return ass;
+  const color = (hex: string) => "&H00" + hex.slice(5, 7) + hex.slice(3, 5) + hex.slice(1, 3);
+  const clean = (text: string) =>
+    text.replaceAll("\\", "＼").replaceAll("{", "｛").replaceAll("}", "｝").replace(/\r?\n/g, "\\N");
+  const time = (s: number) => {
+    const n = Math.round(s * 100);
+    return `${Math.floor(n / 360000)}:${String(Math.floor(n / 6000) % 60).padStart(2, "0")}:${String(Math.floor(n / 100) % 60).padStart(2, "0")}.${String(n % 100).padStart(2, "0")}`;
+  };
+  const styles =
+    "Style: T,Noto Sans,40,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,0,0,0,1\n" +
+    "Style: TB,Noto Sans,40,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,3,8,0,5,0,0,0,1\n";
+  const events = texts.map((t) => {
+    const [ax, ay] = anchor(t.position);
+    const x = Math.round(width * LAYER_MARGIN + ax * width * (1 - 2 * LAYER_MARGIN));
+    const y = Math.round(height * LAYER_MARGIN + ay * height * (1 - 2 * LAYER_MARGIN));
+    const align = (ay === 1 ? 1 : ay === 0.5 ? 4 : 7) + (ax === 0 ? 0 : ax === 0.5 ? 1 : 2);
+    const size = Math.round(t.size * height);
+    const box = t.box ? `\\3c${color(t.box)}\\bord${Math.round(size * 0.3)}` : `\\3c&H00000000&\\bord${Math.max(1, Math.round(size * 0.06))}`;
+    return `Dialogue: 0,${time(t.start)},${time(t.end)},${t.box ? "TB" : "T"},,0,0,0,,{\\an${align}\\pos(${x},${y})\\fs${size}\\b${t.bold ? 1 : 0}\\1c${color(t.color)}${box}}${clean(t.text)}\n`;
+  }).join("");
+  return ass
+    .replace("\n\n[Events]\n", `\n${styles}\n[Events]\n`)
+    .replace(/(\[Events\]\nFormat:[^\n]*\n)/, `$1${events}`);
 }

@@ -1,8 +1,10 @@
 import { captionGroups, type CaptionDocument } from "../shared/captions";
 import { drawCaptions, fitSource, frameSize } from "./caption-render";
 import { musicGain, speechRanges, timelineLength, type TimelineSettings } from "./timeline";
+import { drawBackground, drawLayers, mediaUrl, type Visual } from "./layers-render";
+import type { Layer, SceneBackground } from "../shared/layers";
 
-const FPS = 30, RATE = 48000, BG = "#171d17";
+const FPS = 30, RATE = 48000, BG = "#000000";
 const unsupported = "Този браузър не може да експортира видеото. Използвайте актуален Chrome или Edge на компютър. Оригиналът и SRT остават достъпни.";
 
 // Callers pass a fresh ArrayBuffer (Blob.arrayBuffer()), so it can be handed over without a copy.
@@ -34,9 +36,11 @@ async function mixAudio(voice: AudioBuffer, music: AudioBuffer | null, settings:
   return ctx.startRendering();
 }
 
-export async function exportTimeline({ document, settings, videoUrl, voiceUrl, music, speechDuration, onProgress, signal }: {
+export async function exportTimeline({ document, settings, videoUrl, voiceUrl, music, speechDuration, onProgress, signal, layers = [], background = null }: {
   document: CaptionDocument; settings: TimelineSettings; videoUrl: string; voiceUrl: string; music: Blob | null;
   speechDuration: number; onProgress: (progress: number) => void; signal: AbortSignal;
+  /** Text, image and still B-roll layers, and the scene background; video B-roll needs the server export. */
+  layers?: Layer[]; background?: SceneBackground | null;
 }) {
   // Named imports keep the library tree-shakable; the formats match what uploads accept (MP4, MOV, WebM).
   const {
@@ -66,6 +70,14 @@ export async function exportTimeline({ document, settings, videoUrl, voiceUrl, m
     catch { throw new Error("Музикалният файл не може да се прочете. Изберете MP3, WAV или M4A файл."); }
   }
   if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
+  // Decode every still used by layers and the background once, before encoding frames.
+  const stills = new Map<string, Visual>();
+  for (const id of new Set([...layers.flatMap(l => l.type === "text" ? [] : [l.assetId]), ...(background?.type === "image" ? [background.assetId] : [])])) {
+    const blob = await fetchBlob(mediaUrl(id), signal);
+    if (!blob.type.startsWith("image/")) throw new Error("Видео B-roll се експортира на сървъра. Използвайте „Експорт на сървъра“.");
+    const bitmap = await createImageBitmap(blob);
+    stills.set(id, { source: bitmap, width: bitmap.width, height: bitmap.height });
+  }
   const mixed = await mixAudio(voice, musicBuffer, settings, document, speechDuration, length);
 
   const input = new Input({ source: new BlobSource(videoBlob), formats: [MP4, QTFF, WEBM] });
@@ -94,8 +106,9 @@ export async function exportTimeline({ document, settings, videoUrl, voiceUrl, m
       if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
       if (frame) last = frame.canvas;
       const t = i / FPS;
-      ctx.fillStyle = BG; ctx.fillRect(0, 0, width, height);
+      drawBackground(ctx, width, height, background, background?.type === "image" ? stills.get(background.assetId) || null : null, BG);
       if (last) fitSource(ctx, last, last.width, last.height, width, height, document.fit);
+      drawLayers(ctx, width, height, t, layers, l => l.type === "text" ? null : stills.get(l.assetId) || null);
       drawCaptions(ctx, width, height, t - settings.speechStart, document, groups);
       await video.add(t, 1 / FPS);
       onProgress(++i / frames);
