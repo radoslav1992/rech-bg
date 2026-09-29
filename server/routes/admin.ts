@@ -17,6 +17,15 @@ admin.use("/api/admin/*", async (c, next) => {
   await next();
 });
 admin.route("/api/admin/avatars", adminAvatars);
+/** Whether Stripe webhooks arrive: the last processed event and how many in the last 7 days. */
+admin.get("/api/admin/billing-health", async (c) => {
+  const row = await c.env.DB.prepare("SELECT MAX(created_at) last, SUM(created_at>?) week FROM billing_events").bind(now() - 7 * 86400).first<{ last: number | null; week: number | null }>();
+  const subs = await c.env.DB.prepare("SELECT COUNT(*) n FROM subscriptions WHERE status='active'").first<{ n: number }>();
+  return c.json({
+    lastEvent: row?.last ?? null, eventsLastWeek: row?.week ?? 0, activeSubscriptions: subs?.n ?? 0,
+    webhookSecret: !!c.env.STRIPE_WEBHOOK_SECRET, prices: !!(c.env.STRIPE_PRICE_STARTER && c.env.STRIPE_PRICE_CREATOR && c.env.STRIPE_PRICE_STUDIO),
+  });
+});
 admin.get("/api/admin/messages", async (c) =>
   c.json({
     messages: (

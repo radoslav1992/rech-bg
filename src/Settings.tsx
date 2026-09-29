@@ -178,7 +178,7 @@ export function SettingsPage() {
           Изтеглете данните
         </a>
       </section>
-      {user?.admin && <Suspense fallback={<p role="status">Зареждане…</p>}><AvatarLibraryAdmin /><StudioVoiceAdmin /><AdminSettings /></Suspense>}
+      {user?.admin && <Suspense fallback={<p role="status">Зареждане…</p>}><BillingHealth /><AvatarLibraryAdmin /><StudioVoiceAdmin /><AdminSettings /></Suspense>}
       <section className="settings-card danger-zone">
         <h2>
           <Trash2 size={21} />
@@ -409,5 +409,27 @@ function AdminSettings() {
         )}
       </section>
     </>
+  );
+}
+
+/** Administrators: are Stripe webhooks arriving? A missing or stale "last event" points at the webhook setup. */
+function BillingHealth() {
+  const [health, setHealth] = useState<{ lastEvent: number | null; eventsLastWeek: number; activeSubscriptions: number; webhookSecret: boolean; prices: boolean } | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => { api("/admin/billing-health").then(setHealth).catch((e) => setError(e.message)); }, []);
+  return (
+    <section className="settings-card">
+      <h2>Плащания · webhook от Stripe</h2>
+      {error && <Notice error>{error}</Notice>}
+      {health && <>
+        <p>
+          Последно получено събитие: <strong>{health.lastEvent ? new Date(health.lastEvent * 1000).toLocaleString("bg") : "никога"}</strong> ·
+          за последните 7 дни: <strong>{health.eventsLastWeek}</strong> · активни абонаменти: <strong>{health.activeSubscriptions}</strong>
+        </p>
+        {!health.webhookSecret && <Notice error>Липсва STRIPE_WEBHOOK_SECRET — събитията от Stripe се отхвърлят.</Notice>}
+        {!health.prices && <Notice error>Липсва някоя от STRIPE_PRICE_STARTER / CREATOR / STUDIO.</Notice>}
+        <p className="small-note">Ако след плащане или смяна на план тук няма ново събитие, проверете в Stripe → Developers → Webhooks адреса https://rechbg.com/api/billing/webhook, режима (test/live), избраните събития и секрета. Приложението допълнително чете абонамента от Stripe при отваряне на „Абонамент“ и веднъж на сесия.</p>
+      </>}
+    </section>
   );
 }
