@@ -59,7 +59,13 @@ export function AvatarLibraryPicker({ selectedId = "", disabled = false, onSelec
 export function AvatarLibraryAdmin() {
   const [avatars, setAvatars] = useState<LibraryAvatar[]>([]), [selected, setSelected] = useState<LibraryAvatar | null>(null);
   const [error, setError] = useState(""), [busy, setBusy] = useState(false), [loaded, setLoaded] = useState(false);
-  const lock = useRef(false);
+  const lock = useRef(false), editor = useRef<HTMLHeadingElement>(null);
+  // The form is below the list: bring it into view when an avatar is chosen for editing.
+  useEffect(() => {
+    if (!selected) return;
+    editor.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    editor.current?.parentElement?.querySelector<HTMLInputElement>("input[name=name]")?.focus({ preventScroll: true });
+  }, [selected?.id]);
   const load = async () => { const d = await api<{avatars: LibraryAvatar[]}>("/admin/avatars"); setAvatars(d.avatars); setLoaded(true); };
   useEffect(() => { void load().catch(e => setError(e.message)); }, []);
   const act = async (fn: () => Promise<void>) => {
@@ -75,17 +81,17 @@ export function AvatarLibraryAdmin() {
     {error && <Notice error>{error}</Notice>}
     {!loaded && <Button className="btn" busy={busy} onClick={() => void act(load)}>Зареди библиотеката</Button>}
     <fieldset disabled={busy}>
-      <div className="avatar-admin-list">{avatars.map(a => <div key={a.id} className={a.active ? "" : "is-hidden"}>
+      <div className="avatar-admin-list">{avatars.map(a => <div key={a.id} className={`${a.active ? "" : "is-hidden"}${selected?.id === a.id ? " is-editing" : ""}`}>
         {a.active ? <img src={a.imageUrl} alt={a.name} width="55" height="70"/> : <Users size={30}/>}
         <span><strong>{a.name}</strong><small>{a.active ? avatarCategories[a.category] : "Скрит от потребителите"}{a.heygenStatus ? ` · HeyGen: ${heygenLabel[a.heygenStatus]}` : ""}</small></span>
-        <button type="button" className="btn outline small-btn" onClick={() => setSelected(a)}>Редактирай</button>
+        <button type="button" className="btn outline small-btn" aria-pressed={selected?.id === a.id} onClick={() => setSelected(a)}>{selected?.id === a.id ? "Редактира се ↓" : "Редактирай"}</button>
         <button type="button" className="text-link" onClick={() => void act(async () => {
           if (a.active) await api(`/admin/avatars/${a.id}`, { method: "DELETE" });
           else await api(`/admin/avatars/${a.id}`, { method: "PUT", body: JSON.stringify({ ...a, active: true }) });
           if (selected?.id === a.id) setSelected(null);
         })}>{a.active ? "Скрий" : "Възстанови"}</button>
       </div>)}</div>
-      <h3>{selected ? `Редактирайте ${selected.name}` : "Нов аватар"}</h3>
+      <h3 ref={editor} className="avatar-admin-editor">{selected ? `Редактирайте ${selected.name}` : "Нов аватар"}</h3>
       <form key={selected?.id || "new"} onSubmit={e => {
         e.preventDefault(); const form = e.currentTarget, body = new FormData(form);
         void act(async () => {
