@@ -65,6 +65,8 @@ export function AuthPage({ mode }: { mode: string }) {
   const { refresh } = useAuth();
   const navigate = useNavigate();
   const [params] = useSearchParams();
+  // Switching between sign-in and registration keeps the chosen plan and the page to return to.
+  const switchParams = new URLSearchParams([...params].filter(([k]) => k === "next" || k === "plan")).toString();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [good, setGood] = useState(false);
@@ -275,9 +277,7 @@ export function AuthPage({ mode }: { mode: string }) {
               <Link
                 to={
                   "/register" +
-                  (params.get("next")
-                    ? "?next=" + encodeURIComponent(params.get("next")!)
-                    : "")
+                  (switchParams ? "?" + switchParams : "")
                 }
               >
                 Създайте безплатен
@@ -290,9 +290,7 @@ export function AuthPage({ mode }: { mode: string }) {
               <Link
                 to={
                   "/login" +
-                  (params.get("next")
-                    ? "?next=" + encodeURIComponent(params.get("next")!)
-                    : "")
+                  (switchParams ? "?" + switchParams : "")
                 }
               >
                 Влезте

@@ -48,17 +48,22 @@ export function SceneInspector({ scene, index, media, voices, studioEnabled, vid
   const [adding, setAdding] = useState<"image" | "broll" | null>(null);
   const assistRequest = useRef<AbortController | null>(null);
   // Suggestions and consent belong to one scene and one presenter.
-  useEffect(() => { setSuggestion(""); setUndo(null); setAssistError(""); setAdding(null); assistRequest.current?.abort(); }, [scene.id]);
+  useEffect(() => {
+    setSuggestion(""); setUndo(null); setAssistError(""); setAdding(null); setAssisting(false);
+    // Cleared first, so the aborted request of the previous scene reports nothing.
+    const pending = assistRequest.current; assistRequest.current = null; pending?.abort();
+  }, [scene.id]);
   useEffect(() => { setConsent(false); }, [scene.id, scene.portrait?.type, scene.portrait?.id]);
-  const sceneTier = useRef("");
+  // The tier the user picked in this scene; otherwise the default follows the configuration as it loads.
+  const picked = useRef<{ scene: string; tier: VideoTier } | null>(null);
   const tierOpen = (t: VideoTier) => !!videoConfig?.tiers[t] && (t !== "medium" || mediumAllowed);
   useEffect(() => {
     if (!videoConfig) return;
     const open = (t: VideoTier) => videoConfig.tiers[t] && (t !== "medium" || mediumAllowed);
     const preferred = open("medium") ? "medium" : open("low") ? "low" : "high";
     // Each scene starts from the default quality; within a scene the choice stays while it is available.
-    setTier((t) => sceneTier.current === scene.id && open(t) ? t : preferred);
-    sceneTier.current = scene.id;
+    const choice = picked.current?.scene === scene.id ? picked.current.tier : null;
+    setTier(choice && open(choice) ? choice : preferred);
   }, [videoConfig, mediumAllowed, scene.id]);
   useEffect(() => () => assistRequest.current?.abort(), []);
 
@@ -164,14 +169,14 @@ export function SceneInspector({ scene, index, media, voices, studioEnabled, vid
         {media.videos.filter((v) => v.source_job_id === audio?.id).map((v) => <option key={v.id} value={v.id}>{when(v)} · {jobStatus(v)}</option>)}
       </select></label>}
       <div className="st-tiers" role="group" aria-label="Качество на видеото">
-        {(Object.keys(videoTiers) as VideoTier[]).map((id) => <button type="button" key={id} aria-pressed={tier === id} disabled={!tierOpen(id)} onClick={() => setTier(id)}>
+        {(Object.keys(videoTiers) as VideoTier[]).map((id) => <button type="button" key={id} aria-pressed={tier === id} disabled={!tierOpen(id)} onClick={() => { picked.current = { scene: scene.id, tier: id }; setTier(id); }}>
           <strong>{videoTiers[id].name}</strong><small>{number(videoTiers[id].creditsPerSecond)} кр. / сек.</small>
           {!videoConfig?.tiers[id] && <small>Недостъпно</small>}
         </button>)}
       </div>
       {videoConfig?.tiers.medium && !mediumAllowed && <p className="st-fine">Средно качество е достъпно с отбелязаните готови аватари. Изберете такъв от „Смени аватара“ или друго качество.</p>}
       <label className="checkbox-label"><input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
-        {scene.portrait?.type === "library" ? "Ще използвам синтетичния аватар за съдържание, за което имам необходимите права." : "Имам право да използвам изображението и съгласието на изобразения човек."}</label>
+        {scene.portrait?.type === "library" ? "Ще използвам синтетичния аватар за съдържание, за което имам необходимите права, и ще го обознача като създадено с ИИ, когато може да бъде възприето като истинско." : "Аз съм изобразеният човек или имам неговото изрично съгласие да бъде създадено видео с образа му и синтетичен глас. Ще обознача видеото като създадено с ИИ, когато го публикувам."}</label>
       {videoConfig?.emailNotifications && <label className="checkbox-label"><input type="checkbox" checked={notifyEmail} onChange={(e) => setNotifyEmail(e.target.checked)} /> Уведоми ме по имейл, когато е готово</label>}
       <Button className="btn dark st-wide" busy={busy === "video"} disabled={!!videoBlocked || !consent || !tierOpen(tier) || !videoCost || videoCost > remaining || !user?.verified || busy !== null}
         onClick={() => onCreateVideo({ tier, consent, notifyEmail: !!videoConfig?.emailNotifications && notifyEmail }, videoCost)}>

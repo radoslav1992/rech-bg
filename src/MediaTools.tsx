@@ -1,4 +1,5 @@
 import { AvatarLibraryPicker } from "./AvatarLibrary";
+import { canCreateVideo, VIDEO_PLAN_MESSAGE } from "../shared/catalog";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Captions, Package, Upload, Download, Trash2 } from "lucide-react";
@@ -463,7 +464,7 @@ export function ProductAvatarPanel({
             checked={consent}
             onChange={(e) => setConsent(e.target.checked)}
           />{" "}
-          {libraryAvatarId ? "Имам право да използвам снимката на продукта и ще използвам синтетичния аватар за съдържание, за което имам необходимите права." : "Имам право да използвам снимките и съгласието на изобразения човек."}
+          {libraryAvatarId ? "Имам право да използвам снимката на продукта и ще използвам синтетичния аватар за съдържание, за което имам необходимите права." : "Аз съм изобразеният човек или имам неговото изрично съгласие да бъде създадено изображение с образа му, и имам право да използвам снимката на продукта."}
         </label>
         <Button
           className="btn primary"
@@ -512,9 +513,10 @@ export function ProductAvatarPanel({
               ) : (
                 <Link
                   className="btn primary"
-                  to={`/app/video-studio?avatar=${a.id}`}
+                  to={canCreateVideo(user?.plan) ? `/app/video-studio?avatar=${a.id}` : "/app/billing"}
+                  title={canCreateVideo(user?.plan) ? undefined : VIDEO_PLAN_MESSAGE}
                 >
-                  Използвай за видео
+                  {canCreateVideo(user?.plan) ? "Използвай за видео" : "Видео от план Създател"}
                 </Link>
               )}
               {!a.saved && (

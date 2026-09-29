@@ -28,6 +28,8 @@ export const videoModels = {
   quality: "fal-ai/kling-video/ai-avatar/v2/pro",
 } as const;
 export type VideoMeta = { tier?: VideoTier; provider?: VideoProvider; avatar: string; imageKey?: string; imageMime?: string; token: string; consent: boolean; notifyEmail?: boolean;
+  /** When the user confirmed the rights to the portrait, and which confirmation text they saw (evidence). */
+  consentAt?: number; consentText?: string;
   /** A reusable HeyGen avatar (library avatar linked for Avatar III); set, it is used instead of creating one. */
   heygenAvatar?: { lookId: string; groupId: string } };
 export function jobVideoTier(job: { video_meta: string; video_tier: string }): keyof typeof videoModels {
@@ -41,6 +43,8 @@ export async function failVideo(env: Env, id: string, message = "Видеото 
     .bind(message, now(), id).run();
   await releaseJobStorage(env,id);
 }
+/** Bump when the portrait-rights confirmation shown to users changes. */
+export const CONSENT_TEXT_VERSION = "portrait-consent-2026-09-29";
 export const videos = new Hono<{ Bindings: Env; Variables: ContextVars }>();
 videos.get("/config", (c) => {
   const available = Object.fromEntries((Object.keys(videoTiers) as VideoTier[]).map(tier => [tier, hasVideoCredential(c.env, configuredVideoProvider(c.env, tier))]));
@@ -77,12 +81,14 @@ videos.post("/", async (c) => {
   if (credits !== d.credits) throw new HTTPException(409, { message: "Цената е променена. Обновете страницата и потвърдете отново." });
   if (!(await c.env.AUDIO.head(source.audio_key))) throw new HTTPException(404, { message: "Аудиозаписът вече не е наличен." });
   const id = uid();
-  const meta: VideoMeta = { tier: d.tier, provider, avatar: "", token: token(), consent: form.get("consent") === "true", notifyEmail: !!c.env.EMAIL && form.get("notifyEmail") === "true" };
+  const meta: VideoMeta = { tier: d.tier, provider, avatar: "", token: token(), consent: form.get("consent") === "true", consentAt: now(), consentText: CONSENT_TEXT_VERSION, notifyEmail: !!c.env.EMAIL && form.get("notifyEmail") === "true" };
   let image: Uint8Array | undefined;
   {
     if (!meta.consent) throw new HTTPException(400, { message: "Потвърдете правото си да използвате изображението." });
     let file = form.get("image");
     const libraryId = form.get("libraryAvatarId");
+    // Files the server reads itself (library, media library) may be larger than a direct upload.
+    let serverFile = false;
     const libraryOnly = d.tier === "medium" && mediumUsesLibrary(c.env);
     if (libraryOnly && typeof libraryId !== "string")
       throw new HTTPException(400, { message: "Средно качество е достъпно само с готовите аватари от библиотеката." });
@@ -95,13 +101,14 @@ videos.post("/", async (c) => {
       }
       meta.avatar = libraryId;
       file = new File([library.bytes as BlobPart], "portrait", { type: library.mime });
+      serverFile = true;
     } else if (form.get("assetId") && c.env.MEDIA_ENABLED === "true") {
       const asset = await ownedAsset(c.env,user.id,String(form.get("assetId")));
       if (!["variant","portrait"].includes(asset.kind) || asset.bytes > 8*1024*1024) throw new HTTPException(400);
       const object = await c.env.AUDIO.get(asset.object_key); if (!object) throw new HTTPException(404);
-      file = new File([await object.arrayBuffer()],"portrait.jpg",{type:asset.mime});
+      file = new File([await object.arrayBuffer()],"portrait.jpg",{type:asset.mime}); serverFile = true;
     }
-    if (!(file instanceof File) || file.size < 24 || file.size > (form.get("assetId") || typeof libraryId === "string" ? 8 : 2) * 1024 * 1024)
+    if (!(file instanceof File) || file.size < 24 || file.size > (serverFile ? 8 : 2) * 1024 * 1024)
       throw new HTTPException(400, { message: "Качете JPG или PNG портрет до 2 MB." });
     image = new Uint8Array(await file.arrayBuffer());
     const png = image.slice(0, 8).every((b, i) => b === [137,80,78,71,13,10,26,10][i]);

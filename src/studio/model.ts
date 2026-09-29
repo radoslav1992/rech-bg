@@ -27,9 +27,11 @@ export type SceneMedia = {
 export function sceneMedia(doc: ProjectDoc, index: number, jobs: Job[]): SceneMedia {
   const scene = doc.scenes[index];
   const owned = (id: string) => doc.scenes.some((s) => s.history.includes(id) || s.audioJobId === id);
-  // Recordings made before scenes existed belong to the first scene.
+  // Recordings made before scenes existed belong to the first scene. Only in such a project (no scene has
+  // its own recordings yet): otherwise an unowned recording is one of a deleted scene, with another script.
+  const legacy = index === 0 && doc.scenes.every((s) => !s.history.length);
   const audios = jobs
-    .filter((j) => j.kind !== "video" && (scene.history.includes(j.id) || scene.audioJobId === j.id || (index === 0 && !owned(j.id))))
+    .filter((j) => j.kind !== "video" && (scene.history.includes(j.id) || scene.audioJobId === j.id || (legacy && !owned(j.id))))
     .sort(newest);
   const audio = audios.find((j) => j.id === scene.audioJobId) || null;
   const videos = jobs.filter((j) => j.kind === "video" && audios.some((a) => a.id === j.source_job_id)).sort(newest);

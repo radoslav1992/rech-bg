@@ -8,6 +8,7 @@ import { TemplatePicker, useBrandKit } from "../BrandPanel";
 import { portraitUrl, useProjectDocument } from "../project-document";
 import { readLocalFile, removeLocalFile, takeLocalTimeline } from "../timeline";
 import { lookOf } from "../../shared/brand";
+import { canCreateVideo, VIDEO_PLAN_MESSAGE } from "../../shared/catalog";
 import { defaultCaptions, type CaptionDocument } from "../../shared/captions";
 import { newTextLayer, type Layer } from "../../shared/layers";
 import { MAX_SCENES, newScene, scriptFingerprint, withScene, type ProjectPortrait, type ProjectScene } from "../../shared/project";
@@ -37,6 +38,7 @@ export function StudioEditor() {
 /** Starts a project: a title, or a saved template. */
 function NewProject() {
   const navigate = useNavigate(), [params] = useSearchParams();
+  const { user } = useAuth();
   const config = useStudioConfig();
   const [title, setTitle] = useState("Моята видео история"), [busy, setBusy] = useState(false), [error, setError] = useState("");
   const voice = config.voices?.[0]?.id;
@@ -55,6 +57,7 @@ function NewProject() {
       <Link className="btn" to="/app/studio"><Mic size={17} /> Само аудио</Link></header>
     <section className="vs-card st-new-card">
       <h2>Започнете от празен проект</h2>
+      {!canCreateVideo(user?.plan) && <Notice>{VIDEO_PLAN_MESSAGE} С текущия план можете да подготвите сцените и гласа. <Link to="/app/billing">Вижте плановете</Link></Notice>}
       {error && <Notice error>{error}</Notice>}
       {config.error && <Notice>{config.error}</Notice>}
       {config.voices && !voice && <Notice>В момента няма активни гласове за видео. Администраторът може да добави глас от настройките.</Notice>}
@@ -80,7 +83,8 @@ function Editor({ projectId }: { projectId: string }) {
   const [title, setTitle] = useState("");
   const [selection, setSelection] = useState<Selection>({ kind: "scene", scene: 0 });
   const [tab, setTab] = useState<"scene" | "element" | "project">("scene");
-  const [avatarFor, setAvatarFor] = useState<number | null>(null), [exportOpen, setExportOpen] = useState(false);
+  // The scene (by id, so a reorder while the dialog is open cannot misplace the choice) choosing a presenter.
+  const [avatarFor, setAvatarFor] = useState<string | null>(null), [exportOpen, setExportOpen] = useState(false);
   const [sending, setSending] = useState<{ scene: string; what: "audio" | "video" } | null>(null);
   const [musicUpload, setMusicUpload] = useState<number | null>(null);
   const musicInput = useRef<HTMLInputElement>(null), keys = useRef(new Map<string, string>());
@@ -148,8 +152,9 @@ function Editor({ projectId }: { projectId: string }) {
   }, [doc, row, user]);
   // New scenes and templates start without a voice: use the project's.
   useEffect(() => {
-    if (!doc || !config.voices?.length) return;
-    const fallback = config.voices.some((v) => v.id === row?.voice) ? row!.voice : config.voices[0].id;
+    // Waits for the project row, whose voice new scenes should use.
+    if (!doc || !row || !config.voices?.length) return;
+    const fallback = config.voices.some((v) => v.id === row.voice) ? row.voice : config.voices[0].id;
     if (doc.scenes.some((s) => !s.voice)) update((d) => ({ ...d, scenes: d.scenes.map((s) => s.voice ? s : { ...s, voice: fallback }) }));
   }, [doc, config.voices, row]);
   // Links from the media library (?avatar=) and from finished jobs (?job=).
@@ -314,7 +319,7 @@ function Editor({ projectId }: { projectId: string }) {
     return () => window.removeEventListener("beforeunload", warn);
   }, [project.saveState, captions.saveState, sending]);
 
-  if (error && !row) return <div className="video-studio"><Notice error>{error}</Notice><Link to="/app/video-studio">Нов видео проект</Link></div>;
+  if (error && !row) return <div className="video-studio"><Notice error>{error}</Notice><p><Link to="/app/projects">Моите проекти</Link> · <Link to="/app/video-studio">Нов видео проект</Link></p></div>;
   if (!doc || !row) return <div className="video-studio">{project.error ? <Notice error>{project.error}</Notice> : <p role="status">Зареждане на студиото…</p>}</div>;
 
   const scene = doc.scenes[focusIndex], sceneSeg = sceneSegments.find((s) => s.index === focusIndex) || null;
@@ -332,6 +337,7 @@ function Editor({ projectId }: { projectId: string }) {
       <span className="st-credits">{number(remaining)} кредита</span>
       <Button className="btn primary" onClick={() => { player.pause(); setExportOpen(true); }}><Download size={16} /> Експорт{readyScenes < scenes.length ? ` · ${readyScenes}/${scenes.length}` : ""}</Button>
     </header>
+    {!canCreateVideo(user?.plan) && <Notice>{VIDEO_PLAN_MESSAGE} Можете да подготвите сцените и гласа; видеото се отключва с по-висок план. <Link to="/app/billing">Вижте плановете</Link></Notice>}
     {error && <Notice error>{error} <button type="button" className="text-link" onClick={() => setError("")}>Скрий</button></Notice>}
     {pollingError && <Notice>{pollingError}</Notice>}
     {project.conflict && <Notice>{project.conflict}</Notice>}
@@ -386,7 +392,7 @@ function Editor({ projectId }: { projectId: string }) {
           onChange={(change) => changeScene(focusIndex, change)}
           onGenerateAudio={(credits) => void generateAudio(focusIndex, credits)}
           onCreateVideo={(request, credits) => void createVideo(focusIndex, request, credits)}
-          onChooseAvatar={() => setAvatarFor(focusIndex)}
+          onChooseAvatar={() => setAvatarFor(scene.id)}
           onSelectAudio={(audioId) => selectAudio(focusIndex, audioId)}
           onSelectVideo={(videoId) => changeScene(focusIndex, (s) => ({ ...s, videoJobId: videoId }))}
           onAddLayer={(type) => addTextOrLogo(focusIndex, type)}
@@ -407,8 +413,8 @@ function Editor({ projectId }: { projectId: string }) {
       onChange={(e) => { void addMusic(e.target.files?.[0]); e.target.value = ""; }} />
     {player.elements}
 
-    <AvatarModal open={avatarFor !== null} mediumAvatars={config.video?.mediumLibraryOnly ? config.mediumAvatars : null} selected={avatarFor !== null ? doc.scenes[avatarFor]?.portrait ?? null : null} onClose={() => setAvatarFor(null)}
-      onSelect={(portrait) => { if (avatarFor !== null) changeScene(avatarFor, (s) => ({ ...s, portrait })); }} />
+    <AvatarModal open={avatarFor !== null} mediumAvatars={config.video?.mediumLibraryOnly ? config.mediumAvatars : null} selected={doc.scenes.find((s) => s.id === avatarFor)?.portrait ?? null} onClose={() => setAvatarFor(null)}
+      onSelect={(portrait) => { if (avatarFor) update((d) => ({ ...d, scenes: d.scenes.map((s) => s.id === avatarFor ? { ...s, portrait } : s) })); }} />
     <Modal open={exportOpen} title="Експорт на видеото" onClose={() => setExportOpen(false)}>
       <ExportPanel projectId={projectId} doc={doc} media={media} segments={sceneSegments} captions={captions.docs} look={look} onSave={saveAll} />
     </Modal>

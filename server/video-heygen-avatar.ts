@@ -8,10 +8,12 @@ import { createHeyGenAvatar, deleteHeyGenAvatar, type HeyGenAvatar } from "./vid
 export async function prepareHeyGenAvatar(env: Env, id: string): Promise<HeyGenAvatar | null> {
   const job = await env.DB.prepare("SELECT * FROM jobs WHERE id=? AND kind='video'").bind(id).first<any>();
   if (!job || !["queued", "running"].includes(job.status)) throw new VideoFailure("SUBMIT", "INTERNAL");
+  const meta = JSON.parse(job.video_meta);
+  // An avatar that already exists (created earlier for this job, or a linked library avatar) is reused, so a
+  // re-sent submission (same Idempotency-Key) can recover the original video.
+  if (meta.heygenAvatar) return meta.heygenAvatar as HeyGenAvatar;
   // A saved/ambiguous video submission must never create a second avatar.
   if (job.provider_request || job.submitted_at != null) return null;
-  const meta = JSON.parse(job.video_meta);
-  if (meta.heygenAvatar) return meta.heygenAvatar as HeyGenAvatar;
   if (!env.HEYGEN_API_KEY?.trim()) throw new VideoFailure("SUBMIT", "AUTH");
   const source = await env.DB.prepare("SELECT audio_key FROM jobs WHERE id=? AND user_id=? AND status='completed'")
     .bind(job.source_job_id, job.user_id).first<any>();

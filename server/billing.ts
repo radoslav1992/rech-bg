@@ -30,7 +30,7 @@ function priceIds(e: Env): Record<(typeof paidPlans)[number], string | undefined
 }
 export async function allowance(e: Env, u: DbUser) {
   const sub = await e.DB.prepare(
-    "SELECT * FROM subscriptions WHERE user_id=? AND status IN ('active','trialing','past_due','unpaid','incomplete') ORDER BY period_end DESC LIMIT 1",
+    "SELECT * FROM subscriptions WHERE user_id=? AND status IN ('active','trialing','past_due','unpaid','incomplete') ORDER BY status='active' DESC, period_end DESC LIMIT 1",
   )
     .bind(u.id)
     .first<any>();
@@ -180,9 +180,10 @@ billing.post("/sync", async (c) => {
   const u = c.get("user");
   if (!u.stripe_customer) return c.json({ ok: true });
   await rate(c, "billing-sync", 30, 3600, u.id);
+  const fetchedAt = now();
   const list = await stripe(c.env).subscriptions.list({ customer: u.stripe_customer, status: "all", limit: 10, expand: ["data.latest_invoice"] });
   const statements: D1PreparedStatement[] = [];
-  for (const sub of list.data) statements.push(...(await subscriptionStatements(c.env, sub, u.id, now())));
+  for (const sub of list.data) statements.push(...(await subscriptionStatements(c.env, sub, u.id, fetchedAt)));
   if (statements.length) await c.env.DB.batch(statements);
   return c.json({ ok: true });
 });
@@ -201,17 +202,27 @@ billing.post("/portal", async (c) => {
     ).url,
   });
 });
+/** The plan of a Stripe price: a configured STRIPE_PRICE_*, or (for older/replaced prices) its lookup key or metadata.plan. */
+function planOf(e: Env, price: Stripe.Price | undefined): PlanId | undefined {
+  if (!price) return undefined;
+  const configured = Object.entries(priceIds(e)).find(([, v]) => v === price.id)?.[0];
+  const named = [price.lookup_key, price.metadata?.plan].find((p) => (paidPlans as readonly string[]).includes(p || ""));
+  return (configured || named || undefined) as PlanId | undefined;
+}
 /**
  * Stores Stripe's current state of a subscription (read from Stripe, never from an event payload).
- * `created` orders writes: an older event never overwrites a newer state.
+ * `fetchedAt` (taken just before reading from Stripe) orders writes: an older reading never overwrites a newer one.
  */
-async function subscriptionStatements(e: Env, sub: Stripe.Subscription, userId: string, created: number) {
+async function subscriptionStatements(e: Env, sub: Stripe.Subscription, userId: string, fetchedAt: number) {
   const item = sub.items.data[0];
-  const plan = Object.entries(priceIds(e)).find(([, v]) => v === item?.price.id)?.[0] as PlanId | undefined;
+  const plan = planOf(e, item?.price);
   if (!plan) {
-    // A price that is not one of the configured plans (e.g. changed in the Customer Portal) must be visible.
+    // Must be visible: e.g. a price offered in the Customer Portal that is not one of the configured plans.
     console.error("Subscription price is not a configured plan", { subscription: sub.id, price: item?.price.id });
-    return [];
+    // Its status and period are still kept current (a cancellation must land); the stored plan stays.
+    return item ? [e.DB.prepare(
+      "UPDATE subscriptions SET status=?,period_start=?,period_end=?,cancel_at_period_end=?,event_created=? WHERE id=? AND ?>=event_created",
+    ).bind(sub.status, item.current_period_start, item.current_period_end, sub.cancel_at_period_end ? 1 : 0, fetchedAt, sub.id, fetchedAt)] : [];
   }
   const invoice = sub.latest_invoice as Stripe.Invoice | null;
   const unpaid = sub.status === "active" && (!invoice || typeof invoice !== "object" || invoice.status !== "paid");
@@ -223,7 +234,7 @@ async function subscriptionStatements(e: Env, sub: Stripe.Subscription, userId: 
   if (pending) return [];
   return [e.DB.prepare(
     "INSERT INTO subscriptions(id,user_id,plan,status,period_start,period_end,cancel_at_period_end,event_created) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET plan=excluded.plan,status=excluded.status,period_start=excluded.period_start,period_end=excluded.period_end,cancel_at_period_end=excluded.cancel_at_period_end,event_created=excluded.event_created WHERE excluded.event_created>=subscriptions.event_created",
-  ).bind(sub.id, userId, plan, unpaid ? "past_due" : sub.status, item.current_period_start, item.current_period_end, sub.cancel_at_period_end ? 1 : 0, created)];
+  ).bind(sub.id, userId, plan, unpaid ? "past_due" : sub.status, item.current_period_start, item.current_period_end, sub.cancel_at_period_end ? 1 : 0, fetchedAt)];
 }
 export async function webhook(request: Request, e: Env) {
   if (!e.STRIPE_WEBHOOK_SECRET)
@@ -262,6 +273,7 @@ export async function webhook(request: Request, e: Env) {
   const statements: D1PreparedStatement[] = [];
   if (subscriptionId) {
     // Fetch current state: do not grant access based on a redirect, stale event payload or invoice alone.
+    const fetchedAt = now();
     const sub = await s.subscriptions.retrieve(subscriptionId, {
       expand: ["latest_invoice"],
     });
@@ -286,7 +298,7 @@ export async function webhook(request: Request, e: Env) {
         subscription: sub.id,
       });
     }
-    if (user) statements.push(...(await subscriptionStatements(e, sub, user.id, event.created)));
+    if (user) statements.push(...(await subscriptionStatements(e, sub, user.id, fetchedAt)));
   }
   statements.push(
     e.DB.prepare(

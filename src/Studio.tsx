@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { canCreateVideo } from "../shared/catalog";
 import {
   Link,
   useNavigate,
@@ -62,7 +63,7 @@ export function Studio() {
   const [pause, setPause] = useState(400);
   const [voices, setVoices] = useState<Voice[]>(voiceList);
   const [filter, setFilter] = useState("");
-  const [error, setError] = useState("");
+  const [error, setError] = useState(""), [loadError, setLoadError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(!!id);
@@ -70,6 +71,8 @@ export function Studio() {
   const [history, setHistory] = useState<Job[]>([]);
   const [dirty, setDirty] = useState(false);
   const projectId = useRef<string | undefined>(id);
+  // Set when this page just created the project: its address changes, but the loaded state is current.
+  const created = useRef("");
   const requestKey = useRef<string>(crypto.randomUUID());
   const fileRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -80,6 +83,8 @@ export function Studio() {
   const { jobs: activityJobs } = useJobs();
   useEffect(() => {
     projectId.current = id;
+    setLoadError("");
+    if (id && created.current === id) { created.current = ""; return; }
     // Ignore responses for a project the user already navigated away from.
     let live = true;
     setJob(null);
@@ -98,7 +103,7 @@ export function Studio() {
           setPause(p.pause_ms);
           setDirty(false);
         })
-        .catch((e) => live && setError(e.message))
+        .catch((e) => live && setLoadError(e.message))
         .finally(() => live && setLoading(false));
       api("/jobs")
         .then((d) => {
@@ -216,6 +221,7 @@ export function Studio() {
     else {
       const r = await post("/projects", payload);
       projectId.current = r.id;
+      created.current = r.id;
       navigate("/app/studio/" + r.id, { replace: true });
     }
     setDirty(false);
@@ -251,7 +257,15 @@ export function Studio() {
     /* Invalid dialogue is rejected by the server on generation. */
   }
   const active = !!job && ["queued", "running"].includes(job.status);
-  const selected = voices.find((v) => v.id === voice)!;
+  // A voice retired since the project was saved falls back to the first one instead of breaking the page.
+  const selected = voices.find((v) => v.id === voice) || voices[0];
+  if (loadError)
+    return (
+      <div className="studio-page">
+        <Notice error>{loadError}</Notice>
+        <p><Link to="/app/projects">Моите проекти</Link> · <Link to="/app/studio">Нов аудиозапис</Link></p>
+      </div>
+    );
   return (
     <div className="studio-page">
       {/* The visible title is an editable input; give the page a heading for screen readers. */}
@@ -615,7 +629,7 @@ export function Studio() {
               </details>
             )}
           </section>
-          <section className="output-panel"><h2>Историята ви може да има и лице.</h2><p>Създайте видео в отделното студио — с изразителен глас, емоции и субтитри.</p><Link className="btn primary" to="/app/video-studio">Към видео студиото</Link></section>
+          <section className="output-panel"><h2>Историята ви може да има и лице.</h2><p>Създайте видео в отделното студио — с изразителен глас, емоции и субтитри.{canCreateVideo(user?.plan) ? "" : " Видео аватарите са достъпни в плановете Създател и Студио."}</p>{canCreateVideo(user?.plan) ? <Link className="btn primary" to="/app/video-studio">Към видео студиото</Link> : <Link className="btn primary" to="/app/billing">Вижте плановете</Link>}</section>
         </>
       )}
     </div>

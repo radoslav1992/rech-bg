@@ -40,7 +40,7 @@ export async function getHeyGenAvatarStatus(env: Env, avatar: HeyGenAvatar) {
   if (!response.ok) throw await providerFailure(response, "STATUS");
   const body = await response.json() as any;
   const look = body?.data;
-  if (body?.error || !look || look.id !== avatar.lookId || (look.group_id && look.group_id !== avatar.groupId))
+  if (body?.error || !look || look.id !== avatar.lookId || (avatar.groupId && look.group_id && look.group_id !== avatar.groupId))
     throw new VideoFailure("STATUS", "PROVIDER");
   if (look.status === "processing") return "processing";
   if (look.status === "completed") {
