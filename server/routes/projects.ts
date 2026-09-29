@@ -1,4 +1,5 @@
 import type { Env, ContextVars } from "../types";
+import { studioMaxChars } from "../../shared/studio";
 import { Hono } from "hono";
 import { hasActiveMediaTask } from "../db";
 import { isStudioVoice, resolveStudioVoice } from "../studio-voices";
@@ -17,7 +18,7 @@ const projectSchema = z.object({
   voice: z.string().refine((s) => Object.hasOwn(voiceMap, s) || isStudioVoice(s)),
   second_voice: z.string().refine((s) => Object.hasOwn(voiceMap, s)),
   pause_ms: z.number().int().min(0).max(1500).default(400),
-}).refine(p => p.mode === "studio" ? isStudioVoice(p.voice) && p.script.length <= 1500 : Object.hasOwn(voiceMap, p.voice), { message: "Невалиден глас или сценарий за този тип проект." });
+}).refine(p => p.mode === "studio" ? isStudioVoice(p.voice) && p.script.length <= studioMaxChars : Object.hasOwn(voiceMap, p.voice), { message: "Невалиден глас или сценарий за този тип проект." });
 projects.get("/api/projects", async (c) => {
   const r = await c.env.DB.prepare(
     "SELECT p.*,j.id AS latest_job,j.status,j.duration FROM projects p LEFT JOIN jobs j ON j.id=(SELECT id FROM jobs WHERE project_id=p.id ORDER BY created_at DESC, rowid DESC LIMIT 1) WHERE p.user_id=? ORDER BY p.updated_at DESC LIMIT 100",

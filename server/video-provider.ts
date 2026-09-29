@@ -1,5 +1,5 @@
 import type { Env } from "./types";
-import type { VideoTier } from "../shared/video";
+import { KLING_STANDARD_MAX_SECONDS, MAX_VIDEO_SECONDS, type VideoTier } from "../shared/video";
 
 export type VideoProvider = "fal" | "wavespeed" | "heygen";
 
@@ -8,7 +8,8 @@ export type VideoProvider = "fal" | "wavespeed" | "heygen";
 export function configuredVideoProvider(env: Env, tier: VideoTier): VideoProvider | null {
   if (tier === "medium" && mediumUsesLibrary(env)) return "heygen";
   const mode = env.VIDEO_PROVIDER?.trim().toLowerCase() || "fal";
-  if (mode === "heygen") return tier === "high" ? "heygen" : tier === "medium" ? "fal" : null;
+  // Low uses WaveSpeed InfiniteTalk in both modes (it has no HeyGen equivalent).
+  if (mode === "heygen") return tier === "high" ? "heygen" : tier === "medium" ? "fal" : "wavespeed";
   if (mode === "fal" || mode === "fal.ai") return tier === "low" ? "wavespeed" : "fal";
   return null;
 }
@@ -19,6 +20,11 @@ export function configuredVideoProvider(env: Env, tier: VideoTier): VideoProvide
  */
 export function mediumUsesLibrary(env: Env) {
   return env.VIDEO_MEDIUM?.trim().toLowerCase() === "heygen";
+}
+
+/** Longest recording the tier's current model accepts for one video. */
+export function videoMaxSeconds(provider: VideoProvider | null, tier: VideoTier) {
+  return provider === "fal" && tier === "medium" ? KLING_STANDARD_MAX_SECONDS : MAX_VIDEO_SECONDS;
 }
 
 export function hasVideoCredential(env: Env, provider: VideoProvider | null): boolean {

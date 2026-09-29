@@ -10,7 +10,8 @@ import { allowance } from "./billing";
 import { rate, token, safeEqual } from "./security";
 import { videoTiers, videoCredits, type VideoTier } from "../shared/video";
 import { canCreateVideo, VIDEO_PLAN_MESSAGE } from "../shared/catalog";
-import { configuredVideoProvider, hasVideoCredential, mediumUsesLibrary, type VideoProvider } from "./video-provider";
+import { MB } from "../shared/media";
+import { configuredVideoProvider, hasVideoCredential, mediumUsesLibrary, videoMaxSeconds, type VideoProvider } from "./video-provider";
 import { libraryAvatarInput } from "./avatars";
 
 export const avatarMap: Record<string, string> = {
@@ -51,7 +52,8 @@ videos.get("/config", (c) => {
   return c.json({ enabled: !!c.env.VIDEO_GENERATION && Object.values(available).some(Boolean), emailNotifications: !!c.env.EMAIL,
     // Medium then works only with library avatars linked to HeyGen.
     mediumLibraryOnly: mediumUsesLibrary(c.env),
-    tiers: Object.fromEntries(Object.entries(videoTiers).map(([id, tier]) => [id, { ...tier, enabled: !!c.env.VIDEO_GENERATION && available[id as VideoTier] }])) });
+    tiers: Object.fromEntries(Object.entries(videoTiers).map(([id, tier]) => [id, { ...tier, enabled: !!c.env.VIDEO_GENERATION && available[id as VideoTier],
+      maxSeconds: videoMaxSeconds(configuredVideoProvider(c.env, id as VideoTier), id as VideoTier) }])) });
 });
 videos.post("/", async (c) => {
   const user = c.get("user");
@@ -76,7 +78,7 @@ videos.post("/", async (c) => {
   if (!source || source.kind === "video" || !source.audio_key) throw new HTTPException(404, { message: "Изберете готов аудиозапис." });
   if (source.mode === "podcast") throw new HTTPException(400, { message: "За аватар използвайте запис с един глас." });
   let credits: number;
-  try { credits = videoCredits(source.duration, d.tier); }
+  try { credits = videoCredits(source.duration, d.tier, videoMaxSeconds(provider, d.tier)); }
   catch (e) { throw new HTTPException(400, { message: (e as Error).message }); }
   if (credits !== d.credits) throw new HTTPException(409, { message: "Цената е променена. Обновете страницата и потвърдете отново." });
   if (!(await c.env.AUDIO.head(source.audio_key))) throw new HTTPException(404, { message: "Аудиозаписът вече не е наличен." });
@@ -121,7 +123,7 @@ videos.post("/", async (c) => {
     await c.env.DB.batch([c.env.DB.prepare("INSERT INTO jobs(id,user_id,project_id,window_id,idempotency_key,title,mode,script,voice,second_voice,pause_ms,chars,created_at,updated_at,kind,source_job_id,video_tier,video_meta,duration) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'video',?,?,?,?)")
       // The old column has a two-value CHECK. Store the new tier in metadata;
       // this avoids rebuilding the jobs table and its quota/refund triggers.
-      .bind(id,user.id,source.project_id,a.window,d.idempotencyKey,source.title,source.mode,source.script,source.voice,source.second_voice,0,credits,now(),now(),source.id,"quality",JSON.stringify(meta),source.duration), ...(await jobStorage(c.env,user,id,source.title,"video"))]);
+      .bind(id,user.id,source.project_id,a.window,d.idempotencyKey,source.title,source.mode,source.script,source.voice,source.second_voice,0,credits,now(),now(),source.id,"quality",JSON.stringify(meta),source.duration), ...(await jobStorage(c.env,user,id,source.title,"video",(source.duration > 60 ? 300 : 100) * MB))]);
   } catch (e) {
     if (String(e).includes("QUOTA_EXCEEDED")) throw new HTTPException(402, { message: "Недостатъчно кредити за това видео. Изберете по-висок план." });
     if (String(e).includes("UNIQUE")) {

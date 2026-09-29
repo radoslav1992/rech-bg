@@ -170,7 +170,7 @@ it("times out a stalled provider and refunds the failed daily reservation", asyn
   } finally { vi.useRealTimers(); }
 });
 it("rejects empty scripts, insufficient tag space and unverified users before calling AI", async () => {
-  for (const text of ["", "[calm]", "я".repeat(1496)]) expect((await request("/video-studio/delivery", { ...delivery, text })).status).toBe(400);
+  for (const text of ["", "[calm]", "я".repeat(1996)]) expect((await request("/video-studio/delivery", { ...delivery, text })).status).toBe(400);
   sqlite.exec("UPDATE users SET verified=0 WHERE id='u'");
   expect((await request("/video-studio/delivery", delivery)).status).toBe(403);
   expect(env.AI.run).not.toHaveBeenCalled();
@@ -180,8 +180,8 @@ it("accepts a fenced tag plan with a custom model and preserves the character li
   env.AI.run.mockResolvedValue({ output_text: "```json\n" + tagPlan + "\n```" });
   expect(await suggestDelivery(env, "Здравей свят!", "ad")).toBe("[excited]Здравей свят!");
   expect(env.AI.run.mock.calls[0][0]).toBe("custom/model");
-  expect(() => applyDeliveryTags("я".repeat(1495), { tags: [{ before_word: 0, tag: "sad" }] })).not.toThrow();
-  expect(() => applyDeliveryTags("я".repeat(1495), { tags: [{ before_word: 0, tag: "excited" }] })).toThrow();
+  expect(() => applyDeliveryTags("я".repeat(1995), { tags: [{ before_word: 0, tag: "sad" }] })).not.toThrow();
+  expect(() => applyDeliveryTags("я".repeat(1995), { tags: [{ before_word: 0, tag: "excited" }] })).toThrow();
 });
 it("protects caption ownership and validates edited timings", async () => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(speech())));

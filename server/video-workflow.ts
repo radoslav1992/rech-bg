@@ -55,7 +55,8 @@ async function fetchOutput(url: string, signal: AbortSignal) {
 export async function storeVideo(env: Env, key: string, url: string) {
   const r = await fetchOutput(url, AbortSignal.timeout(240000));
   if (!r.ok || !r.body) throw new VideoFailure("DOWNLOAD", "MEDIA", r.status);
-  const limit = 100 * 1024 * 1024;
+  // A 2-minute 1080p avatar video can exceed 100 MB.
+  const limit = 300 * 1024 * 1024;
   if (Number(r.headers.get("Content-Length")) > limit) { await r.body.cancel(); throw new Error("Video too large"); }
   const upload = await env.AUDIO.createMultipartUpload(key, { httpMetadata: { contentType: "video/mp4" } });
   const reader = r.body.getReader();

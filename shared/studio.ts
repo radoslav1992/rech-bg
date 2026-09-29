@@ -11,7 +11,8 @@ export const emotionTags = [
   ["sighs", "Въздишка"], ["sad", "Тъга"],
   ["calm", "Спокойно"], ["serious", "Сериозно"],
 ] as const;
-export const studioMaxChars = 1500;
+/** About two minutes of speech per scene (the avatar video of a scene is up to 120 s). */
+export const studioMaxChars = 2000;
 export const studioCreditsPerChar = 3;
 export const stripTags = (text: string) => text.replace(/\[[^\]]*\]/g, "");
 /** Rough speech length for a Bulgarian script (~13 spoken characters per second), before paying for it. */

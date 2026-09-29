@@ -46,12 +46,13 @@ export function useStudioConfig() {
     void loadVoices();
     const refresh = () => { void loadVoices(); };
     window.addEventListener("rech:studio-voices-changed", refresh);
-    api<{ enabled: boolean; emailNotifications: boolean; mediumLibraryOnly?: boolean; tiers: Record<VideoTier, { enabled: boolean }> }>("/videos/config")
+    api<{ enabled: boolean; emailNotifications: boolean; mediumLibraryOnly?: boolean; tiers: Record<VideoTier, { enabled: boolean; maxSeconds?: number }> }>("/videos/config")
       .then((d) => setVideo({
         enabled: d.enabled, emailNotifications: d.emailNotifications, mediumLibraryOnly: !!d.mediumLibraryOnly,
         tiers: { low: !!d.tiers.low?.enabled, medium: !!d.tiers.medium?.enabled, high: !!d.tiers.high?.enabled },
+        maxSeconds: { low: d.tiers.low?.maxSeconds ?? 60, medium: d.tiers.medium?.maxSeconds ?? 60, high: d.tiers.high?.maxSeconds ?? 60 },
       }))
-      .catch(() => setVideo({ enabled: false, emailNotifications: false, mediumLibraryOnly: false, tiers: { low: false, medium: false, high: false } }));
+      .catch(() => setVideo({ enabled: false, emailNotifications: false, mediumLibraryOnly: false, tiers: { low: false, medium: false, high: false }, maxSeconds: { low: 60, medium: 60, high: 60 } }));
     const loadAvatars = () => api<{ avatars: LibraryAvatar[] }>("/avatars")
       .then((d) => setMediumAvatars(new Set(d.avatars.filter((a) => a.heygen).map((a) => a.id)))).catch(() => {});
     void loadAvatars();
