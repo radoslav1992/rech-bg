@@ -1,4 +1,4 @@
-import { avatars } from "./avatars";
+import { avatars, avatarInputs } from "./avatars";
 import { Hono } from "hono";
 import { getCookie } from "hono/cookie";
 import { HTTPException } from "hono/http-exception";
@@ -75,6 +75,7 @@ app.post("/api/billing/webhook", async (c) =>
 );
 app.route("/", publicRoutes);
 app.route("/api/video-inputs", videoInputs);
+app.route("/api/avatar-inputs", avatarInputs);
 app.route("/api/media-inputs", mediaInputs);
 app.use("/api/*", async (c, next) => {
   const t = getCookie(c, "rech_session");

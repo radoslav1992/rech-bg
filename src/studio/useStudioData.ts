@@ -4,6 +4,7 @@ import { useJobs } from "../JobActivity";
 import { mergeJobs } from "../job-state";
 import type { StudioVoice } from "../../shared/studio";
 import type { VideoTier } from "../../shared/video";
+import type { LibraryAvatar } from "../../shared/avatars";
 import type { VideoConfig } from "./SceneInspector";
 
 /** Every recording and video of one project: loaded once, then kept fresh by the app-wide job polling. */
@@ -29,6 +30,8 @@ export function useProjectJobs(projectId: string) {
 export function useStudioConfig() {
   const [voices, setVoices] = useState<StudioVoice[] | null>(null), [enabled, setEnabled] = useState(false), [error, setError] = useState("");
   const [video, setVideo] = useState<VideoConfig | null>(null);
+  // Library avatars linked to HeyGen: the only ones Medium accepts when the server says so.
+  const [mediumAvatars, setMediumAvatars] = useState<Set<string>>(new Set());
   const request = useRef(0);
   const loadVoices = useCallback(async () => {
     const n = ++request.current;
@@ -43,15 +46,20 @@ export function useStudioConfig() {
     void loadVoices();
     const refresh = () => { void loadVoices(); };
     window.addEventListener("rech:studio-voices-changed", refresh);
-    api<{ enabled: boolean; emailNotifications: boolean; tiers: Record<VideoTier, { enabled: boolean }> }>("/videos/config")
+    api<{ enabled: boolean; emailNotifications: boolean; mediumLibraryOnly?: boolean; tiers: Record<VideoTier, { enabled: boolean }> }>("/videos/config")
       .then((d) => setVideo({
-        enabled: d.enabled, emailNotifications: d.emailNotifications,
+        enabled: d.enabled, emailNotifications: d.emailNotifications, mediumLibraryOnly: !!d.mediumLibraryOnly,
         tiers: { low: !!d.tiers.low?.enabled, medium: !!d.tiers.medium?.enabled, high: !!d.tiers.high?.enabled },
       }))
-      .catch(() => setVideo({ enabled: false, emailNotifications: false, tiers: { low: false, medium: false, high: false } }));
-    return () => { request.current++; window.removeEventListener("rech:studio-voices-changed", refresh); };
+      .catch(() => setVideo({ enabled: false, emailNotifications: false, mediumLibraryOnly: false, tiers: { low: false, medium: false, high: false } }));
+    const loadAvatars = () => api<{ avatars: LibraryAvatar[] }>("/avatars")
+      .then((d) => setMediumAvatars(new Set(d.avatars.filter((a) => a.heygen).map((a) => a.id)))).catch(() => {});
+    void loadAvatars();
+    window.addEventListener("rech:avatars-changed", loadAvatars);
+    const pending = request;
+    return () => { pending.current++; window.removeEventListener("rech:studio-voices-changed", refresh); window.removeEventListener("rech:avatars-changed", loadAvatars); };
   }, [loadVoices]);
-  return { voices, enabled, error, video, reloadVoices: loadVoices };
+  return { voices, enabled, error, video, mediumAvatars, reloadVoices: loadVoices };
 }
 
 /** Length of an audio file (e.g. the project music), read from its metadata. */

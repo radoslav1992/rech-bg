@@ -15,6 +15,7 @@ export interface Env {
   FAL_KEY?: string;
   WAVESPEED_API_KEY?: string;
   VIDEO_PROVIDER?: string;
+  VIDEO_MEDIUM?: string;
   HEYGEN_API_KEY?: string;
   ASSETS: Fetcher;
   SITE_URL?: string;

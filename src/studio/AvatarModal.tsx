@@ -17,8 +17,10 @@ const MAX_PORTRAIT_BYTES = 8 * 1024 * 1024;
  * Picks the presenter of a scene: every ready-made avatar, the user's own portraits and product
  * avatars, a new upload, or a new avatar holding a product. Choosing is free; the video is paid when created.
  */
-export function AvatarModal({ open, selected, onClose, onSelect }: {
+export function AvatarModal({ open, selected, onClose, onSelect, mediumAvatars = null }: {
   open: boolean; selected: ProjectPortrait | null; onClose: () => void; onSelect: (portrait: ProjectPortrait) => void;
+  /** Set when Medium quality takes only these library avatars; they get a badge. */
+  mediumAvatars?: Set<string> | null;
 }) {
   const [tab, setTab] = useState<"library" | "mine" | "product">("library");
   const [avatars, setAvatars] = useState<LibraryAvatar[] | null>(null), [error, setError] = useState("");
@@ -71,11 +73,12 @@ export function AvatarModal({ open, selected, onClose, onSelect }: {
           return <button type="button" key={a.id} className={`st-avatar${isSelected(p) ? " selected" : ""}`} aria-pressed={isSelected(p)} onClick={() => choose(p)}>
             <span className="st-avatar-photo"><img src={a.imageUrl} alt="" loading="lazy" width="300" height="400" />{isSelected(p) && <span className="avatar-library-check"><Check size={16} /></span>}</span>
             <strong>{a.name}</strong><small>{a.description}</small>
+            {mediumAvatars?.has(a.id) && <span className="st-avatar-tag">Средно качество</span>}
           </button>;
         })}
       </div>
       {avatars && !visible.length && <p>{avatars.length ? "Няма аватари с тези критерии." : "Готовите аватари предстоят. Качете свой портрет от „Моите портрети“."}</p>}
-      <p className="vs-fine">Синтетичните аватари са безплатни за избор. Използвайте ги само за съдържание, за което имате права.</p>
+      <p className="vs-fine">Синтетичните аватари са безплатни за избор. Използвайте ги само за съдържание, за което имате права.{mediumAvatars && " Средно качество е достъпно само с аватарите, отбелязани със „Средно качество“; с останалите и със свой портрет изберете друго качество."}</p>
     </>}
     {tab === "mine" && <>
       <div className="st-avatar-grid">

@@ -6,10 +6,19 @@ export type VideoProvider = "fal" | "wavespeed" | "heygen";
 // "fal" preserves the existing stack: WaveSpeed Low, fal Medium/High.
 // An unknown setting disables new generation instead of silently billing a fallback.
 export function configuredVideoProvider(env: Env, tier: VideoTier): VideoProvider | null {
+  if (tier === "medium" && mediumUsesLibrary(env)) return "heygen";
   const mode = env.VIDEO_PROVIDER?.trim().toLowerCase() || "fal";
   if (mode === "heygen") return tier === "high" ? "heygen" : tier === "medium" ? "fal" : null;
   if (mode === "fal" || mode === "fal.ai") return tier === "low" ? "wavespeed" : "fal";
   return null;
+}
+
+/**
+ * VIDEO_MEDIUM=heygen: Medium uses HeyGen Avatar III with the library avatars linked to a HeyGen avatar
+ * (one reusable avatar each, no per-video avatar creation). Own portraits cannot use Medium then.
+ */
+export function mediumUsesLibrary(env: Env) {
+  return env.VIDEO_MEDIUM?.trim().toLowerCase() === "heygen";
 }
 
 export function hasVideoCredential(env: Env, provider: VideoProvider | null): boolean {

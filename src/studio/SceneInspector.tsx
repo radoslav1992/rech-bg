@@ -14,16 +14,19 @@ import type { ProjectScene } from "../../shared/project";
 import { portraitUrl } from "../project-document";
 import { isBusy, type SceneMedia } from "./model";
 
-export type VideoConfig = { enabled: boolean; emailNotifications: boolean; tiers: Record<VideoTier, boolean> };
+export type VideoConfig = { enabled: boolean; emailNotifications: boolean; mediumLibraryOnly: boolean; tiers: Record<VideoTier, boolean> };
 export type VideoRequest = { tier: VideoTier; consent: boolean; notifyEmail: boolean };
 
 const when = (j: Job) => new Date(j.created_at * 1000).toLocaleString("bg");
 
 /** Everything about one scene: what is said, by whom, who presents it, and its timing and look. */
-export function SceneInspector({ scene, index, media, voices, studioEnabled, videoConfig, fit, assets, hasLogo, busy,
+export function SceneInspector({ scene, index, media, voices, studioEnabled, videoConfig, mediumAllowed = true, fit, assets, hasLogo, busy,
   onChange, onGenerateAudio, onCreateVideo, onChooseAvatar, onSelectAudio, onSelectVideo, onAddLayer, onAddMediaLayer }: {
   scene: ProjectScene; index: number; media: SceneMedia; voices: readonly StudioVoice[]; studioEnabled: boolean;
-  videoConfig: VideoConfig | null; fit: string; assets: MediaAsset[]; hasLogo: boolean;
+  videoConfig: VideoConfig | null;
+  /** False when Medium takes only linked library avatars and this scene's presenter is not one. */
+  mediumAllowed?: boolean;
+  fit: string; assets: MediaAsset[]; hasLogo: boolean;
   /** "audio" or "video" while that request for this scene is being sent. */
   busy: "audio" | "video" | null;
   onChange: (change: (s: ProjectScene) => ProjectScene) => void;
@@ -46,10 +49,16 @@ export function SceneInspector({ scene, index, media, voices, studioEnabled, vid
   // Suggestions and consent belong to one scene and one presenter.
   useEffect(() => { setSuggestion(""); setUndo(null); setAssistError(""); setAdding(null); assistRequest.current?.abort(); }, [scene.id]);
   useEffect(() => { setConsent(false); }, [scene.id, scene.portrait?.type, scene.portrait?.id]);
+  const sceneTier = useRef("");
+  const tierOpen = (t: VideoTier) => !!videoConfig?.tiers[t] && (t !== "medium" || mediumAllowed);
   useEffect(() => {
     if (!videoConfig) return;
-    setTier((t) => videoConfig.tiers[t] ? t : videoConfig.tiers.medium ? "medium" : videoConfig.tiers.low ? "low" : "high");
-  }, [videoConfig]);
+    const open = (t: VideoTier) => videoConfig.tiers[t] && (t !== "medium" || mediumAllowed);
+    const preferred = open("medium") ? "medium" : open("low") ? "low" : "high";
+    // Each scene starts from the default quality; within a scene the choice stays while it is available.
+    setTier((t) => sceneTier.current === scene.id && open(t) ? t : preferred);
+    sceneTier.current = scene.id;
+  }, [videoConfig, mediumAllowed, scene.id]);
   useEffect(() => () => assistRequest.current?.abort(), []);
 
   let cost = scene.script.length * 3, scriptError = "";
@@ -152,14 +161,16 @@ export function SceneInspector({ scene, index, media, voices, studioEnabled, vid
         {media.videos.filter((v) => v.source_job_id === audio?.id).map((v) => <option key={v.id} value={v.id}>{when(v)} · {jobStatus(v)}</option>)}
       </select></label>}
       <div className="st-tiers" role="group" aria-label="Качество на видеото">
-        {(Object.keys(videoTiers) as VideoTier[]).map((id) => <button type="button" key={id} aria-pressed={tier === id} disabled={!videoConfig?.tiers[id]} onClick={() => setTier(id)}>
+        {(Object.keys(videoTiers) as VideoTier[]).map((id) => <button type="button" key={id} aria-pressed={tier === id} disabled={!tierOpen(id)} onClick={() => setTier(id)}>
           <strong>{videoTiers[id].name}</strong><small>{number(videoTiers[id].creditsPerSecond)} кр. / сек.</small>
+          {!videoConfig?.tiers[id] && <small>Недостъпно</small>}
         </button>)}
       </div>
+      {videoConfig?.tiers.medium && !mediumAllowed && <p className="st-fine">Средно качество е достъпно с отбелязаните готови аватари. Изберете такъв от „Смени аватара“ или друго качество.</p>}
       <label className="checkbox-label"><input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
         {scene.portrait?.type === "library" ? "Ще използвам синтетичния аватар за съдържание, за което имам необходимите права." : "Имам право да използвам изображението и съгласието на изобразения човек."}</label>
       {videoConfig?.emailNotifications && <label className="checkbox-label"><input type="checkbox" checked={notifyEmail} onChange={(e) => setNotifyEmail(e.target.checked)} /> Уведоми ме по имейл, когато е готово</label>}
-      <Button className="btn dark st-wide" busy={busy === "video"} disabled={!!videoBlocked || !consent || !videoConfig?.tiers[tier] || !videoCost || videoCost > remaining || !user?.verified || busy !== null}
+      <Button className="btn dark st-wide" busy={busy === "video"} disabled={!!videoBlocked || !consent || !tierOpen(tier) || !videoCost || videoCost > remaining || !user?.verified || busy !== null}
         onClick={() => onCreateVideo({ tier, consent, notifyEmail: !!videoConfig?.emailNotifications && notifyEmail }, videoCost)}>
         <Sparkles size={16} /> {media.video?.status === "completed" ? "Създай видеото отново" : "Създай видео"}{videoCost ? ` · ${number(videoCost)} кредита` : ""}
       </Button>

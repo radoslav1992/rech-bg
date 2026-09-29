@@ -763,3 +763,32 @@ describe("Recovery of slow, interrupted and stuck video jobs", () => {
     expect(sqlite.prepare("SELECT status FROM jobs WHERE id=?").get(id)!.status).toBe("running");
   });
 });
+describe("Medium with reusable HeyGen library avatars", () => {
+  it("submits Avatar III with the linked avatar, without creating or deleting any avatar", async () => {
+    env.VIDEO_MEDIUM = "heygen"; env.HEYGEN_API_KEY = "heygen-secret";
+    const avatarId = `avatar-${crypto.randomUUID()}`;
+    await env.AUDIO.put(`config/avatar-library/${avatarId}.json`, JSON.stringify({ name: "Ана", description: "Водеща", category: "business", presentation: "female",
+      active: true, mime: "image/png", updatedAt: 1, heygen: { lookId: "look_lib", groupId: "group_lib", status: "ready" } }));
+    await env.AUDIO.put(`library/avatars/${avatarId}`, png);
+    const body = form("medium"); body.delete("image"); body.set("libraryAvatarId", avatarId);
+    const id = await create(body);
+    const output = "https://files.heygen.ai/video/lib.mp4";
+    const mock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === output) return new Response(mp4);
+      if (url === "https://api.heygen.com/v3/avatars/looks/look_lib")
+        return Response.json({ data: { id: "look_lib", group_id: "group_lib", avatar_type: "photo_avatar", supported_api_engines: ["avatar_iii"], status: "completed" } });
+      if (url === "https://api.heygen.com/v3/videos" && init?.method === "POST") return Response.json({ data: { video_id: "v_lib" } });
+      if (url === "https://api.heygen.com/v3/videos/v_lib") return Response.json({ data: { id: "v_lib", status: "completed", video_url: output } });
+      throw new Error("Unexpected " + url);
+    });
+    vi.stubGlobal("fetch", mock);
+    await new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step);
+    const posts = mock.mock.calls.filter(c => c[1]?.method === "POST");
+    expect(posts).toHaveLength(1);
+    expect(JSON.parse(posts[0][1]!.body as string)).toMatchObject({ type: "avatar", avatar_id: "look_lib", engine: { type: "avatar_iii" } });
+    expect(mock.mock.calls.some(c => c[1]?.method === "DELETE")).toBe(false);
+    expect(sqlite.prepare("SELECT * FROM cleanup_tasks WHERE prefix LIKE 'heygen-avatar/%'").all()).toHaveLength(0);
+    expect(sqlite.prepare("SELECT status FROM jobs WHERE id=?").get(id)!.status).toBe("completed");
+    expect(await (await request(`/jobs/${id}`)).text()).not.toMatch(/look_lib|group_lib/);
+  });
+});
