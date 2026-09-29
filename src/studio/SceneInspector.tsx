@@ -15,7 +15,9 @@ import type { ProjectScene } from "../../shared/project";
 import { portraitUrl } from "../project-document";
 import { isBusy, type SceneMedia } from "./model";
 
-export type VideoConfig = { enabled: boolean; emailNotifications: boolean; mediumLibraryOnly: boolean; tiers: Record<VideoTier, boolean> };
+export type VideoConfig = { enabled: boolean; emailNotifications: boolean; mediumLibraryOnly: boolean; tiers: Record<VideoTier, boolean>;
+  /** Longest recording per tier for the model it currently uses. */
+  maxSeconds: Record<VideoTier, number> };
 export type VideoRequest = { tier: VideoTier; consent: boolean; notifyEmail: boolean };
 
 const when = (j: Job) => new Date(j.created_at * 1000).toLocaleString("bg");
@@ -67,6 +69,8 @@ export function SceneInspector({ scene, index, media, voices, studioEnabled, vid
   }, [videoConfig, mediumAllowed, scene.id]);
   useEffect(() => () => assistRequest.current?.abort(), []);
 
+  // The most any available tier accepts (a scene longer than this cannot become a video).
+  const longestVideo = Math.max(MIN_VIDEO_SECONDS, ...(Object.keys(videoTiers) as VideoTier[]).filter((t) => videoConfig?.tiers[t]).map((t) => videoConfig!.maxSeconds[t]), videoConfig ? 0 : MAX_VIDEO_SECONDS);
   let cost = scene.script.length * 3, scriptError = "";
   try { cost = validateStudioScript(scene.script); } catch (e) { scriptError = (e as Error).message; }
   const estimate = estimateSpeechSeconds(scene.script);
@@ -99,7 +103,8 @@ export function SceneInspector({ scene, index, media, voices, studioEnabled, vid
 
   const audio = media.audio, ready = audio?.status === "completed" ? audio : null;
   let videoCost = 0, durationError = "";
-  if (ready) { try { videoCost = videoCredits(ready.duration, tier); } catch (e) { durationError = (e as Error).message; } }
+  const maxSeconds = videoConfig?.maxSeconds[tier] ?? MAX_VIDEO_SECONDS;
+  if (ready) { try { videoCost = videoCredits(ready.duration, tier, maxSeconds); } catch (e) { durationError = (e as Error).message; } }
   const planAllowsVideo = canCreateVideo(user?.plan);
   const videoBlocked = !planAllowsVideo ? VIDEO_PLAN_MESSAGE : !ready ? "Първо създайте гласа на сцената." : !scene.portrait ? "Изберете аватар за сцената."
     : !videoConfig?.enabled ? "Създаването на видео в момента не е достъпно." : durationError || (media.pendingVideo ? "Видеото на сцената се създава." : "");
@@ -141,7 +146,7 @@ export function SceneInspector({ scene, index, media, voices, studioEnabled, vid
       </div>
       {undo !== null && <button type="button" className="btn" onClick={() => { setScript(undo); setUndo(null); }}>Върни предишния сценарий</button>}
       {scene.script.length > 0 && scriptError && <Notice error>{scriptError}</Notice>}
-      {!scriptError && estimate > MAX_VIDEO_SECONDS && <Notice>Около {estimate} сек. реч — видеото приема до {MAX_VIDEO_SECONDS} сек. Разделете текста на няколко сцени.</Notice>}
+      {!scriptError && estimate > longestVideo && <Notice>Около {estimate} сек. реч — едно видео приема до {longestVideo} сек. Разделете текста на няколко сцени.</Notice>}
       {!scriptError && scene.script.trim() && estimate < MIN_VIDEO_SECONDS && <Notice>Около {estimate} сек. реч. За видео са нужни поне {MIN_VIDEO_SECONDS} сек.</Notice>}
       {media.stale && <Notice>Сценарият или гласът са променени след последния запис. Създайте гласа отново, за да ги чуете във видеото.</Notice>}
       <Button className="btn primary st-wide" busy={busy === "audio"} disabled={!studioEnabled || !voiceOk || !!scriptError || isBusy(audio) || cost > remaining || !user?.verified || busy !== null}
@@ -171,7 +176,7 @@ export function SceneInspector({ scene, index, media, voices, studioEnabled, vid
       <div className="st-tiers" role="group" aria-label="Качество на видеото">
         {(Object.keys(videoTiers) as VideoTier[]).map((id) => <button type="button" key={id} aria-pressed={tier === id} disabled={!tierOpen(id)} onClick={() => { picked.current = { scene: scene.id, tier: id }; setTier(id); }}>
           <strong>{videoTiers[id].name}</strong><small>{number(videoTiers[id].creditsPerSecond)} кр. / сек.</small>
-          {!videoConfig?.tiers[id] && <small>Недостъпно</small>}
+          <small>{videoConfig?.tiers[id] ? `до ${videoConfig.maxSeconds[id] >= 120 ? "2 мин." : `${videoConfig.maxSeconds[id]} сек.`}` : "Недостъпно"}</small>
         </button>)}
       </div>
       {videoConfig?.tiers.medium && !mediumAllowed && <p className="st-fine">Средно качество е достъпно с отбелязаните готови аватари. Изберете такъв от „Смени аватара“ или друго качество.</p>}

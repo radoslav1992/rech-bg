@@ -67,7 +67,9 @@ describe("Video credits and request validation", () => {
     expect(videoCredits(30.1, "low")).toBe(9300);
     expect(videoCredits(30.1, "high")).toBe(55800);
     expect(() => videoCredits(4.9, "medium")).toThrow();
-    expect(() => videoCredits(60.1, "medium")).toThrow();
+    expect(() => videoCredits(120.1, "medium")).toThrow();
+    expect(() => videoCredits(60.1, "medium", 60)).toThrow();
+    expect(videoCredits(120, "high")).toBe(216000);
     expect(() => videoCredits(NaN, "high")).toThrow();
   });
   it("reserves credits once for retries and enforces a single active job", async () => {
@@ -263,10 +265,11 @@ describe("Configurable video providers", () => {
     const config = await (await request("/videos/config")).json() as any;
     expect(config.enabled).toBe(true);
     expect(config.tiers.high).toMatchObject({ enabled: true, creditsPerSecond: 1800 });
-    expect(config.tiers.low.enabled).toBe(false);
-    expect(config.tiers.medium).toMatchObject({ enabled: true, creditsPerSecond: 900 });
+    // Low uses WaveSpeed InfiniteTalk in HeyGen mode too.
+    expect(config.tiers.low).toMatchObject({ enabled: true, maxSeconds: 120 });
+    expect(config.tiers.medium).toMatchObject({ enabled: true, creditsPerSecond: 900, maxSeconds: 60 });
+    expect(config.tiers.high).toMatchObject({ maxSeconds: 120 });
     expect(JSON.stringify(config)).not.toMatch(/heygen|secret|\bfal\b/i);
-    expect((await request("/videos", { method: "POST", body: form("low") })).status).toBe(503);
     delete env.FAL_KEY;
     const noFal = await (await request("/videos/config")).json() as any;
     expect(noFal.tiers.medium.enabled).toBe(false);
@@ -802,5 +805,19 @@ describe("Medium with reusable HeyGen library avatars", () => {
     expect(sqlite.prepare("SELECT * FROM cleanup_tasks WHERE prefix LIKE 'heygen-avatar/%'").all()).toHaveLength(0);
     expect(sqlite.prepare("SELECT status FROM jobs WHERE id=?").get(id)!.status).toBe("completed");
     expect(await (await request(`/jobs/${id}`)).text()).not.toMatch(/look_lib|group_lib/);
+  });
+});
+describe("Per-model recording limits", () => {
+  it("allows 2-minute recordings except on Kling Standard, which takes at most 60 s", async () => {
+    sqlite.prepare("UPDATE jobs SET duration=90 WHERE id=?").run(sourceId);
+    // Medium on Kling Standard (fal): 60 s at most.
+    const kling = await request("/videos", { method: "POST", body: form("medium", { credits: "81000" }) });
+    expect(kling.status).toBe(400);
+    expect((await kling.json() as any).error).toContain("до 60 секунди");
+    // High (Kling Pro) takes it.
+    expect((await request("/videos", { method: "POST", body: form("high", { credits: "162000" }) })).status).toBe(202);
+    sqlite.prepare("UPDATE jobs SET duration=121 WHERE id=?").run(sourceId);
+    sqlite.prepare("UPDATE jobs SET status='completed' WHERE kind='video'").run();
+    expect((await request("/videos", { method: "POST", body: form("high", { credits: String(121 * 1800) }) })).status).toBe(400);
   });
 });

@@ -7,15 +7,15 @@ import { now } from "./types";
 import { suggestDelivery } from "./studio-delivery";
 import { captionKey } from "./studio-speech";
 import { captionStyles, defaultCaptions } from "../shared/captions";
-import { stripTags, validateStudioScript } from "../shared/studio";
+import { stripTags, studioMaxChars, validateStudioScript } from "../shared/studio";
 import { publicStudioVoices } from "./studio-voices";
 export const studio = new Hono<{ Bindings: Env; Variables: ContextVars }>();
 studio.get("/config", async c => c.json({ enabled: !!c.env.ELEVENLABS_API_KEY?.trim(), voices: await publicStudioVoices(c.env) }));
 studio.post("/delivery", async c => {
   if (!c.get("user").verified) throw new HTTPException(403, { message: "Потвърдете имейла си." });
-  const { text, tone } = z.object({ text: z.string().max(1500), tone: z.enum(["ad", "story", "calm"]) }).parse(await c.req.json());
+  const { text, tone } = z.object({ text: z.string().max(studioMaxChars), tone: z.enum(["ad", "story", "calm"]) }).parse(await c.req.json());
   try { validateStudioScript(text); } catch (e) { throw new HTTPException(400, { message: (e as Error).message }); }
-  if (stripTags(text).length > 1495) throw new HTTPException(400, { message: "Съкратете сценария, за да оставите място за тагове за емоция (до 1500 символа общо)." });
+  if (stripTags(text).length > studioMaxChars - 5) throw new HTTPException(400, { message: `Съкратете сценария, за да оставите място за тагове за емоция (до ${studioMaxChars} символа общо).` });
   // Bound provider calls separately from the allowance of successful suggestions.
   await rate(c, "studio-delivery-attempts", 20, 3600, c.get("user").id);
   const day = Math.floor(now() / 86400);
