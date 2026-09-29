@@ -11,6 +11,7 @@ import {
   X,
 } from "lucide-react";
 import { plans, voiceList } from "../shared/catalog";
+import { displayPhone, SiteContact } from "./SiteContact";
 import {
   Logo,
   Wave,
@@ -103,6 +104,7 @@ export function PublicLayout() {
               <Link to="/refunds">Отказ и възстановяване</Link>
             </div>
           </div>
+          <SiteContact className="footer-contact" />
           <div className="footer-bottom">
             <span>
               © {new Date().getFullYear()} Реч БГ. Създадено за българския език.
@@ -120,10 +122,12 @@ export { Landing } from "./Landing";
 export function Pricing({ inApp = false }: { inApp?: boolean }) {
   const { user, refresh } = useAuth();
   const [params] = useSearchParams();
+  const returned = params.has("success") || params.has("portal");
   useEffect(() => {
-    if (!inApp || !params.has("success")) return;
+    if (!inApp || !returned) return;
     let attempts = 0;
-    void refresh();
+    // Read the subscription from Stripe right away, so a new or changed plan shows without waiting for its webhook.
+    void post("/billing/sync", {}).catch(() => {}).finally(() => void refresh());
     const timer = setInterval(() => {
       void refresh();
       if (++attempts >= 12) clearInterval(timer);
@@ -163,7 +167,7 @@ export function Pricing({ inApp = false }: { inApp?: boolean }) {
         <p>Изберете място за вашите думи. Сменете плана, когато сте готови.</p>
       </div>
       {error && <Notice error>{error}</Notice>}
-      {inApp && params.has("success") && (
+      {inApp && returned && (
         <Notice good={user?.hasSubscription}>
           Плащането се проверява. Планът се обновява автоматично след
           потвърждение. Ако не се отрази, презаредете след малко.
@@ -171,6 +175,10 @@ export function Pricing({ inApp = false }: { inApp?: boolean }) {
       )}
       {inApp && user && (
         <div className="billing-summary">
+          <span>
+            Текущ план{" "}
+            <strong>{plans.find((p) => p.id === user.plan)?.name || user.plan}</strong>
+          </span>
           <span>
             Използвани{" "}
             <strong>
@@ -202,7 +210,9 @@ export function Pricing({ inApp = false }: { inApp?: boolean }) {
             key={p.id}
             className={"price-card " + (p.id === "creator" ? "featured" : "")}
           >
-            {p.id === "creator" && (
+            {inApp && user?.plan === p.id ? (
+              <div className="recommended current-plan">ВАШИЯТ ТЕКУЩ ПЛАН</div>
+            ) : p.id === "creator" && (
               <div className="recommended">ЗА АКТИВНИ СЪЗДАТЕЛИ</div>
             )}
             <h2>{p.name}</h2>
@@ -235,7 +245,7 @@ export function Pricing({ inApp = false }: { inApp?: boolean }) {
         ))}
       </div>
       <div className="pricing-notes">
-        <p><strong>Един баланс за аудио и видео.</strong> Аудио: 1 символ = 1 кредит. Премиум глас във Видео студио: 3 кредита за символ, включително таговете. Видео: Ниско качество — 300 кредита/сек.; Средно — 900; Високо — 1 800. Видеото използва готов запис с един глас от 5 до 60 секунди. Всяка започната секунда се закръгля нагоре; аудиото се таксува отделно.</p>
+        <p><strong>Един баланс за аудио и видео.</strong> Видео аватарите са достъпни в плановете Създател и Студио; Проба и Начало са само за аудио. Аудио: 1 символ = 1 кредит. Премиум глас във Видео студио: 3 кредита за символ, включително таговете. Видео: Ниско качество — 300 кредита/сек.; Средно — 900; Високо — 1 800. Видеото използва готов запис с един глас от 5 до 60 секунди. Всяка започната секунда се закръгля нагоре; аудиото се таксува отделно.</p>
         <p>
           <ShieldCheck size={18} />
           Сигурно плащане. Прекратяване по всяко време.
@@ -407,9 +417,7 @@ export function Contact() {
             <p>
               Телефон:{" "}
               <a href={"tel:" + contact.phone}>
-                {contact.phone === "+35924920201"
-                  ? "02 492 0201"
-                  : contact.phone}
+                {displayPhone(contact.phone)}
               </a>
             </p>
           )}
@@ -514,7 +522,7 @@ const legalContent: Record<
       ],
       [
         "5. Цени и абонаменти",
-        "Платените планове са месечни и се подновяват автоматично до прекратяване. Размерът, валутата и приложимите данъци се показват преди плащане. Кредитите са общ баланс за аудио и видео: В Аудио: 1 символ озвучен текст = 1 кредит. Във Видео студио: 3 кредита за символ, включително таговете за емоция. Видео струва 300 кредита за започната секунда за Ниско качество, 900 за Средно и 1 800 за Високо. Цената за видео е допълнителна към вече създаденото аудио и се потвърждава преди заявката. Неуспешно видео връща само кредитите за видеото. Неизползваните месечни кредити не се прехвърлят. Провалена генерация възстановява резервираните кредити. Управлението на плащанията и фактурите е достъпно от профила.",
+        "Платените планове са месечни и се подновяват автоматично до прекратяване. Размерът, валутата и приложимите данъци се показват преди плащане. Кредитите са общ баланс за аудио и видео: В Аудио: 1 символ озвучен текст = 1 кредит. Във Видео студио: 3 кредита за символ, включително таговете за емоция. Видео струва 300 кредита за започната секунда за Ниско качество, 900 за Средно и 1 800 за Високо. Видео аватари могат да се създават в плановете Създател и Студио. Цената за видео е допълнителна към вече създаденото аудио и се потвърждава преди заявката. Неуспешно видео връща само кредитите за видеото. Неизползваните месечни кредити не се прехвърлят. Провалена генерация възстановява резервираните кредити. Управлението на плащанията и фактурите е достъпно от профила.",
       ],
       [
         "6. Качество и достъпност",

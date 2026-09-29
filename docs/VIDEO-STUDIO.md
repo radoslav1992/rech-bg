@@ -109,6 +109,10 @@ The **scene background** (Формат → Фон на сцената) is a colo
 
 Drawing order everywhere: background → avatar → B-roll → images → text → captions. The preview and the browser export draw layers on the canvas (`src/layers-render.ts`); the server render uses FFmpeg overlays and libass for text (`renderer/server.py`, `server/caption-ass.ts`), so fonts and line wrapping can differ slightly. A scene with **video** B-roll exports on the server only; text, images and still B-roll also export in the browser. Layer files are media assets and follow the plan's storage retention; a missing file is reported by the export with the scene number. No migration is needed; layers live in the project document.
 
+## Plans
+
+Avatar videos are available on the Създател and Студио plans. The trial (1 000 credits) and Начало (30 000) are audio only: their credits do not cover a video, so the server rejects video requests from them (`403`) and the studio shows a note with a link to the plans while the scenes and voice can still be prepared. The rule is `canCreateVideo` in `shared/catalog.ts`.
+
 ## One-screen editor
 
 `/app/video-studio/:id` is a single editor (`src/studio/`) instead of step-by-step pages:

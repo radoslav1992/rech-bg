@@ -1,4 +1,5 @@
 import { Component, lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
+import { SiteContact } from "./SiteContact";
 import {
   Routes,
   Route,
@@ -216,6 +217,7 @@ function Shell() {
           </div>
         )}
         <JobActivity key={user.id}><Boundary><Outlet /></Boundary></JobActivity>
+        <footer className="app-footer"><SiteContact /></footer>
       </main>
     </div>
   );

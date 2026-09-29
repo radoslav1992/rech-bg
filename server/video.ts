@@ -9,6 +9,7 @@ import { now, uid } from "./types";
 import { allowance } from "./billing";
 import { rate, token, safeEqual } from "./security";
 import { videoTiers, videoCredits, type VideoTier } from "../shared/video";
+import { canCreateVideo, VIDEO_PLAN_MESSAGE } from "../shared/catalog";
 import { configuredVideoProvider, hasVideoCredential, mediumUsesLibrary, type VideoProvider } from "./video-provider";
 import { libraryAvatarInput } from "./avatars";
 
@@ -61,6 +62,9 @@ videos.post("/", async (c) => {
     if (previous.kind !== "video") throw new HTTPException(409, { message: "Невалидна заявка. Обновете страницата." });
     return c.json({ id: previous.id });
   }
+  // The trial and Начало do not have the credits for a video; they are audio only.
+  const a = await allowance(c.env, user);
+  if (!canCreateVideo(a.plan)) throw new HTTPException(403, { message: `${VIDEO_PLAN_MESSAGE} Изберете по-висок план.` });
   const provider = configuredVideoProvider(c.env, d.tier);
   if (!provider || !hasVideoCredential(c.env, provider))
     throw new HTTPException(503, { message: "Избраното качество временно не е налично. Изберете друго." });
@@ -106,7 +110,6 @@ videos.post("/", async (c) => {
     meta.imageKey = `segments/${user.id}/${id}/portrait.${png ? "png" : "jpg"}`;
     meta.imageMime = png ? "image/png" : "image/jpeg";
   }
-  const a = await allowance(c.env, user);
   try {
     await c.env.DB.batch([c.env.DB.prepare("INSERT INTO jobs(id,user_id,project_id,window_id,idempotency_key,title,mode,script,voice,second_voice,pause_ms,chars,created_at,updated_at,kind,source_job_id,video_tier,video_meta,duration) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'video',?,?,?,?)")
       // The old column has a two-value CHECK. Store the new tier in metadata;

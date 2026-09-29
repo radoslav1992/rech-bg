@@ -15,7 +15,7 @@ const mp4 = new Uint8Array([0,0,0,24,102,116,121,112,105,115,111,109,0,0,0,0,105
 const png = new Uint8Array([137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82,0,0,1,44,0,0,1,44]);
 const step = { do: async (_: string, options: any, fn?: any) => (fn || options)(), sleep: async () => {} };
 let sqlite: ReturnType<typeof database>["sqlite"], env: any, sourceId: string, projectId: string;
-function used() { return sqlite.prepare("SELECT used FROM usage_windows WHERE id='u:trial'").get()!.used; }
+function used() { return sqlite.prepare("SELECT used FROM usage_windows WHERE id='u:sub_t:1'").get()!.used; }
 function request(path: string, init: RequestInit = {}, cookie = true) {
   return worker.fetch(new Request("https://rechbg.com/api" + path, {
     ...init, headers: { Origin: "https://rechbg.com", ...(cookie ? { Cookie: "rech_session=test-session" } : {}), ...init.headers },
@@ -51,9 +51,11 @@ beforeEach(async () => {
   sqlite.prepare("INSERT INTO users VALUES('u','u@example.com','User','hash',1,NULL,?)").run(now());
   sqlite.prepare("INSERT INTO users VALUES('other','other@example.com','Other','hash',1,NULL,?)").run(now());
   sqlite.prepare("INSERT INTO sessions VALUES(?,'u',?)").run(await sha("test-session"), now() + 3600);
+  // Video needs a plan that includes it (Създател or Студио).
+  sqlite.prepare("INSERT INTO subscriptions(id,user_id,plan,status,period_start,period_end,cancel_at_period_end,event_created) VALUES('sub_t','u','studio','active',1,?,0,0)").run(now() + 30 * 86400);
   sqlite.prepare("INSERT INTO projects VALUES(?,'u','Story','tts','Hello','mila','boris',400,?,?)").run(projectId, now(), now());
-  sqlite.prepare("INSERT INTO usage_windows(id,user_id,quota,used) VALUES('u:trial','u',250000,0)").run();
-  sqlite.prepare("INSERT INTO jobs(id,user_id,project_id,window_id,idempotency_key,title,mode,script,voice,second_voice,pause_ms,chars,status,audio_key,duration,created_at,updated_at) VALUES(?,'u',?,'u:trial',?,'Story','tts','Hello','mila','boris',400,100,'completed',?,30,?,?)")
+  sqlite.prepare("INSERT INTO usage_windows(id,user_id,quota,plan,used) VALUES('u:sub_t:1','u',250000,'studio',0)").run();
+  sqlite.prepare("INSERT INTO jobs(id,user_id,project_id,window_id,idempotency_key,title,mode,script,voice,second_voice,pause_ms,chars,status,audio_key,duration,created_at,updated_at) VALUES(?,'u',?,'u:sub_t:1',?,'Story','tts','Hello','mila','boris',400,100,'completed',?,30,?,?)")
     .run(sourceId, projectId, sourceId, `audio/u/${sourceId}.wav`, now(), now());
   await env.AUDIO.put(`audio/u/${sourceId}.wav`, new Uint8Array(44));
 });
@@ -94,8 +96,18 @@ describe("Video credits and request validation", () => {
     sqlite.prepare("UPDATE jobs SET user_id='u',mode='podcast' WHERE id=?").run(sourceId);
     expect((await request("/videos", { method: "POST", body: form() })).status).toBe(400);
     sqlite.prepare("UPDATE jobs SET mode='tts' WHERE id=?").run(sourceId);
-    sqlite.prepare("UPDATE usage_windows SET quota=1000").run();
+    sqlite.prepare("UPDATE usage_windows SET used=240000").run();
     expect((await request("/videos", { method: "POST", body: form() })).status).toBe(402);
+    expect(used()).toBe(240000); expect(env.VIDEO_GENERATION.create).not.toHaveBeenCalled();
+  });
+  it("keeps the trial and Начало audio only", async () => {
+    for (const plan of ["starter", null]) {
+      if (plan) sqlite.prepare("UPDATE subscriptions SET plan=?").run(plan);
+      else sqlite.prepare("DELETE FROM subscriptions").run();
+      const r = await request("/videos", { method: "POST", body: form() });
+      expect(r.status).toBe(403);
+      expect((await r.json() as any).error).toContain("Създател и Студио");
+    }
     expect(used()).toBe(100); expect(env.VIDEO_GENERATION.create).not.toHaveBeenCalled();
   });
   it("rejects prices quoted before the rate change without reserving credits", async () => {

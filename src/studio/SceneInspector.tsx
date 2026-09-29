@@ -8,6 +8,7 @@ import { BackgroundControl, LayerAddBar, layerNames, MediaPicker } from "../Laye
 import { emotionTags, estimateSpeechSeconds, studioMaxChars, validateStudioScript, validateSuggestedDelivery, type StudioVoice } from "../../shared/studio";
 import { MAX_VIDEO_SECONDS, MIN_VIDEO_SECONDS, videoCredits, videoTiers, type VideoTier } from "../../shared/video";
 import { MAX_LEAD, MAX_TAIL } from "../../shared/timeline";
+import { canCreateVideo, VIDEO_PLAN_MESSAGE } from "../../shared/catalog";
 import type { MediaAsset } from "../../shared/media";
 import type { Layer } from "../../shared/layers";
 import type { ProjectScene } from "../../shared/project";
@@ -94,7 +95,8 @@ export function SceneInspector({ scene, index, media, voices, studioEnabled, vid
   const audio = media.audio, ready = audio?.status === "completed" ? audio : null;
   let videoCost = 0, durationError = "";
   if (ready) { try { videoCost = videoCredits(ready.duration, tier); } catch (e) { durationError = (e as Error).message; } }
-  const videoBlocked = !ready ? "Първо създайте гласа на сцената." : !scene.portrait ? "Изберете аватар за сцената."
+  const planAllowsVideo = canCreateVideo(user?.plan);
+  const videoBlocked = !planAllowsVideo ? VIDEO_PLAN_MESSAGE : !ready ? "Първо създайте гласа на сцената." : !scene.portrait ? "Изберете аватар за сцената."
     : !videoConfig?.enabled ? "Създаването на видео в момента не е достъпно." : durationError || (media.pendingVideo ? "Видеото на сцената се създава." : "");
   const avatarUrl = portraitUrl(scene.portrait);
 
@@ -154,6 +156,7 @@ export function SceneInspector({ scene, index, media, voices, studioEnabled, vid
 
     <section className="st-block" aria-labelledby="st-video-h">
       <h3 id="st-video-h"><Film size={17} /> Видео аватар</h3>
+      {!planAllowsVideo && <Notice>{VIDEO_PLAN_MESSAGE} С текущия план можете да подготвите сцените и гласа. <Link to="/app/billing">Вижте плановете</Link></Notice>}
       {media.video?.status === "completed" && <p className="st-ok">Видеото е готово · {when(media.video)}</p>}
       {media.pendingVideo && <Notice>{jobStatus(media.pendingVideo)}. Видеото се появява в прегледа, щом е готово — можете да затворите страницата.</Notice>}
       {media.video?.status === "failed" && <Notice error>{media.video.error || "Видеото не беше създадено."} Кредитите за него са върнати.</Notice>}
@@ -174,7 +177,7 @@ export function SceneInspector({ scene, index, media, voices, studioEnabled, vid
         onClick={() => onCreateVideo({ tier, consent, notifyEmail: !!videoConfig?.emailNotifications && notifyEmail }, videoCost)}>
         <Sparkles size={16} /> {media.video?.status === "completed" ? "Създай видеото отново" : "Създай видео"}{videoCost ? ` · ${number(videoCost)} кредита` : ""}
       </Button>
-      {videoBlocked && <p className="st-fine">{videoBlocked}</p>}
+      {videoBlocked && planAllowsVideo && <p className="st-fine">{videoBlocked}</p>}
       {videoCost > remaining && <p className="st-fine">Нямате достатъчно кредити. <Link to="/app/billing">Вижте плановете</Link></p>}
       <p className="st-fine">Видеото се таксува отделно от гласа, за всяка започната секунда. При неуспех кредитите се връщат.</p>
     </section>
