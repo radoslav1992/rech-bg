@@ -97,3 +97,20 @@ it("uses a fresh Stripe idempotency key when the configured price changes", asyn
   expect(keys[2]).not.toBe(keys[0]);
   expect(keys[2]).toContain("price_replacement");
 });
+
+it("re-reads the customer's subscriptions from Stripe on return from the portal", async () => {
+  env.STRIPE_PRICE_STUDIO = "price_studio";
+  const sub = { id: "sub_1", object: "subscription", customer: "cus_1", status: "active", cancel_at_period_end: false,
+    items: { data: [{ id: "si_1", price: { id: "price_studio" }, current_period_start: 100, current_period_end: now() + 100000 }] },
+    latest_invoice: { id: "in_1", status: "paid" } };
+  const fetchMock = vi.fn().mockResolvedValue(Response.json({ object: "list", data: [sub], has_more: false }));
+  vi.stubGlobal("fetch", fetchMock);
+  const r = await worker.fetch(new Request("https://rechbg.com/api/billing/sync", {
+    method: "POST", headers: { Origin: "https://rechbg.com", Cookie: "rech_session=session", "Content-Type": "application/json" }, body: "{}",
+  }), env, { waitUntil: () => {} } as any);
+  expect(r.status).toBe(200);
+  expect(String(fetchMock.mock.calls[0][0])).toContain("customer=cus_1");
+  expect(sqlite.prepare("SELECT plan,status FROM subscriptions WHERE id='sub_1'").get()).toEqual({ plan: "studio", status: "active" });
+  const me = await (await worker.fetch(new Request("https://rechbg.com/api/auth/me", { headers: { Cookie: "rech_session=session" } }), env, { waitUntil: () => {} } as any)).json() as any;
+  expect(me.user).toMatchObject({ plan: "studio", limit: 250000 });
+});

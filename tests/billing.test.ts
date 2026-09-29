@@ -192,4 +192,28 @@ describe("Signed Stripe lifecycle", () => {
       sqlite.prepare("SELECT status FROM subscriptions").get()?.status,
     ).toBe("canceled");
   });
+  it("keeps the paid plan while an upgrade invoice is being paid, then applies the new plan", async () => {
+    let sub: any = subscription();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(sub), { headers: { "Content-Type": "application/json" } })));
+    await webhook(await event("invoice.paid", { subscription: "sub_1" }), env);
+    const u = sqlite.prepare("SELECT * FROM users").get() as any;
+    expect((await allowance(env, u)).plan).toBe("creator");
+    const upgraded = { data: [{ id: "si_1", price: { id: "price_studio" }, current_period_start: 100, current_period_end: now() + 100000 }] };
+    sub = subscription({ items: upgraded, latest_invoice: { id: "in_up", status: "open", billing_reason: "subscription_update" } });
+    await webhook(await event("customer.subscription.updated", { id: "sub_1" }, "evt_up", now() + 1), env);
+    // Not dropped to the trial while the upgrade invoice is open.
+    expect((await allowance(env, u)).plan).toBe("creator");
+    sub = subscription({ items: upgraded, latest_invoice: { id: "in_up", status: "paid", billing_reason: "subscription_update" } });
+    await webhook(await event("invoice.paid", { subscription: "sub_1" }, "evt_up_paid", now() + 2), env);
+    const a = await allowance(env, u);
+    expect(a.plan).toBe("studio"); expect(a.limit).toBe(250000);
+  });
+  it("reports a price that is not a configured plan instead of silently ignoring it", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const sub = subscription({ items: { data: [{ id: "si_1", price: { id: "price_other" }, current_period_start: 100, current_period_end: now() + 100 }] } });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(sub), { headers: { "Content-Type": "application/json" } })));
+    await webhook(await event("customer.subscription.updated", { id: "sub_1" }), env);
+    expect(log).toHaveBeenCalledWith("Subscription price is not a configured plan", { subscription: "sub_1", price: "price_other" });
+    log.mockRestore();
+  });
 });

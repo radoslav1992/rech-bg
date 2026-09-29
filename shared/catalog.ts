@@ -23,7 +23,7 @@ export const plans = [
       "30 000 кредита месечно",
       "Всички 30 гласа",
       "Подкаст с двама водещи",
-      "Аудио и видео от общ баланс",
+      "Само аудио · видео от план Създател",
       "2 GB · записи за 30 дни",
     ],
   },
@@ -36,6 +36,7 @@ export const plans = [
     features: [
       "100 000 кредита месечно",
       "Всичко от Начало",
+      "Видео аватари и видео студио",
       "До 10 000 символа на проект",
       "Запазени проекти и версии",
       "10 GB · записи за 90 дни",
@@ -57,6 +58,10 @@ export const plans = [
   },
 ] as const;
 export type PlanId = (typeof plans)[number]["id"];
+/** Plans whose monthly credits cover avatar videos; the trial and Начало are audio only. */
+export const videoPlans: readonly string[] = ["creator", "studio"];
+export const canCreateVideo = (plan: string | undefined) => !!plan && videoPlans.includes(plan);
+export const VIDEO_PLAN_MESSAGE = "Видео аватарите са достъпни в плановете Създател и Студио.";
 export const voiceList = [
   ["mila", "Мила", "Женски", "Ясен и свеж", "Корал"],
   ["boris", "Борис", "Мъжки", "Жив и игрив", "Син"],

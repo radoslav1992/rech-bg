@@ -107,7 +107,7 @@ billing.post("/checkout", async (c) => {
       url: (
         await s.billingPortal.sessions.create({
           customer,
-          return_url: origin(c.env, c.req.raw) + "/app/billing",
+          return_url: origin(c.env, c.req.raw) + "/app/billing?portal=1",
         })
       ).url,
     });
@@ -172,6 +172,20 @@ billing.post("/checkout", async (c) => {
   );
   return c.json({ url: session.url });
 });
+/**
+ * Re-reads the customer's subscriptions from Stripe, e.g. on return from Checkout or the Customer Portal,
+ * so a plan change shows at once even if its webhook is late or was missed.
+ */
+billing.post("/sync", async (c) => {
+  const u = c.get("user");
+  if (!u.stripe_customer) return c.json({ ok: true });
+  await rate(c, "billing-sync", 30, 3600, u.id);
+  const list = await stripe(c.env).subscriptions.list({ customer: u.stripe_customer, status: "all", limit: 10, expand: ["data.latest_invoice"] });
+  const statements: D1PreparedStatement[] = [];
+  for (const sub of list.data) statements.push(...(await subscriptionStatements(c.env, sub, u.id, now())));
+  if (statements.length) await c.env.DB.batch(statements);
+  return c.json({ ok: true });
+});
 billing.post("/portal", async (c) => {
   const u = c.get("user");
   if (!u.stripe_customer)
@@ -182,11 +196,35 @@ billing.post("/portal", async (c) => {
     url: (
       await stripe(c.env).billingPortal.sessions.create({
         customer: u.stripe_customer,
-        return_url: origin(c.env, c.req.raw) + "/app/billing",
+        return_url: origin(c.env, c.req.raw) + "/app/billing?portal=1",
       })
     ).url,
   });
 });
+/**
+ * Stores Stripe's current state of a subscription (read from Stripe, never from an event payload).
+ * `created` orders writes: an older event never overwrites a newer state.
+ */
+async function subscriptionStatements(e: Env, sub: Stripe.Subscription, userId: string, created: number) {
+  const item = sub.items.data[0];
+  const plan = Object.entries(priceIds(e)).find(([, v]) => v === item?.price.id)?.[0] as PlanId | undefined;
+  if (!plan) {
+    // A price that is not one of the configured plans (e.g. changed in the Customer Portal) must be visible.
+    console.error("Subscription price is not a configured plan", { subscription: sub.id, price: item?.price.id });
+    return [];
+  }
+  const invoice = sub.latest_invoice as Stripe.Invoice | null;
+  const unpaid = sub.status === "active" && (!invoice || typeof invoice !== "object" || invoice.status !== "paid");
+  // A renewal or plan-change invoice is draft/open for a moment. Keep the stored, paid state (allowance()
+  // grants a grace period on renewal) until it is paid, instead of dropping the customer to the trial.
+  const pending = unpaid && typeof invoice === "object" &&
+    ["subscription_cycle", "subscription_update"].includes(invoice?.billing_reason || "") &&
+    !!(await e.DB.prepare("SELECT id FROM subscriptions WHERE id=? AND status='active'").bind(sub.id).first());
+  if (pending) return [];
+  return [e.DB.prepare(
+    "INSERT INTO subscriptions(id,user_id,plan,status,period_start,period_end,cancel_at_period_end,event_created) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET plan=excluded.plan,status=excluded.status,period_start=excluded.period_start,period_end=excluded.period_end,cancel_at_period_end=excluded.cancel_at_period_end,event_created=excluded.event_created WHERE excluded.event_created>=subscriptions.event_created",
+  ).bind(sub.id, userId, plan, unpaid ? "past_due" : sub.status, item.current_period_start, item.current_period_end, sub.cancel_at_period_end ? 1 : 0, created)];
+}
 export async function webhook(request: Request, e: Env) {
   if (!e.STRIPE_WEBHOOK_SECRET)
     throw new HTTPException(503, { message: "Плащанията не са настроени." });
@@ -248,43 +286,7 @@ export async function webhook(request: Request, e: Env) {
         subscription: sub.id,
       });
     }
-    if (user) {
-      const item = sub.items.data[0];
-      const plan = Object.entries(priceIds(e)).find(
-        ([, v]) => v === item?.price.id,
-      )?.[0] as PlanId | undefined;
-      const invoice = sub.latest_invoice as Stripe.Invoice | null;
-      const unpaid =
-        sub.status === "active" &&
-        (!invoice || typeof invoice !== "object" || invoice.status !== "paid");
-      // A renewal invoice is draft/open for a while after the period rolls over. Keep the stored,
-      // paid period (allowance() grants a grace period) instead of revoking access until it is paid.
-      const renewalPending =
-        unpaid &&
-        typeof invoice === "object" &&
-        invoice?.billing_reason === "subscription_cycle" &&
-        !!(await e.DB.prepare(
-          "SELECT id FROM subscriptions WHERE id=? AND status='active'",
-        )
-          .bind(sub.id)
-          .first());
-      const status = unpaid ? "past_due" : sub.status;
-      if (plan && !renewalPending)
-        statements.push(
-          e.DB.prepare(
-            "INSERT INTO subscriptions(id,user_id,plan,status,period_start,period_end,cancel_at_period_end,event_created) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET plan=excluded.plan,status=excluded.status,period_start=excluded.period_start,period_end=excluded.period_end,cancel_at_period_end=excluded.cancel_at_period_end,event_created=excluded.event_created WHERE excluded.event_created>=subscriptions.event_created",
-          ).bind(
-            sub.id,
-            user.id,
-            plan,
-            status,
-            item.current_period_start,
-            item.current_period_end,
-            sub.cancel_at_period_end ? 1 : 0,
-            event.created,
-          ),
-        );
-    }
+    if (user) statements.push(...(await subscriptionStatements(e, sub, user.id, event.created)));
   }
   statements.push(
     e.DB.prepare(

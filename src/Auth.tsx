@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { SiteContact } from "./SiteContact";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   ArrowLeft,
@@ -307,6 +308,7 @@ export function AuthPage({ mode }: { mode: string }) {
           <Link to="/privacy">Поверителност</Link>
           <Link to="/contact">Помощ</Link>
         </div>
+        <SiteContact className="auth-contact" />
       </section>
     </main>
   );

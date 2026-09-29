@@ -12,6 +12,7 @@ beforeEach(async () => {
   const d = database(); sqlite = d.sqlite;
   sqlite.exec("INSERT INTO users VALUES('u','owner@example.com','Owner','hash',1,NULL,1)");
   sqlite.prepare("INSERT INTO sessions VALUES(?,'u',?)").run(await sha("session"), now() + 3600);
+  sqlite.prepare("INSERT INTO subscriptions(id,user_id,plan,status,period_start,period_end,cancel_at_period_end,event_created) VALUES('sub_t','u','studio','active',1,?,0,0)").run(now() + 30 * 86400);
   env = { DB: d.db, AUDIO: bucket(), ADMIN_EMAILS: "owner@example.com", GENERATION: { create: vi.fn() },
     FAL_KEY: "test", VIDEO_GENERATION: { create: vi.fn().mockResolvedValue({}) },
     ASSETS: { fetch: vi.fn(async (r: Request) => {
@@ -80,8 +81,8 @@ it("persists independent additions, edits and tombstones without resetting hidde
 it("creates a normal video input copy from a library portrait without extra library credits", async () => {
   const p = crypto.randomUUID(), source = crypto.randomUUID(), time = now();
   sqlite.prepare("INSERT INTO projects VALUES(?,'u','Story','tts','Hello','mila','boris',400,?,?)").run(p,time,time);
-  sqlite.exec("INSERT INTO usage_windows(id,user_id,quota,used) VALUES('u:trial','u',250000,0)");
-  sqlite.prepare("INSERT INTO jobs(id,user_id,project_id,window_id,idempotency_key,title,mode,script,voice,second_voice,pause_ms,chars,status,audio_key,duration,created_at,updated_at) VALUES(?,'u',?,'u:trial',?,'Story','tts','Hello','mila','boris',400,0,'completed',?,5,?,?)").run(source,p,source,`audio/u/${source}.wav`,time,time);
+  sqlite.exec("INSERT INTO usage_windows(id,user_id,quota,plan,used) VALUES('u:sub_t:1','u',250000,'studio',0)");
+  sqlite.prepare("INSERT INTO jobs(id,user_id,project_id,window_id,idempotency_key,title,mode,script,voice,second_voice,pause_ms,chars,status,audio_key,duration,created_at,updated_at) VALUES(?,'u',?,'u:sub_t:1',?,'Story','tts','Hello','mila','boris',400,0,'completed',?,5,?,?)").run(source,p,source,`audio/u/${source}.wav`,time,time);
   await env.AUDIO.put(`audio/u/${source}.wav`, new Uint8Array(44));
   const portrait = await request("/avatars/mila/image");
   expect(sqlite.prepare("SELECT used FROM usage_windows").get()!.used).toBe(0);
@@ -101,8 +102,8 @@ it("creates a normal video input copy from a library portrait without extra libr
 function videoSource(duration = 10) {
   const p = crypto.randomUUID(), source = crypto.randomUUID(), time = now();
   sqlite.prepare("INSERT INTO projects VALUES(?,'u','Story','tts','Hello','mila','boris',400,?,?)").run(p,time,time);
-  sqlite.exec("INSERT OR IGNORE INTO usage_windows(id,user_id,quota,used) VALUES('u:trial','u',250000,0)");
-  sqlite.prepare("INSERT INTO jobs(id,user_id,project_id,window_id,idempotency_key,title,mode,script,voice,second_voice,pause_ms,chars,status,audio_key,duration,created_at,updated_at) VALUES(?,'u',?,'u:trial',?,'Story','tts','Hello','mila','boris',400,0,'completed',?,?,?,?)").run(source,p,source,`audio/u/${source}.wav`,duration,time,time);
+  sqlite.exec("INSERT OR IGNORE INTO usage_windows(id,user_id,quota,plan,used) VALUES('u:sub_t:1','u',250000,'studio',0)");
+  sqlite.prepare("INSERT INTO jobs(id,user_id,project_id,window_id,idempotency_key,title,mode,script,voice,second_voice,pause_ms,chars,status,audio_key,duration,created_at,updated_at) VALUES(?,'u',?,'u:sub_t:1',?,'Story','tts','Hello','mila','boris',400,0,'completed',?,?,?,?)").run(source,p,source,`audio/u/${source}.wav`,duration,time,time);
   return env.AUDIO.put(`audio/u/${source}.wav`, new Uint8Array(44)).then(() => source);
 }
 function videoForm(source: string, tier: string, extra: Record<string, string>) {
