@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Captions, Download, Music, Trash2, Upload } from "lucide-react";
 import { Button, Disclosure, Notice } from "../lib";
 import { LayerInspector } from "../LayerTools";
@@ -114,6 +114,8 @@ export function ExportPanel({ projectId, doc, media, segments, captions, look, o
 }) {
   const [exporting, setExporting] = useState(false), [progress, setProgress] = useState(0), [error, setError] = useState("");
   const abort = useRef<AbortController | null>(null);
+  // Closing the dialog stops a browser export instead of leaving it running unseen.
+  useEffect(() => () => abort.current?.abort(), []);
   const missing = doc.scenes.map((s, i) => ({ i, s, m: media[i] })).filter(({ m }) => m.audio?.status !== "completed" || m.video?.status !== "completed");
   const single = doc.scenes.length === 1 && !doc.intro && !doc.outro && missing.length === 0;
   const browserExport = async () => {

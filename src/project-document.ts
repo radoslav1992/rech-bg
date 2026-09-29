@@ -22,16 +22,19 @@ export function useProjectDocument(projectId: string | undefined) {
   const [doc, setDoc] = useState<ProjectDoc | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [error, setError] = useState(""), [conflict, setConflict] = useState("");
-  const state = useRef({ projectId, revision: 0, pending: null as ProjectDoc | null, saving: false, loaded: false });
-  const save = useCallback(async () => {
+  const state = useRef({ projectId, revision: 0, pending: null as ProjectDoc | null, saving: false, loaded: false, failed: false });
+  const save = useCallback(async (leaving = false): Promise<void> => {
     const s = state.current, id = s.projectId;
     if (!id || s.saving || !s.pending || !s.loaded) return;
     const next = s.pending;
     s.pending = null; s.saving = true; setSaveState("saving");
+    let again = false;
     try {
+      const payload = JSON.stringify({ document: next, revision: s.revision });
       const r = await fetch("/api" + endpoint(id), {
-        method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ document: next, revision: s.revision }), keepalive: true,
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: payload,
+        // keepalive lets a save finish while the page closes, but browsers reject bodies over 64 KB with it.
+        keepalive: leaving && payload.length < 60000,
       });
       const body: any = await r.json().catch(() => ({}));
       if (state.current.projectId !== id) return;
@@ -44,19 +47,25 @@ export function useProjectDocument(projectId: string | undefined) {
       }
       if (!r.ok) {
         // A rejected document (e.g. a file that is no longer available) will not succeed on retry.
-        if (r.status < 500 && r.status !== 429) { setSaveState("error"); setError(body.error || "Проектът не беше запазен."); return; }
+        if (r.status < 500 && r.status !== 429) { s.failed = true; setSaveState("error"); setError(body.error || "Проектът не беше запазен."); return; }
         throw new Error(body.error || "Проектът не беше запазен. Опитайте отново.");
       }
-      s.revision = body.revision; setError("");
+      s.revision = body.revision; s.failed = false; setError("");
       setSaveState(s.pending ? "dirty" : "saved");
+      // Edits made while this request was in flight are saved right after it.
+      again = !!s.pending;
     } catch (e) {
       // Network or server trouble: keep the edit and retry.
       if (!s.pending) s.pending = next;
       setSaveState("error"); setError((e as Error).message);
-    } finally { s.saving = false; }
+    } finally {
+      s.saving = false;
+      // Also runs after the editor closed, so the last edit is not lost.
+      if (again && state.current === s) void save(leaving);
+    }
   }, []);
   useEffect(() => {
-    state.current = { projectId, revision: 0, pending: null, saving: false, loaded: false };
+    state.current = { projectId, revision: 0, pending: null, saving: false, loaded: false, failed: false };
     setDoc(null); setError(""); setConflict(""); setSaveState("saved");
     if (!projectId) return;
     let live = true;
@@ -68,9 +77,9 @@ export function useProjectDocument(projectId: string | undefined) {
       if (stored) setDoc(stored);
       else { const first = newProjectDoc(); setDoc(first); state.current.pending = first; void save(); }
     }).catch(e => live && setError((e as Error).message));
-    const flush = () => { void save(); };
+    const flush = () => { void save(true); };
     window.addEventListener("pagehide", flush);
-    return () => { live = false; window.removeEventListener("pagehide", flush); void save(); };
+    return () => { live = false; window.removeEventListener("pagehide", flush); void save(true); };
   }, [projectId, save]);
   // Debounced autosave; a failed save retries on the next edit or after a longer pause.
   useEffect(() => {
@@ -83,7 +92,7 @@ export function useProjectDocument(projectId: string | undefined) {
       if (!current) return current;
       const next = change(current);
       if (next === current) return current;
-      state.current.pending = next;
+      state.current.pending = next; state.current.failed = false;
       setSaveState("dirty"); setConflict("");
       return next;
     });
@@ -92,9 +101,9 @@ export function useProjectDocument(projectId: string | undefined) {
   const flush = useCallback(async () => {
     for (let i = 0; i < 50 && (state.current.pending || state.current.saving); i++) {
       await save();
-      if (state.current.saving) await new Promise(r => setTimeout(r, 100));
+      if (state.current.saving || state.current.pending) await new Promise(r => setTimeout(r, 200));
     }
-    if (state.current.pending) throw new Error("Проектът не беше запазен. Опитайте отново.");
+    if (state.current.pending || state.current.failed) throw new Error("Проектът не беше запазен. Опитайте отново.");
   }, [save]);
   return { doc, update, flush, saveState, error, conflict };
 }

@@ -4330,3 +4330,10 @@ main h1[tabindex="-1"]:focus {
 .auth-contact { justify-content: center; margin-top: 14px; }
 .app-footer { border-top: 1px solid var(--border); padding: 16px 45px 22px; max-width: 1760px; margin: 0 auto; }
 @media (max-width: 800px) { .app-footer { padding: 14px 16px 20px; } }
+/* Plan hints and the mobile menu backdrop */
+.plan-chip { display: inline-block; margin-left: auto; font-size: 10.5px; font-weight: 700; line-height: 1.4; padding: 1px 7px; border-radius: 99px; background: #eef0ff; color: #3140b8; white-space: nowrap; }
+.mode-card .plan-chip { margin: 8px 0 0; }
+.heading-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.empty-state .heading-actions { justify-content: center; }
+/* Only rendered while the mobile menu is open. */
+.sidebar-backdrop { position: fixed; inset: 70px 0 0 0; z-index: 24; border: 0; padding: 0; background: #10140f66; }

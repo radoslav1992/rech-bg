@@ -5,15 +5,17 @@ import {
   AudioLines,
   Clock3,
   FileText,
+  Film,
+  Mic,
   Folder,
   Plus,
   Podcast,
   Trash2,
-  Video,
 } from "lucide-react";
 import { api, number, Notice, useAuth, type Project } from "./lib";
+import { canCreateVideo } from "../shared/catalog";
 import { useJobs, jobLink, jobStatus } from "./JobActivity";
-const icons = { tts: FileText, podcast: Podcast, voiceover: Video };
+const icons = { tts: FileText, podcast: Podcast, voiceover: Mic, studio: Film };
 const statusNames: Record<string, string> = {
   completed: "Готов",
   running: "Създава се",
@@ -54,10 +56,16 @@ export function Dashboard() {
           </h1>
           <p>Какво ще създадем днес?</p>
         </div>
-        <Link to="/app/studio" className="btn dark">
-          <Plus size={18} />
-          Нов запис
-        </Link>
+        <div className="heading-actions">
+          <Link to="/app/studio" className="btn dark">
+            <Plus size={18} />
+            Нов аудиозапис
+          </Link>
+          <Link to="/app/video-studio" className="btn outline">
+            <Film size={18} />
+            Нов видео проект
+          </Link>
+        </div>
       </div>
       {error && <Notice error>{error}</Notice>}
       <section id="activity" className="background-recordings">
@@ -80,7 +88,7 @@ export function Dashboard() {
             <br />
             вече има глас.
           </h2>
-          <p>Създайте аудиозапис и го превърнете в говорещо видео.</p>
+          <p>Създайте аудиозапис и го превърнете в говорещо видео{canCreateVideo(user?.plan) ? "." : " (видео — от план Създател)."}</p>
           <Link className="btn dark" to="/app/studio">
             Към студиото <ArrowUpRight size={18} />
           </Link>
@@ -139,6 +147,7 @@ export function Dashboard() {
               <Icon size={24} />
               <h3>{t}</h3>
               <p>{d}</p>
+              {id === "studio" && !canCreateVideo(user?.plan) && <small className="plan-chip">Видео от план Създател</small>}
               <ArrowUpRight size={18} />
             </Link>
           );
@@ -160,10 +169,22 @@ export function Dashboard() {
 export function ProjectList({
   projects,
   onDelete,
+  filtered = false,
+  onClearFilter,
 }: {
   projects: Project[];
   onDelete?: (id: string) => void;
+  /** Projects exist, but none matches the current filter or search. */
+  filtered?: boolean;
+  onClearFilter?: () => void;
 }) {
+  if (!projects.length && filtered)
+    return (
+      <div className="empty-state">
+        <h3>Няма проекти с тези критерии.</h3>
+        <button type="button" className="btn outline" onClick={onClearFilter}>Изчисти филтъра</button>
+      </div>
+    );
   if (!projects.length)
     return (
       <div className="empty-state">
@@ -171,11 +192,17 @@ export function ProjectList({
           <AudioLines size={28} />
         </span>
         <h3>Първата ви история започва тук.</h3>
-        <p>Създайте запис и ще го намерите на това място.</p>
-        <Link className="btn outline" to="/app/studio">
-          <Plus size={17} />
-          Създайте проект
-        </Link>
+        <p>Създайте запис или видео и ще го намерите на това място.</p>
+        <div className="heading-actions">
+          <Link className="btn outline" to="/app/studio">
+            <Plus size={17} />
+            Аудиозапис
+          </Link>
+          <Link className="btn outline" to="/app/video-studio">
+            <Film size={17} />
+            Видео проект
+          </Link>
+        </div>
       </div>
     );
   return (
@@ -243,10 +270,16 @@ export function Projects() {
           <h1>Моите проекти</h1>
           <p>Всички ваши идеи. Готови да бъдат чути.</p>
         </div>
-        <Link className="btn dark" to="/app/studio">
-          <Plus size={18} />
-          Нов проект
-        </Link>
+        <div className="heading-actions">
+          <Link className="btn dark" to="/app/studio">
+            <Plus size={18} />
+            Нов аудиозапис
+          </Link>
+          <Link className="btn outline" to="/app/video-studio">
+            <Film size={18} />
+            Нов видео проект
+          </Link>
+        </div>
       </div>
       {error && <Notice error>{error}</Notice>}
       <div className="filter-bar">
@@ -282,6 +315,8 @@ export function Projects() {
             (mode === "all" || p.mode === mode) &&
             p.title.toLowerCase().includes(query.toLowerCase()),
         )}
+        filtered={projects.length > 0}
+        onClearFilter={() => { setMode("all"); setQuery(""); }}
         onDelete={async (id) => {
           if (
             !confirm(

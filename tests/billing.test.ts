@@ -158,39 +158,30 @@ describe("Signed Stripe lifecycle", () => {
     );
     expect((await allowance(env, u)).hasSubscription).toBe(false);
   });
-  it("does not let older events overwrite a newer processed state", async () => {
-    let sub = subscription({ status: "canceled" });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response(JSON.stringify(sub), {
-            headers: { "Content-Type": "application/json" },
-          }),
-      ),
-    );
-    await webhook(
-      await event(
-        "customer.subscription.deleted",
-        { id: "sub_1" },
-        "evt_new",
-        500,
-      ),
-      env,
-    );
+  it("orders writes by when Stripe was read, so an older reading never overwrites a newer one", async () => {
+    let sub: any = subscription({ status: "canceled" });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(sub), { headers: { "Content-Type": "application/json" } })));
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(2_000_000_000_000);
+      await webhook(await event("customer.subscription.deleted", { id: "sub_1" }, "evt_new", 500), env);
+      // A request that read Stripe earlier finishes later: it must not bring the subscription back.
+      vi.setSystemTime(1_999_999_990_000);
+      sub = subscription();
+      await webhook(await event("customer.subscription.updated", { id: "sub_1" }, "evt_old", 400), env);
+      expect(sqlite.prepare("SELECT status FROM subscriptions").get()?.status).toBe("canceled");
+    } finally { vi.useRealTimers(); }
+  });
+  it("applies invoice.paid after a return-from-checkout sync saw the invoice still open", async () => {
+    // Sync (on return from Checkout) reads an unpaid first invoice; the invoice.paid event was created just before.
+    let sub: any = subscription({ latest_invoice: { id: "in_1", status: "open", billing_reason: "subscription_create" } });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(sub), { headers: { "Content-Type": "application/json" } })));
+    await webhook(await event("customer.subscription.created", { id: "sub_1" }, "evt_created"), env);
+    const u = sqlite.prepare("SELECT * FROM users").get() as any;
+    expect((await allowance(env, u)).plan).toBe("free");
     sub = subscription();
-    await webhook(
-      await event(
-        "customer.subscription.updated",
-        { id: "sub_1" },
-        "evt_old",
-        400,
-      ),
-      env,
-    );
-    expect(
-      sqlite.prepare("SELECT status FROM subscriptions").get()?.status,
-    ).toBe("canceled");
+    await webhook(await event("invoice.paid", { subscription: "sub_1" }, "evt_paid", now() - 5), env);
+    expect((await allowance(env, u)).plan).toBe("creator");
   });
   it("keeps the paid plan while an upgrade invoice is being paid, then applies the new plan", async () => {
     let sub: any = subscription();
@@ -214,6 +205,20 @@ describe("Signed Stripe lifecycle", () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(sub), { headers: { "Content-Type": "application/json" } })));
     await webhook(await event("customer.subscription.updated", { id: "sub_1" }), env);
     expect(log).toHaveBeenCalledWith("Subscription price is not a configured plan", { subscription: "sub_1", price: "price_other" });
+    log.mockRestore();
+  });
+  it("maps replaced prices by lookup key and still records the cancellation of an unknown price", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const on = (price: any, extra: any = {}) => subscription({ items: { data: [{ id: "si_1", price, current_period_start: 100, current_period_end: now() + 100000 }] }, ...extra });
+    let sub: any = on({ id: "price_old_studio", lookup_key: "studio" });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(sub), { headers: { "Content-Type": "application/json" } })));
+    await webhook(await event("customer.subscription.updated", { id: "sub_1" }, "evt_a"), env);
+    const u = sqlite.prepare("SELECT * FROM users").get() as any;
+    expect((await allowance(env, u)).plan).toBe("studio");
+    sub = on({ id: "price_unknown" }, { status: "canceled" });
+    await webhook(await event("customer.subscription.deleted", { id: "sub_1" }, "evt_b"), env);
+    expect(sqlite.prepare("SELECT plan,status FROM subscriptions").get()).toEqual({ plan: "studio", status: "canceled" });
+    expect((await allowance(env, u)).plan).toBe("free");
     log.mockRestore();
   });
 });

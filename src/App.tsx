@@ -1,4 +1,5 @@
 import { Component, lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
+import { canCreateVideo } from "../shared/catalog";
 import { SiteContact } from "./SiteContact";
 import {
   Routes,
@@ -14,6 +15,7 @@ import {
 import {
   House,
   Film,
+  Captions,
   AudioLines,
   Folder,
   Users,
@@ -117,6 +119,12 @@ function Shell() {
   const navigate = useNavigate();
   const location = useLocation();
   useEffect(() => setMenu(false), [location.pathname]);
+  useEffect(() => {
+    if (!menu) return;
+    const close = (e: KeyboardEvent) => { if (e.key === "Escape") setMenu(false); };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [menu]);
   if (loading)
     return (
       <div className="loading-page" role="status">Зареждане на вашето пространство…</div>
@@ -143,7 +151,7 @@ function Shell() {
     ["/app", "Начало", House],
     ["/app/studio", "Аудио", AudioLines],
     ["/app/video-studio", "Видео студио", Film],
-    ["/app/media", "Медийни инструменти", Film],
+    ["/app/media", "Медийни инструменти", Captions],
     ["/app/projects", "Моите проекти", Folder],
     ["/app/voices", "Гласове", Users],
     ["/app/billing", "Абонамент", CreditCard],
@@ -167,7 +175,7 @@ function Shell() {
         <Logo />
         <Link className="btn primary new-project" to="/app/studio">
           <Plus size={18} />
-          Нов запис
+          Нов аудиозапис
         </Link>
         <span className="nav-label">ВАШЕТО ПРОСТРАНСТВО</span>
         <nav>
@@ -175,6 +183,7 @@ function Shell() {
             <NavLink end={to === "/app"} key={to} to={to}>
               <Icon size={19} />
               {label}
+              {to === "/app/video-studio" && !canCreateVideo(user.plan) && <small className="plan-chip" title="Видео аватарите са достъпни в плановете Създател и Студио">Създател+</small>}
             </NavLink>
           ))}
         </nav>
@@ -209,10 +218,11 @@ function Shell() {
           </button>
         </div>
       </aside>
+      {menu && <button type="button" className="sidebar-backdrop" aria-label="Затвори менюто" onClick={() => setMenu(false)} />}
       <main className="workspace">
         {!user.verified && (
           <div className="verify-banner">
-            Потвърдете имейла си, за да създавате аудио.{" "}
+            Потвърдете имейла си, за да създавате аудио и видео.{" "}
             <Link to="/app/settings">Изпрати ново писмо</Link>
           </div>
         )}
