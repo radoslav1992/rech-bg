@@ -2,8 +2,9 @@ import type { Job } from "../lib";
 import type { MediaAsset } from "../../shared/media";
 import type { CaptionDocument } from "../../shared/captions";
 import { estimateSpeechSeconds } from "../../shared/studio";
-import { scriptFingerprint, sceneTimeline, type ProjectDoc } from "../../shared/project";
+import { scriptFingerprint, sceneTimeline, type ProjectDoc, type ProjectScene } from "../../shared/project";
 import { speechRanges } from "../../shared/timeline";
+import { cutWords, keptDuration } from "../../shared/cuts";
 
 // The studio's view of a project: which recordings and videos belong to each scene, and where every
 // scene sits on the final video's clock (intro, scenes in order, outro — the same order the server renders).
@@ -59,6 +60,31 @@ export function adoptedMedia(doc: ProjectDoc, index: number, media: SceneMedia):
   return { audioJobId: audio.id, videoJobId };
 }
 
+/** Key of an uploaded video's transcript in the studio's caption record. */
+export const assetCaptionKey = (assetId: string) => `asset:${assetId}`;
+/**
+ * Key of the captions a scene shows: its recording's, or (for a filmed scene) its clip's transcript moved
+ * onto the cut clip's clock by `shownCaptions`.
+ */
+export function captionId(scene: ProjectScene, media: SceneMedia | undefined): string | null {
+  if (scene.clip) return `cut:${scene.id}`;
+  return media?.audio?.status === "completed" ? media.audio.id : null;
+}
+/** The loaded caption documents plus, for every filmed scene, its transcript with the cut-out words removed. */
+export function shownCaptions(doc: ProjectDoc, docs: Record<string, CaptionDocument>): Record<string, CaptionDocument> {
+  const out = { ...docs };
+  for (const s of doc.scenes) {
+    const source = s.clip && docs[assetCaptionKey(s.clip.assetId)];
+    if (s.clip && source) out[`cut:${s.id}`] = { ...source, words: cutWords(source.words, s.clip.keep) };
+  }
+  return out;
+}
+/** The uploaded video of a filmed scene, once it passed its check. */
+export const readyClip = (scene: ProjectScene, assets: MediaAsset[]) => {
+  const asset = scene.clip ? assets.find((a) => a.id === scene.clip!.assetId) : undefined;
+  return asset?.status === "ready" && asset.duration > 0 ? asset : null;
+};
+
 export type SceneSegment = {
   kind: "scene"; index: number; start: number; length: number;
   /** Voice length; an estimate from the script until the recording is ready. */
@@ -81,9 +107,10 @@ export function projectLayout(doc: ProjectDoc, media: SceneMedia[], assets: Medi
   };
   bumper("intro");
   doc.scenes.forEach((scene, index) => {
-    const audio = media[index]?.audio;
-    const ready = audio?.status === "completed" && audio.duration > 0;
-    const speech = ready ? audio!.duration : Math.max(2, estimateSpeechSeconds(scene.script) || 3);
+    const audio = media[index]?.audio, clip = readyClip(scene, assets);
+    // A filmed scene lasts as long as the parts of its clip that are kept.
+    const ready = scene.clip ? !!clip : audio?.status === "completed" && audio.duration > 0;
+    const speech = clip ? keptDuration(scene.clip!.keep, clip.duration) : ready ? audio!.duration : Math.max(2, estimateSpeechSeconds(scene.script) || 3);
     const length = Math.round((scene.speechStart + speech + scene.tail) * 100) / 100;
     segments.push({ kind: "scene", index, start: t, length, speech, estimated: !ready });
     t += length;
@@ -96,7 +123,7 @@ export function projectLayout(doc: ProjectDoc, media: SceneMedia[], assets: Medi
 export function projectSpeech(doc: ProjectDoc, segments: Segment[], captions: Record<string, CaptionDocument>, media: SceneMedia[]) {
   return segments.flatMap((seg) => {
     if (seg.kind !== "scene" || seg.estimated) return [];
-    const scene = doc.scenes[seg.index], words = captions[media[seg.index].audio!.id]?.words || [];
+    const scene = doc.scenes[seg.index], id = captionId(scene, media[seg.index]), words = (id && captions[id]?.words) || [];
     return speechRanges(words, sceneTimeline(scene, doc.music), seg.speech).map(([a, b]) => [seg.start + a, seg.start + b] as [number, number]);
   });
 }

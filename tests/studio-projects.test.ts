@@ -138,7 +138,7 @@ describe("server timeline render", () => {
     expect(payload.inputs).toEqual([`audio/u/${video}.mp4`, `audio/u/${audio}.wav`, `media/u/${music}/original`]);
     expect(payload.document.words).toEqual(words);
     expect(payload.timeline).toEqual({
-      scenes: [{ speechStart: 1.5, tail: 2, voiceVolume: 0.9, speechDuration: 10, background: null }],
+      scenes: [{ speechStart: 1.5, tail: 2, voiceVolume: 0.9, speechDuration: 10, clip: null, background: null }],
       music: { start: -3, volume: 0.4, duck: true, fade: true, ranges: [[1.7, 2.3], [4.5, 5]] },
       layers: [], intro: null, outro: null,
     });
@@ -240,8 +240,8 @@ describe("multi-scene projects", () => {
     const payload = JSON.parse(task.payload);
     expect(payload.inputs).toEqual([`audio/u/${video}.mp4`, `audio/u/${audio}.wav`, `audio/u/${video2}.mp4`, `audio/u/${audio2}.wav`, `media/u/${music}/original`]);
     expect(payload.timeline.scenes).toEqual([
-      { speechStart: 1.5, tail: 2, voiceVolume: 0.9, speechDuration: 10, background: null },
-      { speechStart: 0, tail: 1, voiceVolume: 1, speechDuration: 6, background: null },
+      { speechStart: 1.5, tail: 2, voiceVolume: 0.9, speechDuration: 10, clip: null, background: null },
+      { speechStart: 0, tail: 1, voiceVolume: 1, speechDuration: 6, clip: null, background: null },
     ]);
     // Scene 2 starts at 13.5 s; its word at 0.5–1.5 s is speech at 14–15 s on the final clock.
     expect(payload.timeline.music.ranges).toEqual([[1.5, 2.5], [14, 15]]);
@@ -260,6 +260,44 @@ describe("multi-scene projects", () => {
     sqlite.prepare("UPDATE jobs SET duration=590 WHERE id=?").run(audio2);
     await save(twoScenes(), 1);
     expect(((await (await call(`/video-studio/projects/${project}/render/quote`)).json()) as any).error).toMatch(/10 минути/);
+  });
+});
+
+describe("filmed scenes", () => {
+  const film = crypto.randomUUID(), otherFilm = crypto.randomUUID();
+  beforeEach(() => {
+    const asset = sqlite.prepare("INSERT INTO media_assets(id,user_id,object_key,name,kind,mime,bytes,status,duration,captions,created_at,expires_at) VALUES(?,?,?,?,?,?,1000,'ready',?,?,1,?)");
+    const words = [{ text: "Здравейте", start: 0.5, end: 1 }, { text: "ъъъ", start: 1.1, end: 1.4 }, { text: "приятели", start: 4, end: 4.6 }];
+    asset.run(film, "u", `media/u/${film}/original`, "Клип.mp4", "upload", "video/mp4", 8, JSON.stringify({ ...defaultCaptions, style: "bold", words }), now() + 86400);
+    sqlite.prepare("INSERT INTO media_limits VALUES('other',1000000000,30)").run();
+    asset.run(otherFilm, "other", `media/other/${otherFilm}/original`, "x.mp4", "upload", "video/mp4", 8, null, now() + 86400);
+  });
+  const filmed = (clip: any) => { const d = doc({ audioJobId: null, videoJobId: null, portrait: null, clip } as any, false); return d; };
+  it("renders a filmed scene with its own sound, the kept parts and captions moved onto the cut clock", async () => {
+    expect((await save(filmed({ assetId: otherFilm, keep: null, clean: false }), 0)).status).toBe(400);
+    const keep = [[0.38, 1.2], [3.88, 4.8]];
+    expect((await save(filmed({ assetId: film, keep, clean: true }), 0)).status).toBe(200);
+    const quote = await (await call(`/video-studio/projects/${project}/render/quote`)).json() as any;
+    // 1.5 s lead-in + (0.82 + 0.92) s kept + 2 s hold
+    expect(quote).toEqual({ credits: 0, length: 5.24 });
+    expect((await call(`/video-studio/projects/${project}/render`, "POST", { idempotencyKey: crypto.randomUUID(), credits: 0 })).status).toBe(202);
+    const task = sqlite.prepare("SELECT * FROM media_tasks").get() as any;
+    expect(task.source_id).toBe(project);
+    const payload = JSON.parse(task.payload);
+    expect(payload.inputs).toEqual([`media/u/${film}/original`, `media/u/${film}/original`]);
+    expect(payload.timeline.scenes[0]).toMatchObject({ speechDuration: 1.74, clip: { keep, clean: true } });
+    // "ъъъ" was cut; "приятели" moved from 4 s to 0.82 + 0.12 s.
+    expect(payload.captions[0].document.words).toEqual([{ text: "Здравейте", start: 0.12, end: 0.62 }, { text: "приятели", start: 0.94, end: 1.54 }]);
+    expect(payload.document.style).toBe("bold");
+  });
+  it("charges the export of a filmed clip that was never transcribed, as for any uploaded video", async () => {
+    sqlite.prepare("UPDATE media_assets SET captions=NULL WHERE id=?").run(film);
+    expect((await save(filmed({ assetId: film, keep: null, clean: false }), 0)).status).toBe(200);
+    // 1.5 s + 8 s + 2 s: one started minute of export
+    expect(await (await call(`/video-studio/projects/${project}/render/quote`)).json()).toEqual({ credits: 500, length: 11.5 });
+  });
+  it("rejects overlapping cut ranges", async () => {
+    expect((await save(filmed({ assetId: film, keep: [[0, 2], [1, 3]], clean: false }), 0)).status).toBe(400);
   });
 });
 

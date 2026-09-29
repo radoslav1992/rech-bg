@@ -2,11 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../lib";
 import { defaultCaptions, type CaptionDocument } from "../../shared/captions";
 
-const endpoint = (audioId: string) => `/video-studio/captions/${audioId}`;
+// Recordings keep their captions in the studio; uploaded videos ("asset:<id>") in the media library.
+const endpoint = (id: string) => id.startsWith("asset:") ? `/media/assets/${id.slice(6)}/captions` : `/video-studio/captions/${id}`;
 
 /**
- * Caption documents of the scenes' recordings (words, timing and look are stored per recording on the
- * server, where the export reads them). Edits apply at once and save after a short pause.
+ * Caption documents of the scenes' recordings and filmed clips (words, timing and look are stored per
+ * recording or video on the server, where the export reads them). Edits apply at once and save after a short pause.
  */
 export function useCaptions(audioIds: string[]) {
   const [docs, setDocs] = useState<Record<string, CaptionDocument>>({});

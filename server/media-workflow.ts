@@ -167,7 +167,8 @@ export class MediaGeneration extends WorkflowEntrypoint<
           ass,
           fit: p.document?.fit || "contain",
           ...(timeline && {
-            urls: p.inputs.map((_: string, i: number) => input(i)),
+            // A file used twice (a filmed scene's picture and sound) gets one URL, so it is downloaded once.
+            urls: p.inputs.map((key: string) => input(p.inputs.indexOf(key))),
             timeline: {
               scenes: scenes!.map((x) => ({
                 speech_start: x.speechStart,
@@ -175,6 +176,7 @@ export class MediaGeneration extends WorkflowEntrypoint<
                 voice_volume: x.voiceVolume,
                 speech_duration: x.speechDuration,
                 background: x.background || null,
+                clip: x.clip || null,
               })),
               music: timeline.music,
               intro: timeline.intro || null,

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ArrowDown, ArrowLeft, ArrowUp, Copy, Download, Mic, Pause, Play, Plus, SkipBack, Trash2 } from "lucide-react";
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { ArrowDown, ArrowLeft, ArrowUp, Copy, Download, Film, Mic, Pause, Play, Plus, SkipBack, Sparkles, Trash2 } from "lucide-react";
 import { api, Button, Notice, number, post, useAuth } from "../lib";
 import { jobsChanged } from "../JobActivity";
 import { uploadMedia, useMediaLibrary } from "../MediaTools";
@@ -14,7 +14,9 @@ import { newTextLayer, type Layer } from "../../shared/layers";
 import { MAX_SCENES, newScene, scriptFingerprint, withScene, type ProjectPortrait, type ProjectScene } from "../../shared/project";
 import { AvatarModal } from "./AvatarModal";
 import { Modal } from "./Modal";
-import { adoptedMedia, isBusy, projectLayout, projectSpeech, sceneMedia, type SceneSegment } from "./model";
+import { adoptedMedia, assetCaptionKey, captionId, isBusy, projectLayout, projectSpeech, readyClip, sceneMedia, shownCaptions, type SceneSegment } from "./model";
+import { ClipPicker, ClipSection } from "./ClipPanel";
+import { ScriptWriter, type WrittenScene } from "./ScriptWriter";
 import { usePlayer } from "./Player";
 import { ProjectTimeline, type Selection } from "./ProjectTimeline";
 import { SceneInspector, type VideoRequest } from "./SceneInspector";
@@ -42,13 +44,14 @@ function NewProject() {
   const config = useStudioConfig();
   const [title, setTitle] = useState("Моята видео история"), [busy, setBusy] = useState(false), [error, setError] = useState("");
   const voice = config.voices?.[0]?.id;
-  const create = async () => {
+  const create = async (written?: WrittenScene[]) => {
     if (!voice) return;
     setBusy(true); setError("");
     try {
-      const { id } = await post<{ id: string }>("/projects", { title: title.trim(), mode: "studio", script: "", voice, second_voice: "boris", pause_ms: 0 });
+      const { id } = await post<{ id: string }>("/projects", { title: title.trim(), mode: "studio", script: written?.[0]?.script || "", voice, second_voice: "boris", pause_ms: 0 });
       const avatar = params.get("avatar");
-      navigate(`/app/video-studio/${id}${avatar ? `?avatar=${encodeURIComponent(avatar)}` : ""}`, { replace: true });
+      // Written scenes are placed in the new project's document by the editor.
+      navigate(`/app/video-studio/${id}${avatar ? `?avatar=${encodeURIComponent(avatar)}` : ""}`, { replace: true, state: written ? { written } : null });
     } catch (e) { setError((e as Error).message); setBusy(false); }
   };
   return <div className="video-studio st-new">
@@ -63,15 +66,20 @@ function NewProject() {
       {config.voices && !voice && <Notice>В момента няма активни гласове за видео. Администраторът може да добави глас от настройките.</Notice>}
       <form onSubmit={(e) => { e.preventDefault(); void create(); }}>
         <label>Име на проекта<input value={title} maxLength={120} onChange={(e) => setTitle(e.target.value)} /></label>
-        <Button type="submit" className="btn primary" busy={busy} disabled={!title.trim() || !voice}><Plus size={17} /> Създай проекта</Button>
+        <Button type="submit" className="btn primary" busy={busy} disabled={!title.trim() || !voice || busy}><Plus size={17} /> Създай проекта</Button>
       </form>
+    </section>
+    <section className="vs-card st-new-card">
+      <h2><Sparkles size={20} /> Или започнете със сценарий от ИИ</h2>
+      <p className="st-fine">Опишете темата — ИИ разделя текста на сцени, готови за глас, аватар или заснето видео.</p>
+      <ScriptWriter action="Създай проекта с тези сцени" onUse={(written) => create(written)} />
     </section>
     <TemplatePicker />
   </div>;
 }
 
 function Editor({ projectId }: { projectId: string }) {
-  const navigate = useNavigate(), [params, setParams] = useSearchParams();
+  const navigate = useNavigate(), [params, setParams] = useSearchParams(), location = useLocation();
   const { user, refresh } = useAuth();
   const config = useStudioConfig();
   const project = useProjectDocument(projectId);
@@ -87,6 +95,7 @@ function Editor({ projectId }: { projectId: string }) {
   const [avatarFor, setAvatarFor] = useState<string | null>(null), [exportOpen, setExportOpen] = useState(false);
   const [sending, setSending] = useState<{ scene: string; what: "audio" | "video" } | null>(null);
   const [musicUpload, setMusicUpload] = useState<number | null>(null);
+  const [adding, setAdding] = useState<"clip" | "writer" | null>(null);
   const musicInput = useRef<HTMLInputElement>(null), keys = useRef(new Map<string, string>());
 
   // The project row keeps the title (and mirrors the first scene for the project list).
@@ -105,15 +114,22 @@ function Editor({ projectId }: { projectId: string }) {
   const sceneIndex = selection.kind === "music" || selection.kind === "project" ? -1 : Math.min(selection.scene, scenes.length - 1);
   const focusIndex = Math.max(0, sceneIndex);
   const media = useMemo(() => doc ? doc.scenes.map((_, i) => sceneMedia(doc, i, jobs)) : [], [doc, jobs]);
-  const readyAudio = media.map((m) => m.audio?.status === "completed" ? m.audio.id : null).filter((x): x is string => !!x);
-  const captions = useCaptions(readyAudio);
-  const firstAudio = media[0]?.audio?.status === "completed" ? media[0].audio.id : null;
+  // Captions of the recordings and of the transcribed filmed clips.
+  const captionSources = [
+    ...media.map((m) => m.audio?.status === "completed" ? m.audio.id : null),
+    ...scenes.map((s) => s.clip && assets.find((a) => a.id === s.clip!.assetId)?.hasCaptions ? assetCaptionKey(s.clip.assetId) : null),
+  ].filter((x): x is string => !!x);
+  const captions = useCaptions([...new Set(captionSources)]);
+  // What the scenes show: a filmed clip's transcript follows its cuts.
+  const shown = useMemo(() => doc ? shownCaptions(doc, captions.docs) : captions.docs, [doc, captions.docs]);
+  const first0 = doc?.scenes[0];
+  const firstSource = first0?.clip ? assetCaptionKey(first0.clip.assetId) : media[0]?.audio?.status === "completed" ? media[0].audio.id : null;
   // Frame size and fit follow the first scene, as in the server render.
-  const look: CaptionDocument = (firstAudio && captions.docs[firstAudio]) || { ...defaultCaptions, ...(doc?.captionLook || {}) };
+  const look: CaptionDocument = (firstSource && captions.docs[firstSource]) || { ...defaultCaptions, ...(doc?.captionLook || {}) };
   const { segments, total } = useMemo(() => doc ? projectLayout(doc, media, assets) : { segments: [], total: 0 }, [doc, media, assets]);
   const sceneSegments = segments.filter((s): s is SceneSegment => s.kind === "scene");
-  const ranges = useMemo(() => doc ? projectSpeech(doc, segments, captions.docs, media) : [], [doc, segments, captions.docs, media]);
-  const player = usePlayer({ doc: doc || { version: 1, scenes: [], music: null, intro: null, outro: null, captionLook: null }, segments, total, media, captions: captions.docs, look, assets, ranges });
+  const ranges = useMemo(() => doc ? projectSpeech(doc, segments, shown, media) : [], [doc, segments, shown, media]);
+  const player = usePlayer({ doc: doc || { version: 1, scenes: [], music: null, intro: null, outro: null, captionLook: null }, segments, total, media, captions: shown, look, assets, ranges });
   const musicDuration = useAudioDuration(doc?.music ? `/api/media/assets/${doc.music.assetId}/file` : null);
   const update = project.update;
   const changeScene = (index: number, change: (s: ProjectScene) => ProjectScene) => update((d) => withScene(d, index, change));
@@ -124,6 +140,14 @@ function Editor({ projectId }: { projectId: string }) {
     const changes = doc.scenes.map((_, i) => adoptedMedia(doc, i, media[i]));
     if (changes.some(Boolean)) update((d) => ({ ...d, scenes: d.scenes.map((s, i) => changes[i] && s.id === doc.scenes[i].id ? { ...s, ...changes[i] } : s) }));
   }, [doc, media, jobsLoaded]);
+  // Scenes written by the AI on the new project page.
+  useEffect(() => {
+    const written = (location.state as { written?: WrittenScene[] } | null)?.written;
+    if (!doc || !written?.length) return;
+    const pristine = doc.scenes.length === 1 && !doc.scenes[0].script.trim() && !doc.scenes[0].clip;
+    if (pristine) update((d) => ({ ...d, scenes: written.slice(0, MAX_SCENES).map((w) => newScene({ title: w.title, script: w.script, voice: d.scenes[0].voice })) }));
+    navigate(location.pathname + location.search, { replace: true, state: null });
+  }, [!!doc]);
   // Earlier versions kept the first script in the project row and some settings only in this browser.
   const migrated = useRef(false);
   useEffect(() => {
@@ -187,11 +211,29 @@ function Editor({ projectId }: { projectId: string }) {
     if (!doc || doc.scenes.length >= MAX_SCENES) return;
     const base = doc.scenes[focusIndex];
     const scene = copy
-      ? newScene({ title: copy.title, script: copy.script, voice: copy.voice, portrait: copy.portrait, background: copy.background, speechStart: copy.speechStart, tail: copy.tail, voiceVolume: copy.voiceVolume, layers: copy.layers.map((l) => ({ ...l, id: crypto.randomUUID() })) })
+      ? newScene({ title: copy.title, script: copy.script, voice: copy.voice, portrait: copy.portrait, background: copy.background, speechStart: copy.speechStart, tail: copy.tail, voiceVolume: copy.voiceVolume, clip: copy.clip, layers: copy.layers.map((l) => ({ ...l, id: crypto.randomUUID() })) })
       : newScene({ voice: base?.voice ?? null, portrait: base?.portrait ?? null, background: base?.background ?? null });
-    const at = Math.min(doc.scenes.length, focusIndex + 1);
-    update((d) => ({ ...d, scenes: [...d.scenes.slice(0, at), scene, ...d.scenes.slice(at)] }));
+    insertScenes([scene]);
+  };
+  /** Puts scenes after the focused one; an untouched first scene is replaced instead of kept empty. */
+  const insertScenes = (added: ProjectScene[]) => {
+    if (!doc || !added.length) return;
+    const blank = doc.scenes.length === 1 && !doc.scenes[0].script.trim() && !doc.scenes[0].clip && !doc.scenes[0].audioJobId && !doc.scenes[0].layers.length;
+    const at = blank ? 0 : Math.min(doc.scenes.length, focusIndex + 1);
+    const room = MAX_SCENES - (blank ? 0 : doc.scenes.length), list = added.slice(0, room);
+    if (!list.length) return;
+    update((d) => ({ ...d, scenes: blank ? list : [...d.scenes.slice(0, at), ...list, ...d.scenes.slice(at)] }));
     select({ kind: "scene", scene: at });
+  };
+  const addClipScene = (assetId: string) => {
+    const base = doc?.scenes[focusIndex];
+    insertScenes([newScene({ voice: base?.voice ?? null, background: base?.background ?? null, clip: { assetId, keep: null, clean: true } })]);
+    setAdding(null); void reloadLibrary();
+  };
+  const addWritten = (written: WrittenScene[]) => {
+    const base = doc?.scenes[focusIndex];
+    insertScenes(written.map((w) => newScene({ title: w.title, script: w.script, voice: base?.voice ?? null, portrait: base?.portrait ?? null, background: base?.background ?? null })));
+    setAdding(null);
   };
   const removeScene = (i: number) => {
     if (scenes.length < 2 || !confirm(`Да изтрием ли сцена ${i + 1}? Създадените записи остават в историята на проекта.`)) return;
@@ -326,8 +368,16 @@ function Editor({ projectId }: { projectId: string }) {
   const remaining = Math.max(0, (user?.limit || 0) - (user?.used || 0));
   const saveLabel = project.saveState === "error" || captions.saveState === "error" ? "Не е запазено"
     : project.saveState !== "saved" || captions.saveState !== "saved" ? "Запазване…" : "Всичко е запазено";
-  const readyScenes = media.filter((m) => m.video?.status === "completed" && m.audio?.status === "completed").length;
-  const elementCaptions = selection.kind === "caption" ? captions.docs[media[selection.scene]?.audio?.id || ""] || null : null;
+  const readyScenes = scenes.filter((s, i) => s.clip ? !!readyClip(s, assets) : media[i].video?.status === "completed" && media[i].audio?.status === "completed").length;
+  const captionScene = selection.kind === "caption" ? doc.scenes[selection.scene] : null;
+  const captionKey = captionScene ? captionId(captionScene, media[selection.kind === "caption" ? selection.scene : 0]) : null;
+  const elementCaptions = captionKey ? shown[captionKey] || null : null;
+  /** Caption edits go to the recording's document, or to the clip's transcript (its words stay as transcribed). */
+  const editSceneCaptions = (index: number, change: (d: CaptionDocument) => CaptionDocument) => {
+    const s = doc.scenes[index];
+    if (s?.clip) captions.edit(assetCaptionKey(s.clip.assetId), (d) => ({ ...change(d), words: d.words }));
+    else { const id = media[index]?.audio?.id; if (id) captions.edit(id, change); }
+  };
 
   return <div className="st-editor">
     <header className="st-top">
@@ -350,13 +400,14 @@ function Editor({ projectId }: { projectId: string }) {
         <ol>{scenes.map((s, i) => {
           const m = media[i], thumb = portraitUrl(s.portrait), seg = sceneSegments.find((x) => x.index === i);
           const active = selection.kind !== "music" && selection.kind !== "project" && focusIndex === i;
-          const status = m.video?.status === "completed" ? ["ready", "Видео"] : m.pendingVideo || isBusy(m.audio) ? ["working", "Създава се"]
+          const status = s.clip ? readyClip(s, assets) ? ["ready", s.clip.keep ? "Заснето · монтаж" : "Заснето"] : ["working", "Проверка"]
+            : m.video?.status === "completed" ? ["ready", "Видео"] : m.pendingVideo || isBusy(m.audio) ? ["working", "Създава се"]
             : m.audio?.status === "completed" ? [m.stale ? "stale" : "voice", m.stale ? "Променен" : "Глас"] : ["none", "Чернова"];
           return <li key={s.id} className={active ? "active" : ""}>
             <button type="button" className="st-rail-open" aria-current={active ? "true" : undefined} onClick={() => { select({ kind: "scene", scene: i }); if (seg) player.seek(seg.start); }}>
-              <span className="st-thumb">{thumb ? <img src={thumb} alt="" /> : <span>{i + 1}</span>}</span>
+              <span className="st-thumb">{thumb ? <img src={thumb} alt="" /> : s.clip ? <Film size={18} aria-hidden="true" /> : <span>{i + 1}</span>}</span>
               <span className="st-rail-text"><strong>{i + 1}. {s.title || `Сцена ${i + 1}`}</strong>
-                <small>{s.script.replace(/\[[^\]]*\]/g, "").trim().slice(0, 48) || "Празен сценарий"}</small>
+                <small>{s.clip ? assets.find((a) => a.id === s.clip!.assetId)?.name || "Заснето видео" : s.script.replace(/\[[^\]]*\]/g, "").trim().slice(0, 48) || "Празен сценарий"}</small>
                 <span className={`st-badge ${status[0]}`}>{status[1]}{seg && !seg.estimated ? ` · ${seg.length.toFixed(1)} с.` : ""}</span></span>
             </button>
             {active && <div className="st-rail-tools">
@@ -367,7 +418,11 @@ function Editor({ projectId }: { projectId: string }) {
             </div>}
           </li>;
         })}</ol>
-        <button type="button" className="btn st-rail-add" disabled={scenes.length >= MAX_SCENES} onClick={() => addScene()}><Plus size={16} /> Добави сцена</button>
+        <button type="button" className="btn st-rail-add" disabled={scenes.length >= MAX_SCENES} onClick={() => addScene()}><Plus size={16} /> Сцена с аватар</button>
+        <div className="st-add-menu">
+          <button type="button" className="btn" disabled={scenes.length >= MAX_SCENES} onClick={() => { player.pause(); setAdding("clip"); }}><Film size={15} /> Заснето видео</button>
+          <button type="button" className="btn" disabled={scenes.length >= MAX_SCENES} onClick={() => { player.pause(); setAdding("writer"); }}><Sparkles size={15} /> Сцени с ИИ</button>
+        </div>
       </nav>
 
       <section className="st-stage" aria-label="Преглед">
@@ -396,17 +451,20 @@ function Editor({ projectId }: { projectId: string }) {
           onSelectAudio={(audioId) => selectAudio(focusIndex, audioId)}
           onSelectVideo={(videoId) => changeScene(focusIndex, (s) => ({ ...s, videoJobId: videoId }))}
           onAddLayer={(type) => addTextOrLogo(focusIndex, type)}
-          onAddMediaLayer={(type, assetId) => addMediaLayer(focusIndex, type, assetId)} />}
+          onAddMediaLayer={(type, assetId) => addMediaLayer(focusIndex, type, assetId)}
+          clip={scene.clip ? <ClipSection scene={scene} clip={scene.clip} assets={assets} tasks={library?.tasks || []}
+            source={captions.docs[assetCaptionKey(scene.clip.assetId)] || null}
+            onChange={(change) => changeScene(focusIndex, change)} onChanged={() => void reloadLibrary()} /> : undefined} />}
         {tab === "element" && <ElementInspector selection={selection} doc={doc} segment={selection.kind === "layer" ? sceneSegments.find((s) => s.index === selection.scene) || null : sceneSeg}
           captions={elementCaptions} assets={assets} update={update} onSelect={select} onReplaceMusic={() => musicInput.current?.click()}
-          editCaptions={(change) => { const id = selection.kind === "caption" ? media[selection.scene]?.audio?.id : null; if (id) captions.edit(id, change); }} />}
+          editCaptions={(change) => { if (selection.kind === "caption") editSceneCaptions(selection.scene, change); }} />}
         {tab === "project" && <ProjectPanel projectId={projectId} doc={doc} look={look} update={update} editLook={editLook}
           brand={brand.kit} onSaveBrand={brand.save} captionSource={media[focusIndex]?.audio?.status === "completed" ? media[focusIndex].audio!.id : null}
           sceneLengths={sceneSegments.map((s) => s.length)} onCaptionsChanged={captions.reload} />}
       </aside>
     </div>
 
-    <ProjectTimeline doc={doc} segments={segments} total={total} media={media} captions={captions.docs} assets={assets}
+    <ProjectTimeline doc={doc} segments={segments} total={total} media={media} captions={shown} assets={assets}
       selection={selection} player={player} musicDuration={musicDuration} musicUpload={musicUpload}
       onSelect={select} update={update} editCaptions={captions.edit} onAddScene={() => addScene()} onAddMusic={() => musicInput.current?.click()} />
     <input ref={musicInput} type="file" hidden style={{ display: "none" }} accept="audio/mpeg,audio/wav,audio/mp4,audio/x-m4a,audio/aac,audio/ogg,.mp3,.wav,.m4a,.ogg"
@@ -416,7 +474,14 @@ function Editor({ projectId }: { projectId: string }) {
     <AvatarModal open={avatarFor !== null} mediumAvatars={config.video?.mediumLibraryOnly ? config.mediumAvatars : null} selected={doc.scenes.find((s) => s.id === avatarFor)?.portrait ?? null} onClose={() => setAvatarFor(null)}
       onSelect={(portrait) => { if (avatarFor) update((d) => ({ ...d, scenes: d.scenes.map((s) => s.id === avatarFor ? { ...s, portrait } : s) })); }} />
     <Modal open={exportOpen} title="Експорт на видеото" onClose={() => setExportOpen(false)}>
-      <ExportPanel projectId={projectId} doc={doc} media={media} segments={sceneSegments} captions={captions.docs} look={look} onSave={saveAll} />
+      <ExportPanel projectId={projectId} doc={doc} media={media} segments={sceneSegments} captions={shown} look={look} assets={assets} onSave={saveAll} />
+    </Modal>
+    <Modal open={adding === "clip"} title="Сцена от заснето видео" onClose={() => setAdding(null)}>
+      <p className="st-fine">Качете видео, в което говорите пред камерата. Сцената използва вашия образ и звук — после изрежете паузите с „Мигновен монтаж“ и добавете субтитри, текст, лого и музика като във всяка сцена.</p>
+      <ClipPicker assets={assets} onPick={addClipScene} />
+    </Modal>
+    <Modal open={adding === "writer"} title="Сцени от ИИ сценарист" onClose={() => setAdding(null)}>
+      <ScriptWriter action="Добави сцените в проекта" onUse={addWritten} />
     </Modal>
   </div>;
 }

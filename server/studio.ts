@@ -5,6 +5,7 @@ import type { ContextVars, Env } from "./types";
 import { rate, sha } from "./security";
 import { now } from "./types";
 import { suggestDelivery } from "./studio-delivery";
+import { writeScript, writerRequestSchema } from "./studio-writer";
 import { captionKey } from "./studio-speech";
 import { captionStyles, defaultCaptions } from "../shared/captions";
 import { stripTags, studioMaxChars, validateStudioScript } from "../shared/studio";
@@ -29,6 +30,25 @@ studio.post("/delivery", async c => {
     const suggestion = await suggestDelivery(c.env, text, tone);
     success = true;
     return c.json({ text: suggestion });
+  } finally {
+    if (!success) await c.env.DB.prepare("UPDATE rate_limits SET hits=MAX(0,hits-1) WHERE key=?").bind(quotaKey).run();
+  }
+});
+/** AI script writer: a topic becomes a multi-scene script. Ten successful scripts a day are included. */
+studio.post("/write", async c => {
+  if (!c.get("user").verified) throw new HTTPException(403, { message: "Потвърдете имейла си." });
+  const request = writerRequestSchema.parse(await c.req.json());
+  await rate(c, "studio-writer-attempts", 30, 3600, c.get("user").id);
+  const day = Math.floor(now() / 86400);
+  const quotaKey = await sha(`studio-writer-success:${c.get("user").id}:${day}`);
+  const reserved = await c.env.DB.prepare("INSERT INTO rate_limits(key,hits,expires_at) VALUES (?,1,?) ON CONFLICT(key) DO UPDATE SET hits=hits+1 WHERE hits<10 RETURNING hits")
+    .bind(quotaKey, (day + 1) * 86400).first();
+  if (!reserved) throw new HTTPException(429, { message: "Използвахте включените 10 сценария с ИИ за днес. Опитайте отново утре." });
+  let success = false;
+  try {
+    const scenes = await writeScript(c.env, request);
+    success = true;
+    return c.json({ scenes });
   } finally {
     if (!success) await c.env.DB.prepare("UPDATE rate_limits SET hits=MAX(0,hits-1) WHERE key=?").bind(quotaKey).run();
   }

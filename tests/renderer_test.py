@@ -116,6 +116,42 @@ class RendererTest(unittest.TestCase):
             # The number of inputs must match the scenes (video + voice each, plus music).
             self.assertEqual(run(range(4), scenes, music)['status'], 'failed')
 
+    def test_timeline_filmed_scene_with_cuts_and_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            d = Path(directory)
+            def make(name, *args):
+                subprocess.run(['ffmpeg','-nostdin','-v','error',*args,str(d/name)],check=True)
+            # A 4-second filmed clip with its own sound; the editor keeps 0.5–1.5 s and 2.0–3.5 s.
+            make('film.mp4','-f','lavfi','-i','color=c=orange:s=320x180:d=4','-f','lavfi','-i','sine=frequency=300:duration=4','-c:v','libx264','-threads','1','-c:a','aac')
+            files = [d/'film.mp4']
+            opened = []
+            class Opener:
+                def open(self, url, *args, **kwargs):
+                    opened.append(url); return files[int(url.rsplit('/',1)[1])].open('rb')
+            base = 'https://rechbg.com/api/media-inputs/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/'
+            ass = '[Script Info]\nScriptType: v4.00+\nPlayResX: 720\nPlayResY: 1280\n[Events]\nFormat: Layer,Start,End,Style,Text\n'
+            def run(clip, speech):
+                work = d / f'job{len(list(d.iterdir()))}'; work.mkdir()
+                job = {'dir': str(work), 'status': 'running'}
+                # Picture and sound are the same file: one URL, downloaded once.
+                payload = {'operation': 'timeline', 'url': base + '0', 'urls': [base + '0', base + '0'], 'width': 720, 'height': 1280, 'ass': ass, 'fit': 'contain',
+                           'timeline': {'scenes': [{'speech_start': 0, 'tail': 0.5, 'voice_volume': 1, 'speech_duration': speech, 'clip': clip}], 'music': None}}
+                with patch.object(renderer.urllib.request, 'build_opener', return_value=Opener()):
+                    renderer.process(job, payload)
+                return job
+            job = run({'keep': [[0.5, 1.5], [2.0, 3.5]], 'clean': True}, 2.5)
+            self.assertEqual(job['status'], 'completed', job)
+            self.assertEqual(len(opened), 1)
+            self.assertAlmostEqual(job['duration'], 3.0, places=2)
+            info = json.loads(subprocess.check_output(['ffprobe','-v','error','-show_format','-show_streams','-of','json',job['file']]))
+            self.assertAlmostEqual(float(info['format']['duration']), 3.0, delta=0.15)
+            self.assertTrue(any(s['codec_type']=='audio' for s in info['streams']))
+            # Whole clip, no cleanup.
+            self.assertEqual(run({'keep': None, 'clean': False}, 4.0)['status'], 'completed')
+            # Overlapping or text-smuggling ranges fail before FFmpeg runs.
+            self.assertEqual(run({'keep': [[1.0, 2.0], [1.5, 3.0]], 'clean': False}, 2.5)['status'], 'failed')
+            self.assertEqual(run({'keep': [["0,1)+1", 2.0]], 'clean': False}, 2.0)['status'], 'failed')
+
     def test_timeline_layers_backgrounds_broll_and_overlays(self):
         with tempfile.TemporaryDirectory() as directory:
             d = Path(directory)

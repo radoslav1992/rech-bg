@@ -81,10 +81,13 @@ def timeline(job, payload, origin, width, height, scale, ass, output):
         i = int(value)
         if i != value or not first_extra <= i < music_input: raise ValueError('Invalid layer input')
         return i
-    files = []
+    files, fetched = [], {}
     for i, url in enumerate(urls):
         path = os.path.join(job['dir'], f'input{i}')
-        download(url, path, origin); files.append(path)
+        # The same file listed twice (a filmed scene's picture and sound) is downloaded once.
+        if url in fetched: os.link(fetched[url], path)
+        else: download(url, path, origin); fetched[url] = path
+        files.append(path)
     graph, video_labels, voice_labels, total = [], '', '', 0.0
     loops = {}  # still images (backgrounds, intro/outro) are looped for their segment's length
     fit_cover = payload.get('fit') == 'cover'
@@ -125,12 +128,36 @@ def timeline(job, payload, origin, width, height, scale, ass, output):
         info = probe(files[2 * i])
         video = next((s for s in info.get('streams',[]) if s.get('codec_type')=='video'), None)
         if not video or video.get('width',0)>4096 or video.get('height',0)>4096: raise ValueError('Invalid video')
-        # Like the browser export: use the video's own soundtrack (lip sync) only when it matches the approved voice.
         soundtrack = next((s for s in info['streams'] if s.get('codec_type')=='audio'), None)
-        duration = float((soundtrack or {}).get('duration') or info.get('format',{}).get('duration') or 0)
-        voice = f'{2 * i}:a:0' if soundtrack and abs(duration - speech) <= 0.25 else f'{2 * i + 1}:a:0'
+        filmed = scene.get('clip')
+        picture, sound, clean = f'[{2 * i}:v:0]', None, ''
+        if filmed:
+            # A filmed scene: its own sound; only the kept parts ("Мигновен монтаж"), optionally cleaned up.
+            if not soundtrack: raise ValueError('Clip has no audio')
+            keep = filmed.get('keep')
+            if keep is not None:
+                if not isinstance(keep, list) or not 1 <= len(keep) <= 300: raise ValueError('Invalid cuts')
+                ranges, last = [], 0.0
+                for a, b in keep:
+                    a, b = number(a, 0, 600), number(b, 0, 600)
+                    if b - a < 0.05 or a < last: raise ValueError('Invalid cuts')
+                    ranges.append(f'between(t,{a:.3f},{b:.3f})'); last = b
+                expr = '+'.join(ranges)
+                graph.append(f"[{2 * i}:v:0]fps=30,select='{expr}',setpts=N/30/TB[cut{i}]")
+                graph.append(f"[{2 * i}:a:0]aselect='{expr}',asetpts=N/SR/TB[cuta{i}]")
+                picture, sound = f'[cut{i}]', f'[cuta{i}]'
+            else:
+                sound = f'[{2 * i}:a:0]'
+            if filmed.get('clean'):
+                # Voice cleanup: rumble and hiss out, noise reduced, even loudness.
+                clean = 'highpass=f=80,lowpass=f=12000,afftdn=nf=-25,loudnorm=I=-16:TP=-1.5:LRA=11,'
+            voice = None
+        else:
+            # Like the browser export: use the video's own soundtrack (lip sync) only when it matches the approved voice.
+            duration = float((soundtrack or {}).get('duration') or info.get('format',{}).get('duration') or 0)
+            voice = f'{2 * i}:a:0' if soundtrack and abs(duration - speech) <= 0.25 else f'{2 * i + 1}:a:0'
         ms = int(round(speech_start * 1000))
-        clip = (f'[{2 * i}:v:0]tpad=start_duration={speech_start:.3f}:start_mode=clone:stop_duration={length + 1:.3f}:stop_mode=clone,'
+        clip = (f'{picture}tpad=start_duration={speech_start:.3f}:start_mode=clone:stop_duration={length + 1:.3f}:stop_mode=clone,'
                 f'trim=duration={length:.3f},setpts=PTS-STARTPTS,fps=30')
         if fit_cover or (bg_input is None and color is None):
             graph.append(f'{clip},{scale},setsar=1,format=yuv420p[v{i}]')
@@ -142,7 +169,7 @@ def timeline(job, payload, origin, width, height, scale, ass, output):
             graph.append(f'[{bg_input}:v:0]fps=30,scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},setsar=1[bg{i}]')
             graph.append(f'{clip},scale={width}:{height}:force_original_aspect_ratio=decrease,setsar=1[fg{i}]')
             graph.append(f'[bg{i}][fg{i}]overlay=(W-w)/2:(H-h)/2:shortest=1,trim=duration={length:.3f},format=yuv420p[v{i}]')
-        graph.append(f'[{voice}]aformat=sample_rates=48000:channel_layouts=stereo,volume={voice_volume:.4f},adelay=delays={ms}:all=1,'
+        graph.append(f'{sound or f"[{voice}]"}{clean}aformat=sample_rates=48000:channel_layouts=stereo,volume={voice_volume:.4f},adelay=delays={ms}:all=1,'
                      f'apad,atrim=duration={length:.3f},asetpts=PTS-STARTPTS[a{i}]')
         video_labels += f'[v{i}]'; voice_labels += f'[a{i}]'
     video_labels += outro_v; voice_labels += outro_a

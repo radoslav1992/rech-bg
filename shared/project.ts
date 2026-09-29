@@ -3,6 +3,7 @@ import { MAX_LEAD, MAX_TAIL, type TimelineSettings } from "./timeline";
 import { studioMaxChars } from "./studio";
 import { backgroundSchema, layerSchema, MAX_LAYERS } from "./layers";
 import { bumperSchema, captionLookSchema } from "./brand";
+import { MAX_KEEP_RANGES } from "./cuts";
 
 // A video studio project as stored on the server: small JSON that only references media
 // (recordings and videos by job ID, uploads by media asset ID). Captions stay per recording.
@@ -22,6 +23,16 @@ export const portraitSchema = z.discriminatedUnion("type", [
   // A portrait, product variant or product image in the user's media library.
   z.object({ type: z.literal("asset"), id: z.uuid() }),
 ]);
+/** A filmed video as the scene (instead of an avatar and a generated voice): its own picture and sound. */
+export const clipSchema = z.object({
+  assetId: z.uuid(),
+  /** Kept parts of the recording ("Мигновен монтаж"); null keeps the whole clip. Sorted, not overlapping. */
+  keep: z.array(z.tuple([z.number().finite().min(0).max(600), z.number().finite().min(0).max(600)])).max(MAX_KEEP_RANGES).nullable()
+    .refine((k) => !k || k.every(([a, b], i) => b - a >= 0.05 && (i === 0 || a >= k[i - 1][1])), "Invalid ranges"),
+  /** Voice cleanup: noise reduction and even loudness. */
+  clean: z.boolean(),
+});
+export type SceneClip = z.infer<typeof clipSchema>;
 export const sceneSchema = z.object({
   id: z.uuid(),
   title: z.string().trim().max(80).default(""),
@@ -42,6 +53,8 @@ export const sceneSchema = z.object({
   layers: z.array(layerSchema).max(MAX_LAYERS).default([]),
   /** Fills the frame around the avatar when framing leaves space; null = black. */
   background: backgroundSchema.nullable().default(null),
+  /** Set for a filmed scene; its script, voice and avatar are then unused. */
+  clip: clipSchema.nullable().default(null),
 });
 export const musicSchema = z.object({
   assetId: z.uuid(),
@@ -69,7 +82,7 @@ export type ProjectDoc = z.infer<typeof projectDocSchema>;
 export function newScene(fields: Partial<ProjectScene> = {}): ProjectScene {
   return {
     id: crypto.randomUUID(), title: "", script: "", voice: null, history: [], audioFor: null,
-    audioJobId: null, videoJobId: null, portrait: null, speechStart: 0, tail: 0, voiceVolume: 1, layers: [], background: null, ...fields,
+    audioJobId: null, videoJobId: null, portrait: null, speechStart: 0, tail: 0, voiceVolume: 1, layers: [], background: null, clip: null, ...fields,
   };
 }
 /** Short, stable fingerprint of what a recording says (FNV-1a), to spot a recording older than its script. */
