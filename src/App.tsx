@@ -119,6 +119,13 @@ function Shell() {
   const navigate = useNavigate();
   const location = useLocation();
   useEffect(() => setMenu(false), [location.pathname]);
+  // Once per browser session, bring a subscription changed in Stripe into the app (late or missed webhooks).
+  const signedIn = user?.id;
+  useEffect(() => {
+    if (!signedIn) return;
+    try { if (sessionStorage.getItem("rech:billing-synced") === signedIn) return; sessionStorage.setItem("rech:billing-synced", signedIn); } catch { /* storage unavailable */ }
+    void post("/billing/sync", {}).then(() => refresh()).catch(() => {});
+  }, [signedIn]);
   useEffect(() => {
     if (!menu) return;
     const close = (e: KeyboardEvent) => { if (e.key === "Escape") setMenu(false); };

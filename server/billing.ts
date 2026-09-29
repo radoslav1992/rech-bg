@@ -103,14 +103,7 @@ billing.post("/checkout", async (c) => {
       (x) => !["canceled", "incomplete_expired"].includes(x.status),
     )
   )
-    return c.json({
-      url: (
-        await s.billingPortal.sessions.create({
-          customer,
-          return_url: origin(c.env, c.req.raw) + "/app/billing?portal=1",
-        })
-      ).url,
-    });
+    return c.json({ url: await portalUrl(c.env, c.req.raw, customer, requested) });
   await c.env.DB.prepare(
     "INSERT INTO checkout_intents(user_id,plan,intent_id,expires_at) VALUES (?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET plan=excluded.plan,intent_id=excluded.intent_id,expires_at=excluded.expires_at WHERE checkout_intents.expires_at<?",
   )
@@ -187,20 +180,42 @@ billing.post("/sync", async (c) => {
   if (statements.length) await c.env.DB.batch(statements);
   return c.json({ ok: true });
 });
+/**
+ * A Customer Portal link. With a plan, it opens straight on the confirmation of that plan change and
+ * returns to the app by itself once confirmed (the plain portal only shows a "back" link, so people stayed
+ * in Stripe and the app never refreshed). Falls back to the plain portal if the flow is not possible.
+ */
+async function portalUrl(e: Env, request: Request, customer: string, plan?: (typeof paidPlans)[number] | null) {
+  const s = stripe(e), back = origin(e, request) + "/app/billing?portal=1";
+  const price = plan ? priceIds(e)[plan] : undefined;
+  if (price) {
+    try {
+      const sub = (await s.subscriptions.list({ customer, status: "active", limit: 1 })).data[0];
+      const item = sub?.items.data[0];
+      if (sub && item && sub.items.data.length === 1 && item.price.id !== price)
+        return (await s.billingPortal.sessions.create({
+          customer, return_url: back,
+          flow_data: {
+            type: "subscription_update_confirm",
+            subscription_update_confirm: { subscription: sub.id, items: [{ id: item.id, price, quantity: 1 }] },
+            after_completion: { type: "redirect", redirect: { return_url: back } },
+          },
+        })).url;
+    } catch {
+      console.error("Plan change flow unavailable; opening the Customer Portal", { plan });
+    }
+  }
+  return (await s.billingPortal.sessions.create({ customer, return_url: back })).url;
+}
 billing.post("/portal", async (c) => {
   const u = c.get("user");
   if (!u.stripe_customer)
     throw new HTTPException(400, {
       message: "Все още нямате платен абонамент.",
     });
-  return c.json({
-    url: (
-      await stripe(c.env).billingPortal.sessions.create({
-        customer: u.stripe_customer,
-        return_url: origin(c.env, c.req.raw) + "/app/billing?portal=1",
-      })
-    ).url,
-  });
+  const body = await c.req.json().catch(() => ({}));
+  const plan = z.object({ plan: z.enum(paidPlans) }).safeParse(body);
+  return c.json({ url: await portalUrl(c.env, c.req.raw, u.stripe_customer, plan.success ? plan.data.plan : null) });
 });
 /** The plan of a Stripe price: a configured STRIPE_PRICE_*, or (for older/replaced prices) its lookup key or metadata.plan. */
 function planOf(e: Env, price: Stripe.Price | undefined): PlanId | undefined {

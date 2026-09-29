@@ -114,3 +114,36 @@ it("re-reads the customer's subscriptions from Stripe on return from the portal"
   const me = await (await worker.fetch(new Request("https://rechbg.com/api/auth/me", { headers: { Cookie: "rech_session=session" } }), env, { waitUntil: () => {} } as any)).json() as any;
   expect(me.user).toMatchObject({ plan: "studio", limit: 250000 });
 });
+function portal(body: unknown) {
+  return worker.fetch(new Request("https://rechbg.com/api/billing/portal", {
+    method: "POST", headers: { Origin: "https://rechbg.com", Cookie: "rech_session=session", "Content-Type": "application/json" }, body: JSON.stringify(body),
+  }), env, { waitUntil: () => {} } as any);
+}
+it("opens the plan change confirmation and returns to the app by itself", async () => {
+  env.STRIPE_PRICE_STARTER = "price_starter";
+  const sub = { id: "sub_1", object: "subscription", status: "active", items: { data: [{ id: "si_1", price: { id: "price_starter" } }] } };
+  const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.includes("/v1/subscriptions")) return Response.json({ object: "list", data: [sub], has_more: false });
+    if (url.includes("/v1/billing_portal/sessions")) return Response.json({ id: "bps_1", url: "https://billing.stripe.com/p/session/1", body: String(init?.body) });
+    throw new Error("Unexpected " + url);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  const r = await portal({ plan: "creator" });
+  expect((await r.json() as any).url).toBe("https://billing.stripe.com/p/session/1");
+  const body = decodeURIComponent(String(fetchMock.mock.calls.find(c => String(c[0]).includes("billing_portal"))![1]!.body));
+  expect(body).toContain("flow_data[type]=subscription_update_confirm");
+  expect(body).toContain("flow_data[subscription_update_confirm][items][0][price]=price_creator");
+  expect(body).toContain("flow_data[after_completion][redirect][return_url]=https://rechbg.com/app/billing?portal=1");
+});
+it("falls back to the plain portal when the plan change flow is not possible", async () => {
+  const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.includes("/v1/subscriptions")) return Response.json({ object: "list", data: [], has_more: false });
+    if (url.includes("/v1/billing_portal/sessions")) return Response.json({ id: "bps_2", url: "https://billing.stripe.com/p/session/2", body: String(init?.body) });
+    throw new Error("Unexpected " + url);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  const r = await portal({ plan: "creator" });
+  expect((await r.json() as any).url).toBe("https://billing.stripe.com/p/session/2");
+  const body = decodeURIComponent(String(fetchMock.mock.calls.at(-1)![1]!.body));
+  expect(body).not.toContain("flow_data");
+});

@@ -125,11 +125,14 @@ export function Pricing({ inApp = false }: { inApp?: boolean }) {
   // Remembered once, so the return marker can leave the address (a reload or revisit does not repeat the check).
   const [returned] = useState(() => params.has("success") || params.has("portal"));
   useEffect(() => {
-    if (!inApp || !returned) return;
+    // The server skips this for accounts that never paid.
+    if (!inApp) return;
     if (params.has("success") || params.has("portal")) setParams({}, { replace: true });
-    let attempts = 0;
-    // Read the subscription from Stripe right away, so a new or changed plan shows without waiting for its webhook.
+    // Every visit reads the subscription from Stripe, so a plan changed in Stripe (even without returning
+    // through our link, or with a late webhook) shows here.
     void post("/billing/sync", {}).catch(() => {}).finally(() => void refresh());
+    if (!returned) return;
+    let attempts = 0;
     const timer = setInterval(() => {
       void refresh();
       if (++attempts >= 12) clearInterval(timer);
@@ -226,14 +229,19 @@ export function Pricing({ inApp = false }: { inApp?: boolean }) {
             <Button
               onClick={() => choose(p.id)}
               busy={busy === p.id}
+              disabled={inApp && user?.hasSubscription && user.plan === p.id}
               className={"btn " + (p.id === "creator" ? "primary" : "outline")}
             >
               {user?.hasSubscription
-                ? "Управление на плана"
+                ? user.plan === p.id
+                  ? "Текущ план"
+                  : p.id === "free"
+                    ? "Прекратяване на абонамента"
+                    : "Премини към " + p.name
                 : p.id === "free"
                   ? "Опитайте безплатно"
                   : "Изберете " + p.name}
-              <ArrowUpRight size={16} />
+              {!(user?.hasSubscription && user.plan === p.id) && <ArrowUpRight size={16} />}
             </Button>
             <ul>
               {p.features.map((f) => (
