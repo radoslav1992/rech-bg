@@ -199,7 +199,7 @@ media.delete("/assets/:id", async (c) => {
   )
     throw new HTTPException(409, { message: "Изчакайте текущия запис." });
   const claim = await c.env.DB.prepare(
-    "UPDATE media_assets SET status='deleting',expires_at=? WHERE id=? AND NOT EXISTS(SELECT 1 FROM media_tasks WHERE user_id=? AND status IN ('queued','running')) AND NOT EXISTS(SELECT 1 FROM jobs WHERE user_id=? AND status IN ('queued','running'))",
+    "UPDATE media_assets SET status='deleting',expires_at=? WHERE id=? AND NOT EXISTS(SELECT 1 FROM media_tasks WHERE user_id=? AND status IN ('queued','running')) AND NOT EXISTS(SELECT 1 FROM jobs WHERE user_id=? AND status IN ('queued','running')) AND NOT EXISTS(SELECT 1 FROM ai_tasks WHERE (source_asset_id=?2 OR output_asset_id=?2) AND status IN ('queued','running'))",
   )
     .bind(now(), id, user, user)
     .run();

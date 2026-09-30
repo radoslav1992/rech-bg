@@ -8,7 +8,7 @@ export interface Env {
     run: (model: string, input: Record<string, unknown>) => Promise<unknown>;
   };
   GENERATION: Workflow<{ jobId: string }>;
-  VIDEO_GENERATION?: Workflow<{ jobId: string }>;
+  VIDEO_GENERATION?: Workflow<{ jobId?: string; toolTaskId?: string }>;
   ELEVENLABS_API_KEY?: string;
   ELEVENLABS_VOICES?: string;
   STUDIO_SCRIPT_MODEL?: string;

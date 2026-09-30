@@ -11,6 +11,7 @@ import { hasVideoCredential, savedVideoProvider, type VideoProvider } from "./vi
 import { providerFailure, VideoFailure, videoFailureMessage, type VideoStage } from "./video-errors";
 import { videoFetch } from "./video-http";
 import { notifyVideo } from "./video-notifications";
+import { runToolTask } from "./tools-workflow";
 
 const FAST_POLLS = 180, SLOW_POLLS = 60;
 const HEYGEN_IDEMPOTENCY_WINDOW = 20 * 3600;
@@ -52,11 +53,11 @@ async function fetchOutput(url: string, signal: AbortSignal) {
   }
   throw new VideoFailure("DOWNLOAD", "MEDIA");
 }
-export async function storeVideo(env: Env, key: string, url: string) {
+export async function storeVideo(env: Env, key: string, url: string, maxBytes = 300 * 1024 * 1024) {
   const r = await fetchOutput(url, AbortSignal.timeout(240000));
   if (!r.ok || !r.body) throw new VideoFailure("DOWNLOAD", "MEDIA", r.status);
   // A 2-minute 1080p avatar video can exceed 100 MB.
-  const limit = 300 * 1024 * 1024;
+  const limit = maxBytes;
   if (Number(r.headers.get("Content-Length")) > limit) { await r.body.cancel(); throw new Error("Video too large"); }
   const upload = await env.AUDIO.createMultipartUpload(key, { httpMetadata: { contentType: "video/mp4" } });
   const reader = r.body.getReader();
@@ -96,9 +97,11 @@ export function transientStatusError(e: unknown) {
   const status = Number(m[2]);
   return m[1] === "CAPACITY" || m[1] === "TIMEOUT" || status === 429 || status >= 500;
 }
-export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> {
-  async run(event: WorkflowEvent<{ jobId: string }>, step: WorkflowStep) {
-    const id = event.payload.jobId;
+export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId?: string; toolTaskId?: string }> {
+  async run(event: WorkflowEvent<{ jobId?: string; toolTaskId?: string }>, step: WorkflowStep) {
+    // Media tools (dubbing) share this Workflow: the same provider polling, saving and refunds.
+    if (event.payload.toolTaskId) return runToolTask(this.env, event.payload.toolTaskId, step);
+    const id = event.payload.jobId!;
     let ticket: Ticket | undefined;
     let stage: VideoStage = "LOAD";
     try {

@@ -106,16 +106,16 @@ export async function maintainMedia(e: Env) {
     .run();
   const assets = (
     await e.DB.prepare(
-      "SELECT * FROM media_assets WHERE expires_at<=? AND NOT EXISTS(SELECT 1 FROM media_tasks WHERE user_id=media_assets.user_id AND status IN ('queued','running')) AND NOT EXISTS(SELECT 1 FROM jobs WHERE user_id=media_assets.user_id AND status IN ('queued','running')) ORDER BY expires_at LIMIT 100",
+      "SELECT * FROM media_assets WHERE expires_at<=? AND NOT EXISTS(SELECT 1 FROM media_tasks WHERE user_id=media_assets.user_id AND status IN ('queued','running')) AND NOT EXISTS(SELECT 1 FROM jobs WHERE user_id=media_assets.user_id AND status IN ('queued','running')) AND NOT EXISTS(SELECT 1 FROM ai_tasks WHERE user_id=media_assets.user_id AND status IN ('queued','running')) ORDER BY expires_at LIMIT 100",
     )
       .bind(now())
       .all<any>()
   ).results;
   for (const a of assets) {
     const claimed = await e.DB.prepare(
-      "UPDATE media_assets SET status='deleting' WHERE id=? AND expires_at<=? AND NOT EXISTS(SELECT 1 FROM media_tasks WHERE user_id=? AND status IN ('queued','running')) AND NOT EXISTS(SELECT 1 FROM jobs WHERE user_id=? AND status IN ('queued','running'))",
+      "UPDATE media_assets SET status='deleting' WHERE id=? AND expires_at<=? AND NOT EXISTS(SELECT 1 FROM media_tasks WHERE user_id=? AND status IN ('queued','running')) AND NOT EXISTS(SELECT 1 FROM jobs WHERE user_id=? AND status IN ('queued','running')) AND NOT EXISTS(SELECT 1 FROM ai_tasks WHERE user_id=? AND status IN ('queued','running'))",
     )
-      .bind(a.id, now(), a.user_id, a.user_id)
+      .bind(a.id, now(), a.user_id, a.user_id, a.user_id)
       .run();
     if (!claimed.meta.changes) continue;
     if (a.upload_id) {
