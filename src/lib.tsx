@@ -20,6 +20,8 @@ export type User = {
   limit: number;
   periodEnd: number | null;
   hasSubscription: boolean;
+  /** The plan is a free month given by an administrator (until periodEnd). */
+  granted?: boolean;
 };
 export type Voice = (typeof voiceList)[number] & { sampleUrl?: string };
 export type Project = {

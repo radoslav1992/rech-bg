@@ -18,7 +18,9 @@ export function stripe(env: Env) {
   });
 }
 export const RENEWAL_GRACE = 3 * DAY;
-const paidPlans = ["starter", "creator", "studio"] as const;
+export const paidPlans = ["starter", "creator", "studio"] as const;
+/** Subscriptions an administrator granted (testers, partners): no Stripe behind them, see plan-grants.ts. */
+export const GRANT_PREFIX = "grant_";
 /** Identifies a trial across account deletion without keeping the address itself. */
 export const trialKey = (email: string) => sha("trial:" + email.trim().toLowerCase());
 function priceIds(e: Env): Record<(typeof paidPlans)[number], string | undefined> {
@@ -29,11 +31,14 @@ function priceIds(e: Env): Record<(typeof paidPlans)[number], string | undefined
   };
 }
 export async function allowance(e: Env, u: DbUser) {
+  // A running grant wins over a paid subscription (a tester on Начало gets the granted plan); after it ends,
+  // the paid one applies again.
   const sub = await e.DB.prepare(
-    "SELECT * FROM subscriptions WHERE user_id=? AND status IN ('active','trialing','past_due','unpaid','incomplete') ORDER BY status='active' DESC, period_end DESC LIMIT 1",
+    "SELECT * FROM subscriptions WHERE user_id=? AND status IN ('active','trialing','past_due','unpaid','incomplete') ORDER BY status='active' DESC, (substr(id,1,6)=? AND period_end>?) DESC, period_end DESC LIMIT 1",
   )
-    .bind(u.id)
+    .bind(u.id, GRANT_PREFIX, now())
     .first<any>();
+  const granted = !!sub && String(sub.id).startsWith(GRANT_PREFIX);
   // A renewing subscription keeps its last paid period until Stripe confirms the new invoice.
   const active =
     sub &&
@@ -62,7 +67,12 @@ export async function allowance(e: Env, u: DbUser) {
     limit: usage?.quota || plan.chars,
     window,
     periodEnd: active ? sub.period_end : null,
-    hasSubscription: !!sub,
+    // Only a Stripe subscription can be managed in the Customer Portal.
+    hasSubscription: granted
+      ? !!(await e.DB.prepare("SELECT id FROM subscriptions WHERE user_id=? AND substr(id,1,6)!=? AND status IN ('active','trialing','past_due','unpaid','incomplete') LIMIT 1").bind(u.id, GRANT_PREFIX).first())
+      : !!sub,
+    /** The plan is an administrator's grant (until periodEnd), not a paid subscription. */
+    granted: granted && !!active,
   };
 }
 billing.post("/checkout", async (c) => {
