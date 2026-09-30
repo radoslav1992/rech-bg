@@ -118,6 +118,7 @@ export function AvatarModal({ open, selected, onClose, onSelect, linkedAvatars =
  * "Моите аватари": photos turned once into reusable video avatars. Creating one costs credits once;
  * every later video only references it.
  */
+const createKey = { current: crypto.randomUUID() };
 function SavedAvatars({ my, portraits, isSelected, choose, onPortraitUploaded }: {
   my: MyAvatars; portraits: MediaAsset[];
   isSelected: (p: ProjectPortrait) => boolean; choose: (p: ProjectPortrait) => void; onPortraitUploaded: () => Promise<void> | void;
@@ -126,7 +127,8 @@ function SavedAvatars({ my, portraits, isSelected, choose, onPortraitUploaded }:
   const [source, setSource] = useState<string>(""), [file, setFile] = useState<File | null>(null), [preview, setPreview] = useState("");
   const [name, setName] = useState(""), [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState(""), [error, setError] = useState(""), [done, setDone] = useState("");
-  const key = useRef(crypto.randomUUID());
+  // Kept while the page is open (not per dialog), so a retry after a lost response is the same request.
+  const key = createKey;
   useEffect(() => {
     if (!file) { setPreview(source ? `/api/media/assets/${source}/file` : ""); return; }
     const url = URL.createObjectURL(file); setPreview(url);
@@ -142,11 +144,16 @@ function SavedAvatars({ my, portraits, isSelected, choose, onPortraitUploaded }:
       body.set("name", name.trim()); body.set("idempotencyKey", key.current); body.set("credits", String(my.credits)); body.set("consent", String(consent));
       if (file) body.set("image", file); else body.set("assetId", source);
       await api("/my-avatars", { method: "POST", body });
-      key.current = crypto.randomUUID();
+      createKey.current = crypto.randomUUID();
       setDone("Аватарът се създава — обикновено 1–2 минути. Ще можете да го изберете, щом е готов.");
       setName(""); setFile(null); setSource(""); setConsent(false);
       await Promise.all([my.reload(), refresh(), onPortraitUploaded()]);
-    } catch (e) { setError((e as Error).message); await my.reload(); }
+    } catch (e) {
+      // The server answered (e.g. the photo was refused): the next attempt is a new request. A network error
+      // keeps the key, so retrying cannot create (and charge) a second avatar.
+      if (!(e instanceof TypeError)) createKey.current = crypto.randomUUID();
+      setError((e as Error).message); await my.reload();
+    }
     finally { setBusy(""); }
   };
   const remove = async (id: string, label: string) => {

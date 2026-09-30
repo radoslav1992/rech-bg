@@ -51,6 +51,17 @@ describe("plan grants", () => {
     expect(await me()).toMatchObject({ plan: "studio", used: 0, limit: 250000 });
     expect((sqlite.prepare("SELECT period_end FROM subscriptions WHERE id=?").get(first.id) as any).period_end).toBeLessThanOrEqual(now());
   });
+  it("never hide a higher plan the customer pays for, and an ended grant never hides a paid plan", async () => {
+    const r = await (await call("/admin/grants", "admin", { email: "tester@example.com", plan: "starter" })).json() as any;
+    expect(await me()).toMatchObject({ plan: "starter", granted: true });
+    // The tester buys Студио while the Начало grant runs: Студио applies.
+    sqlite.prepare("INSERT INTO subscriptions(id,user_id,plan,status,period_start,period_end,cancel_at_period_end,event_created) VALUES('sub_2','t','studio','active',?,?,0,0)").run(now() - 60, now() + 30 * 86400);
+    expect(await me()).toMatchObject({ plan: "studio", granted: false, hasSubscription: true });
+    // A paid plan in its renewal grace (period just ended) is not hidden by a grant that ended later.
+    sqlite.prepare("UPDATE subscriptions SET period_end=? WHERE id='sub_2'").run(now() - 3600);
+    sqlite.prepare("UPDATE subscriptions SET period_end=? WHERE id=?").run(now() - 60, r.id);
+    expect(await me()).toMatchObject({ plan: "studio", paymentIssue: true });
+  });
   it("win over a paid plan while they run, and the paid plan returns after", async () => {
     sqlite.prepare("INSERT INTO subscriptions(id,user_id,plan,status,period_start,period_end,cancel_at_period_end,event_created) VALUES('sub_1','t','starter','active',1,?,0,0)").run(now() + 20 * 86400);
     const r = await (await call("/admin/grants", "admin", { email: "tester@example.com", plan: "studio" })).json() as any;

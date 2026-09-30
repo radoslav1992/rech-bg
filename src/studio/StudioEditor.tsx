@@ -139,7 +139,13 @@ function Editor({ projectId }: { projectId: string }) {
   useEffect(() => {
     if (!doc || !jobsLoaded) return;
     const changes = doc.scenes.map((_, i) => adoptedMedia(doc, i, media[i]));
-    if (changes.some(Boolean)) update((d) => ({ ...d, scenes: d.scenes.map((s, i) => changes[i] && s.id === doc.scenes[i].id ? { ...s, ...changes[i] } : s) }));
+    if (changes.some(Boolean)) update((d) => ({ ...d, scenes: d.scenes.map((s, i) => {
+      const change = changes[i];
+      if (!change || s.id !== doc.scenes[i].id) return s;
+      // A recording adopted from the server (e.g. made just before the editor closed) joins the scene's history.
+      const history = change.audioJobId && !s.history.includes(change.audioJobId) ? [change.audioJobId, ...s.history].slice(0, 20) : s.history;
+      return { ...s, ...change, history };
+    }) }));
   }, [doc, media, jobsLoaded]);
   // Scenes written by the AI on the new project page.
   useEffect(() => {
@@ -357,7 +363,7 @@ function Editor({ projectId }: { projectId: string }) {
   const saveAll = async () => { await captions.flush(); await project.flush(); };
 
   useEffect(() => {
-    const pending = project.saveState !== "saved" || captions.saveState === "dirty" || captions.saveState === "saving" || sending !== null;
+    const pending = project.saveState !== "saved" || captions.saveState !== "saved" || sending !== null;
     if (!pending) return;
     const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); };
     window.addEventListener("beforeunload", warn);

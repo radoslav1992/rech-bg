@@ -178,6 +178,13 @@ export function Pricing({ inApp = false }: { inApp?: boolean }) {
           потвърждение. Ако не се отрази, презаредете след малко.
         </Notice>
       )}
+      {inApp && user?.paymentIssue && (
+        <Notice error>
+          Последното плащане за абонамента не премина. Stripe ще опита отново — обновете картата от „Управление и фактури“,
+          за да запазите плана.{" "}
+          <Button onClick={() => choose("portal")} busy={busy === "portal"} className="btn outline">Обнови картата</Button>
+        </Notice>
+      )}
       {inApp && user?.granted && user.periodEnd && (
         <Notice good>
           Имате безплатен достъп до плана „{plans.find((p) => p.id === user.plan)?.name || user.plan}“ до{" "}

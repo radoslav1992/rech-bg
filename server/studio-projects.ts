@@ -167,7 +167,8 @@ async function renderPlan(e: Env, user: DbUser, projectId: string) {
   const intro = await bumper(stored.document.intro, "Интро: ");
   const outro = await bumper(stored.document.outro, "Финал: ");
   let offset = intro?.seconds || 0;
-  // A filmed clip without a paid transcription makes the export paid, as for any uploaded video.
+  // A filmed clip makes the export paid, as for any uploaded video, unless its transcription was paid for and has
+  // not covered a free export yet (captions typed in by hand cost nothing, so they do not count).
   let untranscribed = false;
   for (const [i, scene] of stored.document.scenes.entries()) {
     const label = stored.document.scenes.length > 1 ? `Сцена ${i + 1}: ` : "";
@@ -183,7 +184,11 @@ async function renderPlan(e: Env, user: DbUser, projectId: string) {
       if (keep && !keep.length) throw new HTTPException(400, { message: `${label}Монтажът изряза цялото видео.` });
       const source = validDocument(asset.captions ? JSON.parse(asset.captions) : defaultCaptions, asset.duration);
       clip = { keep, clean: scene.clip.clean };
-      if (!asset.captions) untranscribed = true;
+      const transcribed = await e.DB.prepare("SELECT id FROM media_tasks WHERE user_id=? AND source_id=? AND kind='transcribe' AND status='completed' LIMIT 1")
+        .bind(user.id, scene.clip.assetId).first();
+      const freeExport = await e.DB.prepare("SELECT id FROM media_tasks WHERE user_id=? AND kind='export' AND credits=0 AND status IN ('queued','running','completed') AND instr(payload,?)>0 LIMIT 1")
+        .bind(user.id, JSON.stringify(asset.object_key)).first();
+      if (!transcribed || freeExport) untranscribed = true;
       audio = { audio_key: asset.object_key, duration: keptDuration(keep, asset.duration) };
       video = { key: asset.object_key };
       captions = { ...source, words: cutWords(source.words, keep) };

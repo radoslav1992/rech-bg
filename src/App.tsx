@@ -233,6 +233,12 @@ function Shell() {
             <Link to="/app/settings">Изпрати ново писмо</Link>
           </div>
         )}
+        {user.paymentIssue && (
+          <div className="verify-banner" role="alert">
+            Последното плащане за абонамента не премина.{" "}
+            <Link to="/app/billing">Обновете картата</Link>, за да запазите плана.
+          </div>
+        )}
         <JobActivity key={user.id}><Boundary><Outlet /></Boundary></JobActivity>
         <footer className="app-footer"><SiteContact /></footer>
       </main>

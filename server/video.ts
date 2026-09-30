@@ -67,15 +67,16 @@ videos.post("/", async (c) => {
   const user = c.get("user");
   if (!user.verified) throw new HTTPException(403, { message: "Потвърдете имейла си, за да създадете видео." });
   if (!c.env.VIDEO_GENERATION) throw new HTTPException(503, { message: "Създаването на видео ще бъде достъпно скоро." });
-  await rate(c, "video", 20, 3600, user.id);
   const form = await c.req.formData();
   const d = z.object({ sourceId: z.uuid(), idempotencyKey: z.uuid(), tier: z.enum(["low", "medium", "high"]), credits: z.coerce.number().int().positive() })
     .parse(Object.fromEntries(form));
+  // A retry of an accepted request gets its job even when the hourly limit is reached.
   const previous = await findByIdempotencyKey<{ id: string; kind: string }>(c.env, "jobs", user.id, d.idempotencyKey, "id,kind");
   if (previous) {
     if (previous.kind !== "video") throw new HTTPException(409, { message: "Невалидна заявка. Обновете страницата." });
     return c.json({ id: previous.id });
   }
+  await rate(c, "video", 20, 3600, user.id);
   // The trial and Начало do not have the credits for a video; they are audio only.
   const a = await allowance(c.env, user);
   if (!canCreateVideo(a.plan)) throw new HTTPException(403, { message: `${VIDEO_PLAN_MESSAGE} Изберете по-висок план.` });

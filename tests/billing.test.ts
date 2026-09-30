@@ -183,13 +183,15 @@ describe("Signed Stripe lifecycle", () => {
     await webhook(await event("invoice.paid", { subscription: "sub_1" }, "evt_paid", now() - 5), env);
     expect((await allowance(env, u)).plan).toBe("creator");
   });
-  it("keeps the paid plan while an upgrade invoice is being paid, then applies the new plan", async () => {
-    let sub: any = subscription();
+  it("keeps the paid plan while an upgrade invoice is being paid, then adds the unused share of the new plan", async () => {
+    // Half of the period is left when the customer upgrades from Създател (100 000) to Студио (250 000).
+    const start = now() - 15 * 86400, end = now() + 15 * 86400;
+    let sub: any = subscription({ items: { data: [{ id: "si_1", price: { id: "price_creator" }, current_period_start: start, current_period_end: end }] } });
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(sub), { headers: { "Content-Type": "application/json" } })));
     await webhook(await event("invoice.paid", { subscription: "sub_1" }), env);
     const u = sqlite.prepare("SELECT * FROM users").get() as any;
     expect((await allowance(env, u)).plan).toBe("creator");
-    const upgraded = { data: [{ id: "si_1", price: { id: "price_studio" }, current_period_start: 100, current_period_end: now() + 100000 }] };
+    const upgraded = { data: [{ id: "si_1", price: { id: "price_studio" }, current_period_start: start, current_period_end: end }] };
     sub = subscription({ items: upgraded, latest_invoice: { id: "in_up", status: "open", billing_reason: "subscription_update" } });
     await webhook(await event("customer.subscription.updated", { id: "sub_1" }, "evt_up", now() + 1), env);
     // Not dropped to the trial while the upgrade invoice is open.
@@ -197,7 +199,24 @@ describe("Signed Stripe lifecycle", () => {
     sub = subscription({ items: upgraded, latest_invoice: { id: "in_up", status: "paid", billing_reason: "subscription_update" } });
     await webhook(await event("invoice.paid", { subscription: "sub_1" }, "evt_up_paid", now() + 2), env);
     const a = await allowance(env, u);
-    expect(a.plan).toBe("studio"); expect(a.limit).toBe(250000);
+    expect(a.plan).toBe("studio");
+    expect(a.limit).toBeGreaterThan(174000); expect(a.limit).toBeLessThan(176000);
+    // Asking again does not add more; the next period starts with the full allowance.
+    expect((await allowance(env, u)).limit).toBe(a.limit);
+  });
+  it("keeps the paid plan while Stripe retries a failed renewal, and reports the payment problem", async () => {
+    let sub: any = subscription({ items: { data: [{ id: "si_1", price: { id: "price_creator" }, current_period_start: 100, current_period_end: now() - 3600 }] } });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(sub), { headers: { "Content-Type": "application/json" } })));
+    await webhook(await event("invoice.paid", { subscription: "sub_1" }), env);
+    const u = sqlite.prepare("SELECT * FROM users").get() as any;
+    const next = { data: [{ id: "si_1", price: { id: "price_creator" }, current_period_start: now() - 3600, current_period_end: now() + 30 * 86400 }] };
+    sub = subscription({ status: "past_due", items: next, latest_invoice: { id: "in_2", status: "open", billing_reason: "subscription_cycle" } });
+    await webhook(await event("invoice.payment_failed", { subscription: "sub_1" }, "evt_fail", now() + 1), env);
+    const a = await allowance(env, u);
+    expect(a).toMatchObject({ plan: "creator", paymentIssue: true, hasSubscription: true });
+    sub = subscription({ items: next, latest_invoice: { id: "in_2", status: "paid", billing_reason: "subscription_cycle" } });
+    await webhook(await event("invoice.paid", { subscription: "sub_1" }, "evt_paid", now() + 2), env);
+    expect(await allowance(env, u)).toMatchObject({ plan: "creator", paymentIssue: false });
   });
   it("reports a price that is not a configured plan instead of silently ignoring it", async () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});

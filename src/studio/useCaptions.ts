@@ -24,18 +24,26 @@ export function useCaptions(audioIds: string[]) {
         .catch(() => { requested.current.delete(id); });
     }
   }, [key, version]);
-  const save = useCallback(async () => {
+  // One save at a time: two PUTs for one recording could arrive out of order, and an export must wait for the
+  // save in flight, not only for edits still waiting.
+  const inflight = useRef<Promise<void> | null>(null);
+  const save = useCallback(async (): Promise<void> => {
+    while (inflight.current) await inflight.current.catch(() => {});
     if (!pending.current.size) return;
     const batch = [...pending.current];
     pending.current.clear(); setSaveState("saving");
-    try {
-      await Promise.all(batch.map(([id, doc]) => api(endpoint(id), { method: "PUT", body: JSON.stringify(doc) })));
-      setSaveState(pending.current.size ? "dirty" : "saved"); setError("");
-    } catch (e) {
-      for (const [id, doc] of batch) if (!pending.current.has(id)) pending.current.set(id, doc);
-      setSaveState("error"); setError((e as Error).message);
-      throw e;
-    }
+    const run = (async () => {
+      try {
+        await Promise.all(batch.map(([id, doc]) => api(endpoint(id), { method: "PUT", body: JSON.stringify(doc) })));
+        setSaveState(pending.current.size ? "dirty" : "saved"); setError("");
+      } catch (e) {
+        for (const [id, doc] of batch) if (!pending.current.has(id)) pending.current.set(id, doc);
+        setSaveState("error"); setError((e as Error).message);
+        throw e;
+      }
+    })();
+    inflight.current = run;
+    try { await run; } finally { if (inflight.current === run) inflight.current = null; }
   }, []);
   useEffect(() => {
     if (saveState !== "dirty") return;
@@ -68,6 +76,10 @@ export function useCaptions(audioIds: string[]) {
   }, []);
   /** Reloads documents changed elsewhere (e.g. the brand look applied on the server). */
   const reload = useCallback(() => { requested.current.clear(); setDocs({}); setVersion((v) => v + 1); }, []);
-  const flush = useCallback(async () => { await save(); }, [save]);
+  const flush = useCallback(async () => {
+    await save();
+    // Edits made while the previous save was running.
+    if (pending.current.size) await save();
+  }, [save]);
   return { docs, edit, editAll, saveState, error, flush, reload };
 }

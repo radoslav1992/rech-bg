@@ -22,6 +22,8 @@ export type User = {
   hasSubscription: boolean;
   /** The plan is a free month given by an administrator (until periodEnd). */
   granted?: boolean;
+  /** The latest payment of the paid subscription has not gone through (Stripe is retrying the card). */
+  paymentIssue?: boolean;
 };
 export type Voice = (typeof voiceList)[number] & { sampleUrl?: string };
 export type Project = {
@@ -44,6 +46,8 @@ export type Job = {
   mode?: string;
   video_tier?: "low" | "medium" | "high" | "standard" | "quality";
   source_job_id?: string;
+  /** The studio scene a recording was made for. */
+  scene_id?: string | null;
   id: string;
   project_id: string;
   title: string;
