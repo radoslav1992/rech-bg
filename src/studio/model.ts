@@ -82,7 +82,7 @@ export function shownCaptions(doc: ProjectDoc, docs: Record<string, CaptionDocum
   const out = { ...docs };
   for (const s of doc.scenes) {
     const source = s.clip && docs[assetCaptionKey(s.clip.assetId)];
-    if (s.clip && source) out[`cut:${s.id}`] = { ...source, words: cutWords(source.words, s.clip.keep) };
+    if (s.clip && source) out[`cut:${s.id}`] = { ...source, ...(doc.captionLook || {}), words: cutWords(source.words, s.clip.keep) };
   }
   return out;
 }

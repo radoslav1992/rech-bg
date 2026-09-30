@@ -85,11 +85,16 @@ export type MyAvatars = ReturnType<typeof useMyAvatars>;
 export function useMyAvatars() {
   const [data, setData] = useState<{ avatars: UserAvatar[]; enabled: boolean; credits: number; max: number } | null>(null), [error, setError] = useState("");
   const reload = useCallback(async () => {
-    try { setData(await api("/my-avatars")); setError(""); }
+    try {
+      const d = await api<{ avatars?: UserAvatar[]; enabled?: boolean; credits?: number; max?: number }>("/my-avatars");
+      // Never let an unexpected answer take the editor down.
+      setData({ avatars: Array.isArray(d?.avatars) ? d.avatars : [], enabled: !!d?.enabled, credits: Number(d?.credits) || 0, max: Number(d?.max) || 0 });
+      setError("");
+    }
     catch (e) { setError((e as Error).message); }
   }, []);
   useEffect(() => { void reload(); }, [reload]);
-  const creating = !!data?.avatars.some((a) => a.status === "processing");
+  const creating = !!data?.avatars?.some((a) => a.status === "processing");
   useEffect(() => {
     if (!creating) return;
     const timer = window.setInterval(() => { if (!document.hidden) void reload(); }, 8000);

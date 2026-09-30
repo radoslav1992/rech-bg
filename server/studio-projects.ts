@@ -191,7 +191,8 @@ async function renderPlan(e: Env, user: DbUser, projectId: string) {
       if (!transcribed || freeExport) untranscribed = true;
       audio = { audio_key: asset.object_key, duration: keptDuration(keep, asset.duration) };
       video = { key: asset.object_key };
-      captions = { ...source, words: cutWords(source.words, keep) };
+      // The project's look (format, style, framing) wins over the one saved with the clip's transcript.
+      captions = { ...source, ...(stored.document.captionLook || {}), words: cutWords(source.words, keep) };
     } else {
       if (!scene.audioJobId || !scene.videoJobId)
         throw new HTTPException(400, { message: `${label}Експортът се отключва, когато видео аватарът е готов.` });

@@ -1,4 +1,5 @@
 import { avatars, avatarInputs } from "./avatars";
+import { shorts } from "./shorts";
 import { tools, toolInputs } from "./ai-tools";
 import { userAvatars, userAvatarInputs } from "./user-avatars";
 import { Hono } from "hono";
@@ -111,6 +112,7 @@ app.route("/api/video-studio", studio);
 app.route("/api/media", media);
 app.route("/api/avatars", avatars);
 app.route("/api/my-avatars", userAvatars);
+app.route("/api/tools/shorts", shorts);
 app.route("/api/tools", tools);
 app.route("/", projects);
 app.route("/", jobs);

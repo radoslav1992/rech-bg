@@ -204,3 +204,21 @@
 .media-tool-body { display: grid; gap: 12px; }
 .media-tool-body label { display: grid; gap: 6px; font-weight: 600; }
 .media-tool-body .checkbox-label { display: flex; align-items: flex-start; gap: 8px; font-weight: 500; }
+.shorts-tool { display: grid; gap: 12px; }
+.shorts-tool label { display: grid; gap: 6px; font-weight: 600; }
+.shorts-tool > .btn { justify-self: start; display: inline-flex; align-items: center; gap: 6px; }
+.shorts-step { border: 1px solid #d9def7; background: #f5f6ff; border-radius: 12px; padding: 12px; display: grid; gap: 8px; }
+.shorts-step p { margin: 0; display: flex; gap: 6px; align-items: flex-start; }
+.shorts-step .btn { justify-self: start; }
+.shorts-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
+.shorts-clip { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 14px; border: 1px solid #e0e4db; border-radius: 14px; padding: 12px; }
+.shorts-clip video { width: 150px; aspect-ratio: 9 / 16; object-fit: cover; border-radius: 10px; background: #10140f; }
+.shorts-clip > div { display: grid; gap: 4px; align-content: start; min-width: 0; }
+.shorts-clip strong { font-size: 16px; }
+.shorts-clip small { color: #5d665a; }
+.shorts-hook { margin: 4px 0 0; font-weight: 600; color: #3140b8; font-size: 13.5px; }
+.shorts-text { margin: 0; font-size: 13.5px; line-height: 1.5; color: #454d42; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.shorts-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; align-items: center; }
+.shorts-actions .btn { display: inline-flex; align-items: center; gap: 6px; }
+.shorts-status { font-size: 13px; font-weight: 600; color: #3d5a26; }
+@media (max-width: 600px) { .shorts-clip { grid-template-columns: 1fr; } .shorts-clip video { width: 100%; max-width: 220px; justify-self: center; } }

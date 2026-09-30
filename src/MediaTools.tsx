@@ -14,6 +14,7 @@ import {
 import type { CaptionDocument } from "../shared/captions";
 import { CaptionEditor } from "./CaptionEditor";
 import { DubbingTool } from "./DubbingTool";
+import { ShortsTool } from "./ShortsTool";
 import { Modal } from "./studio/Modal";
 import "./studio/studio.css";
 import "./media-tools.css";
@@ -550,7 +551,7 @@ const toolCards: ToolCard[] = [
   { id: "captions", icon: Captions, title: "Субтитри", text: "Разпознаване на речта, редакция на думите и видео с вградени субтитри.", price: "1 000 кредита / минута" },
   { id: "dubbing", icon: Languages, title: "Превод с дублаж", text: "Видеото на друг език — със същите гласове и движение на устните.", price: "от 100 кредита / секунда" },
   { id: "product", icon: Package, title: "Аватар с продукт", text: "Лице и продукт в една композиция за говорещо видео.", price: "Цена според броя варианти" },
-  { id: "shorts", icon: Scissors, title: "Кратки клипове", text: "Най-силните моменти от дълго видео — вертикално и със субтитри.", price: "", soon: true },
+  { id: "shorts", icon: Scissors, title: "Кратки клипове", text: "Най-силните моменти от дълго видео — вертикално и със субтитри.", price: "Търсене без заплащане · 500 кредита / минута клип" },
   { id: "revoice", icon: Mic, title: "Преозвучаване", text: "Сменете думите в заснето видео — нов глас и движение на устните.", price: "", soon: true },
 ];
 export function MediaTools() {
@@ -750,6 +751,9 @@ export function MediaTools() {
           </Modal>
           <Modal open={tool === "dubbing"} title="Превод с дублаж" onClose={closeTool} wide>
             <DubbingTool assets={data?.assets || []} onDone={reload} initialAsset={params.get("asset") || ""} />
+          </Modal>
+          <Modal open={tool === "shorts"} title="Кратки клипове" onClose={closeTool} wide>
+            <ShortsTool assets={data?.assets || []} onChange={reload} />
           </Modal>
           <Modal open={tool === "product"} title="Аватар с продукт" onClose={closeTool} wide>
             <ProductAvatarPanel />
