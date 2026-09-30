@@ -34,7 +34,7 @@ export function ClipPicker({ assets, value, onPick }: { assets: MediaAsset[]; va
     </label>
     <label className="checkbox-label"><input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} /> Имам право да обработвам това видео и съдържанието му.</label>
     <label className={`btn tl-upload${!consent || progress !== null ? " disabled" : ""}`}><Upload size={15} /> {progress !== null ? `Качване · ${progress}%` : "Качи ново видео"}
-      <input type="file" hidden disabled={!consent || progress !== null} accept="video/mp4,video/quicktime,video/webm"
+      <input type="file" hidden style={{ display: "none" }} disabled={!consent || progress !== null} accept="video/mp4,video/quicktime,video/webm"
         onChange={(e) => { void upload(e.target.files?.[0]); e.target.value = ""; }} />
     </label>
     <small className="st-fine">MP4, MOV или WebM до 500 MB и 10 минути. Качените видеа се проверяват автоматично.</small>

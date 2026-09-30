@@ -155,3 +155,23 @@
 .st-written { display: grid; gap: 8px; padding: 0; margin: 4px 0 10px; list-style: none; counter-reset: written; }
 .st-written li { border: 1px solid var(--st-line); border-radius: 10px; padding: 10px 12px; background: #fff; }
 .st-written p { margin: 4px 0 0; font-size: 14px; line-height: 1.5; white-space: pre-wrap; }
+.st-avatar-needed { border: 1px solid #d9def7; background: #f5f6ff; border-radius: 12px; padding: 10px 12px; margin: 4px 0 10px; }
+.st-avatar-needed p { margin: 0 0 8px; font-size: 13px; line-height: 1.45; }
+.st-avatar-needed .btn { display: inline-flex; align-items: center; gap: 6px; }
+.st-tiers button:disabled small:last-child { font-weight: 650; }
+.st-my-avatar { position: relative; min-width: 0; }
+.st-my-avatar .st-avatar { width: 100%; }
+.st-my-avatar .st-avatar:disabled { cursor: default; opacity: .75; }
+.st-my-avatar-remove { position: absolute; top: 12px; right: 12px; z-index: 1; width: 28px; height: 28px; border-radius: 99px; border: 0; background: #ffffffe6; color: #b42318; display: grid; place-items: center; cursor: pointer; }
+.st-avatar-status { align-self: flex-start; font-size: 10.5px; font-weight: 650; padding: 1px 7px; border-radius: 99px; background: #eef2e6; color: #3d5a26; }
+.st-avatar-status.processing { background: #fff5d6; color: #7a5b00; }
+.st-avatar-status.failed { background: #fde8e6; color: #b42318; }
+.st-create-avatar { border: 1px solid #e0e4db; border-radius: 14px; padding: 14px; margin-top: 8px; display: grid; gap: 4px; }
+.st-create-avatar h3 { margin: 0 0 6px; font-size: 15px; display: flex; align-items: center; gap: 6px; }
+.st-create-avatar-photo { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.st-create-avatar-photo img { width: 72px; height: 96px; object-fit: cover; border-radius: 10px; background: #eef1e8; }
+.st-modal .checkbox-label, .st-inspector-body .checkbox-label { display: flex; align-items: flex-start; gap: 8px; font-weight: 500; }
+.st-modal .checkbox-label input { margin-top: 3px; flex: 0 0 auto; }
+.st-create-avatar .tl-upload, .st-clip-picker .tl-upload { display: inline-flex; align-items: center; gap: 6px; justify-self: start; cursor: pointer; font-weight: 600; }
+.st-create-avatar-photo > div { display: grid; gap: 8px; min-width: 0; flex: 1 1 220px; }
+.st-create-avatar-photo label { margin: 0; }

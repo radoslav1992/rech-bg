@@ -33,7 +33,7 @@ Cloudflare creates the `MEDIA_GENERATION` Workflow binding and `MEDIA_RENDERER` 
 | Additional background export | 500 / started minute |
 | Redownload an existing output / SRT / VTT / local browser export | Free |
 
-Existing speech and avatar video rates are unchanged. Product images use `fal-ai/nano-banana-pro/edit`, 1K JPEG, `num_images=2` or `4`, and private temporary input URLs. Only still-image composition is purchased at that step: subsequent avatar video is charged separately, using the existing 300 / 900 / 1800 credits per started second. No provider/model names are shown in the product controls.
+Existing speech and avatar video rates are unchanged. Product images use `fal-ai/nano-banana-pro/edit`, 1K JPEG, `num_images=2` or `4`, and private temporary input URLs. Only still-image composition is purchased at that step: subsequent avatar video is charged separately, using the video rates (150 / 400 / 1200 credits per started second). No provider/model names are shown in the product controls.
 
 | Plan | Media space | Completed recordings/exports |
 | --- | ---: | ---: |

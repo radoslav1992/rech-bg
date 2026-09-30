@@ -110,18 +110,18 @@ export function AvatarLibraryAdmin() {
   </section>;
 }
 
-const heygenLabel = { processing: "създава се", ready: "готов за Средно качество", failed: "неуспешен" } as const;
+const heygenLabel = { processing: "създава се", ready: "готов за видео", failed: "неуспешен" } as const;
 /**
- * Links a library avatar to one reusable HeyGen photo avatar, used for Medium quality (Avatar III) when the
- * server has VIDEO_MEDIUM=heygen. Paste the ID of an avatar already in the HeyGen account, or create it once here.
+ * Links a library avatar to one reusable HeyGen photo avatar, used for every video when VIDEO_PROVIDER=heygen
+ * (Low: Avatar III, Medium: Avatar IV). Paste the ID of an avatar already in the HeyGen account, or create it once here.
  */
 function HeyGenLink({ avatar, act }: { avatar: LibraryAvatar; act: (fn: () => Promise<void>) => Promise<void> }) {
   const [lookId, setLookId] = useState(avatar.heygenLookId || "");
   const status = avatar.heygenStatus;
   const call = (path: string, init: RequestInit) => act(async () => { await api(`/admin/avatars/${avatar.id}/heygen${path}`, init); });
   return <div className="avatar-heygen">
-    <h3>HeyGen · Средно качество</h3>
-    <p>{status ? `Свързан с HeyGen аватар ${avatar.heygenLookId} · ${heygenLabel[status]}.` : "Не е свързан с HeyGen."} Един аватар в HeyGen се използва за всички видеа със Средно качество — без ново създаване при всяко видео.</p>
+    <h3>HeyGen · готов за видео</h3>
+    <p>{status ? `Свързан с HeyGen аватар ${avatar.heygenLookId} · ${heygenLabel[status]}.` : "Не е свързан с HeyGen."} Един аватар в HeyGen се използва за всички видеа (Ниско и Средно качество) — без ново създаване при всяко видео.</p>
     <label>ID на аватар (look) в HeyGen<input value={lookId} maxLength={160} placeholder="Напр. 1a2b3c4d…" onChange={e => setLookId(e.target.value.trim())} /></label>
     <div className="avatar-admin-actions">
       <Button className="btn" disabled={!lookId || lookId === avatar.heygenLookId} onClick={() => void call("", { method: "PUT", body: JSON.stringify({ lookId }) })}>Свържи този ID</Button>

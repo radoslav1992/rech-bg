@@ -4,6 +4,7 @@ import worker from "../server/index";
 import { database, bucket } from "./helpers";
 import { now } from "../server/types";
 import { sha } from "../server/security";
+import { videoCredits, type VideoTier } from "../shared/video";
 
 let env: any, sqlite: ReturnType<typeof database>["sqlite"];
 const photo = readFileSync(new URL("../public/images/avatar-library/mila.jpg", import.meta.url));
@@ -87,13 +88,13 @@ it("creates a normal video input copy from a library portrait without extra libr
   const portrait = await request("/avatars/mila/image");
   expect(sqlite.prepare("SELECT used FROM usage_windows").get()!.used).toBe(0);
   const form = new FormData();
-  Object.entries({sourceId:source,tier:"medium",credits:"4500",consent:"true",idempotencyKey:crypto.randomUUID()}).forEach(([k,v])=>form.set(k,v));
+  Object.entries({sourceId:source,tier:"medium",credits:"2000",consent:"true",idempotencyKey:crypto.randomUUID()}).forEach(([k,v])=>form.set(k,v));
   form.set("image",await portrait.blob(),"Мила.jpg");
   const response = await request("/videos",form,"POST"); expect(response.status).toBe(202);
   const id = (await response.json() as any).id;
   const meta = JSON.parse(sqlite.prepare("SELECT video_meta FROM jobs WHERE id=?").get(id)!.video_meta as string);
   expect(meta.imageMime).toBe("image/jpeg"); expect(meta.imageKey).toContain(`segments/u/${id}/`);
-  expect(sqlite.prepare("SELECT used FROM usage_windows").get()!.used).toBe(4500);
+  expect(sqlite.prepare("SELECT used FROM usage_windows").get()!.used).toBe(2000);
   await request("/admin/avatars/mila",undefined,"DELETE");
   expect((await request("/avatars/mila/image")).status).toBe(404);
   expect(await env.AUDIO.head(meta.imageKey)).not.toBeNull();
@@ -108,7 +109,7 @@ function videoSource(duration = 10) {
 }
 function videoForm(source: string, tier: string, extra: Record<string, string>) {
   const form = new FormData();
-  Object.entries({ sourceId: source, tier, credits: tier === "medium" ? "9000" : "18000", consent: "true", idempotencyKey: crypto.randomUUID(), ...extra }).forEach(([k, v]) => form.set(k, v));
+  Object.entries({ sourceId: source, tier, credits: String(videoCredits(10, tier as VideoTier)), consent: "true", idempotencyKey: crypto.randomUUID(), ...extra }).forEach(([k, v]) => form.set(k, v));
   return form;
 }
 const look = (id: string, status = "completed", engines = ["avatar_iii", "avatar_iv"]) =>
@@ -166,10 +167,34 @@ it("creates a HeyGen avatar once from the library portrait through a short-lived
     expect(fetchMock.mock.calls.filter(c => c[1]?.method === "POST")).toHaveLength(1);
   } finally { vi.unstubAllGlobals(); }
 });
+it("with VIDEO_PROVIDER=heygen, Low (Avatar III) and Medium (Avatar IV) use saved library avatars only", async () => {
+  env.VIDEO_PROVIDER = "heygen"; env.HEYGEN_API_KEY = "heygen-secret";
+  const source = await videoSource();
+  expect((await request("/videos", videoForm(source, "low", { libraryAvatarId: "mila" }), "POST")).status).toBe(400);
+  // Linked with only Avatar III: Medium (Avatar IV) is refused before any credits are reserved.
+  vi.stubGlobal("fetch", vi.fn(async () => look("look_1", "completed", ["avatar_iii"])));
+  try { expect((await request("/admin/avatars/mila/heygen", { lookId: "look_1" }, "PUT")).status).toBe(200); }
+  finally { vi.unstubAllGlobals(); }
+  expect((await request("/videos", videoForm(source, "medium", { libraryAvatarId: "mila" }), "POST")).status).toBe(400);
+  expect(sqlite.prepare("SELECT used FROM usage_windows").get()!.used).toBe(0);
+  const low = await request("/videos", videoForm(source, "low", { libraryAvatarId: "mila" }), "POST");
+  expect(low.status).toBe(202);
+  const lowMeta = JSON.parse(sqlite.prepare("SELECT video_meta FROM jobs WHERE id=?").get((await low.json() as any).id)!.video_meta as string);
+  expect(lowMeta).toMatchObject({ provider: "heygen", engine: "avatar_iii", heygenAvatar: { lookId: "look_1" } });
+  expect(sqlite.prepare("SELECT used FROM usage_windows").get()!.used).toBe(1500);
+  sqlite.prepare("UPDATE jobs SET status='completed' WHERE kind='video'").run();
+  vi.stubGlobal("fetch", vi.fn(async () => look("look_2")));
+  try { expect((await request("/admin/avatars/boris/heygen", { lookId: "look_2" }, "PUT")).status).toBe(200); }
+  finally { vi.unstubAllGlobals(); }
+  const medium = await request("/videos", videoForm(await videoSource(), "medium", { libraryAvatarId: "boris" }), "POST");
+  expect(medium.status).toBe(202);
+  const meta = JSON.parse(sqlite.prepare("SELECT video_meta FROM jobs WHERE id=?").get((await medium.json() as any).id)!.video_meta as string);
+  expect(meta).toMatchObject({ engine: "avatar_iv", heygenAvatar: { lookId: "look_2" } });
+});
 it("with VIDEO_MEDIUM=heygen, Medium takes only linked library avatars and reuses their HeyGen avatar", async () => {
   env.VIDEO_MEDIUM = "heygen"; env.HEYGEN_API_KEY = "heygen-secret";
   const config = await (await request("/videos/config")).json() as any;
-  expect(config.mediumLibraryOnly).toBe(true); expect(config.tiers.medium.enabled).toBe(true);
+  expect(config.tiers.medium).toMatchObject({ enabled: true, needsAvatar: true }); expect(config.tiers.high.needsAvatar).toBe(false);
   const source = await videoSource();
   const portrait = await (await request("/avatars/mila/image")).blob();
   // An own portrait, or an avatar without a HeyGen link, cannot use Medium.
@@ -184,8 +209,9 @@ it("with VIDEO_MEDIUM=heygen, Medium takes only linked library avatars and reuse
   expect(accepted.status).toBe(202);
   const id = (await accepted.json() as any).id;
   const meta = JSON.parse(sqlite.prepare("SELECT video_meta FROM jobs WHERE id=?").get(id)!.video_meta as string);
-  expect(meta).toMatchObject({ provider: "heygen", tier: "medium", avatar: "mila", heygenAvatar: { lookId: "look_1", groupId: "group_1" }, imageMime: "image/jpeg" });
-  expect(await env.AUDIO.head(meta.imageKey)).not.toBeNull();
+  // The saved avatar is only referenced: no photo is copied for the video.
+  expect(meta).toMatchObject({ provider: "heygen", tier: "medium", avatar: "mila", heygenAvatar: { lookId: "look_1", groupId: "group_1" }, engine: "avatar_iii" });
+  expect(meta.imageKey).toBeUndefined();
   // High still takes any library avatar (sent by ID; the server reads the portrait).
   sqlite.prepare("UPDATE jobs SET status='completed' WHERE id=?").run(id);
   const high = await request("/videos", videoForm(await videoSource(), "high", { libraryAvatarId: "boris" }), "POST");
