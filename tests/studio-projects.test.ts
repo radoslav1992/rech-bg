@@ -227,6 +227,8 @@ describe("multi-scene projects", () => {
     expect(r.status).toBe(202);
     const id = (await r.json() as any).id;
     expect(sqlite.prepare("SELECT script,voice,title FROM jobs WHERE id=?").get(id)).toEqual({ script, voice: "studio-boris", title: "Видео · Сцена 2" });
+    // The recording names its scene, so the editor can place it even if the project was not saved afterwards.
+    expect(((await (await call(`/jobs?project=${project}`)).json()) as any).jobs.find((j: any) => j.id === id).scene_id).toBe(d.scenes[1].id);
     expect((await call("/generate", "POST", { projectId: project, idempotencyKey: crypto.randomUUID(), credits: 3, sceneId: crypto.randomUUID() })).status).toBe(404);
   });
   it("renders all scenes in order as one video with music across them and each scene's captions", async () => {
@@ -273,7 +275,10 @@ describe("filmed scenes", () => {
     asset.run(otherFilm, "other", `media/other/${otherFilm}/original`, "x.mp4", "upload", "video/mp4", 8, null, now() + 86400);
   });
   const filmed = (clip: any) => { const d = doc({ audioJobId: null, videoJobId: null, portrait: null, clip } as any, false); return d; };
+  const transcribed = (assetId: string) => sqlite.prepare("INSERT INTO media_tasks(id,user_id,kind,source_id,idempotency_key,window_id,credits,status,payload,token,created_at,updated_at) VALUES(?,'u','transcribe',?,?,'w',1000,'completed','{}','t',1,1)")
+    .run(crypto.randomUUID(), assetId, crypto.randomUUID());
   it("renders a filmed scene with its own sound, the kept parts and captions moved onto the cut clock", async () => {
+    transcribed(film);
     expect((await save(filmed({ assetId: otherFilm, keep: null, clean: false }), 0)).status).toBe(400);
     const keep = [[0.38, 1.2], [3.88, 4.8]];
     expect((await save(filmed({ assetId: film, keep, clean: true }), 0)).status).toBe(200);
@@ -281,7 +286,7 @@ describe("filmed scenes", () => {
     // 1.5 s lead-in + (0.82 + 0.92) s kept + 2 s hold
     expect(quote).toEqual({ credits: 0, length: 5.24 });
     expect((await call(`/video-studio/projects/${project}/render`, "POST", { idempotencyKey: crypto.randomUUID(), credits: 0 })).status).toBe(202);
-    const task = sqlite.prepare("SELECT * FROM media_tasks").get() as any;
+    const task = sqlite.prepare("SELECT * FROM media_tasks WHERE kind='export'").get() as any;
     expect(task.source_id).toBe(project);
     const payload = JSON.parse(task.payload);
     expect(payload.inputs).toEqual([`media/u/${film}/original`, `media/u/${film}/original`]);
@@ -289,6 +294,17 @@ describe("filmed scenes", () => {
     // "ъъъ" was cut; "приятели" moved from 4 s to 0.82 + 0.12 s.
     expect(payload.captions[0].document.words).toEqual([{ text: "Здравейте", start: 0.12, end: 0.62 }, { text: "приятели", start: 0.94, end: 1.54 }]);
     expect(payload.document.style).toBe("bold");
+  });
+  it("counts a paid transcription for one free export only, and never captions typed in by hand", async () => {
+    // Captions exist (e.g. typed in), but no transcription was paid for.
+    expect((await save(filmed({ assetId: film, keep: null, clean: false }), 0)).status).toBe(200);
+    expect(await (await call(`/video-studio/projects/${project}/render/quote`)).json()).toEqual({ credits: 500, length: 11.5 });
+    transcribed(film);
+    expect(await (await call(`/video-studio/projects/${project}/render/quote`)).json()).toEqual({ credits: 0, length: 11.5 });
+    // The free export used up: another project with the same clip pays.
+    sqlite.prepare("INSERT INTO media_tasks(id,user_id,kind,source_id,idempotency_key,window_id,credits,status,payload,token,created_at,updated_at) VALUES(?,'u','export',?,?,'w',0,'completed',?,'t',1,1)")
+      .run(crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID(), JSON.stringify({ inputs: [`media/u/${film}/original`] }));
+    expect(await (await call(`/video-studio/projects/${project}/render/quote`)).json()).toEqual({ credits: 500, length: 11.5 });
   });
   it("charges the export of a filmed clip that was never transcribed, as for any uploaded video", async () => {
     sqlite.prepare("UPDATE media_assets SET captions=NULL WHERE id=?").run(film);

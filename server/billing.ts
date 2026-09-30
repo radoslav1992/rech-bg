@@ -31,14 +31,19 @@ function priceIds(e: Env): Record<(typeof paidPlans)[number], string | undefined
   };
 }
 export async function allowance(e: Env, u: DbUser) {
-  // A running grant wins over a paid subscription (a tester on Начало gets the granted plan); after it ends,
-  // the paid one applies again.
-  const sub = await e.DB.prepare(
-    "SELECT * FROM subscriptions WHERE user_id=? AND status IN ('active','trialing','past_due','unpaid','incomplete') ORDER BY status='active' DESC, (substr(id,1,6)=? AND period_end>?) DESC, period_end DESC LIMIT 1",
+  // Ended grants never count. A running grant wins over a paid subscription unless the customer pays for a higher
+  // plan (a tester on Начало gets the granted plan; someone who then buys Студио gets Студио).
+  const rows = (await e.DB.prepare(
+    "SELECT * FROM subscriptions WHERE user_id=?1 AND status IN ('active','trialing','past_due','unpaid','incomplete') AND NOT (substr(id,1,6)=?2 AND period_end<=?3) ORDER BY status='active' DESC, period_end DESC LIMIT 10",
   )
     .bind(u.id, GRANT_PREFIX, now())
-    .first<any>();
-  const granted = !!sub && String(sub.id).startsWith(GRANT_PREFIX);
+    .all<any>()).results;
+  const rank = (plan: string) => plans.findIndex((p) => p.id === plan);
+  const grant = rows.find((r) => String(r.id).startsWith(GRANT_PREFIX));
+  const paid = rows.find((r) => !String(r.id).startsWith(GRANT_PREFIX));
+  const paidActive = paid?.status === "active" && paid.period_end + (paid.cancel_at_period_end ? 0 : RENEWAL_GRACE) > now();
+  const sub = grant && !(paidActive && rank(paid.plan) > rank(grant.plan)) ? grant : paid || null;
+  const granted = !!sub && sub === grant;
   // A renewing subscription keeps its last paid period until Stripe confirms the new invoice.
   const active =
     sub &&
@@ -49,12 +54,16 @@ export async function allowance(e: Env, u: DbUser) {
   const window = active
     ? `${u.id}:${sub.id}:${sub.period_start}`
     : `${u.id}:trial`;
-  // Same plan: never shrink (keeps manual grants). Plan change inside a period: use the new plan's allowance.
+  // Same plan: keep the window's quota (a manual increase, or a prorated upgrade, stays). A downgrade inside a period uses the new plan's allowance; an
+  // upgrade adds only the unused share of the difference, so upgrading on the last day does not unlock a full
+  // month of the bigger plan for a small prorated charge.
   // A new trial window starts from what a deleted account with the same email already used.
+  const left = active && !granted && sub.period_end > sub.period_start
+    ? Math.min(1, Math.max(0, (sub.period_end - now()) / (sub.period_end - sub.period_start))) : 1;
   await e.DB.prepare(
-    "INSERT INTO usage_windows(id,user_id,quota,plan,used) VALUES (?1,?2,?3,?4,CASE WHEN ?4='free' THEN COALESCE((SELECT used FROM trial_history WHERE email_hash=?5),0) ELSE 0 END) ON CONFLICT(id) DO UPDATE SET quota=CASE WHEN usage_windows.plan IS NULL OR usage_windows.plan=excluded.plan THEN MAX(usage_windows.quota,excluded.quota) ELSE excluded.quota END,plan=excluded.plan",
+    "INSERT INTO usage_windows(id,user_id,quota,plan,used) VALUES (?1,?2,?3,?4,CASE WHEN ?4='free' THEN COALESCE((SELECT used FROM trial_history WHERE email_hash=?5),0) ELSE 0 END) ON CONFLICT(id) DO UPDATE SET quota=CASE WHEN usage_windows.plan IS NULL THEN MAX(usage_windows.quota,excluded.quota) WHEN usage_windows.plan=excluded.plan THEN usage_windows.quota WHEN excluded.quota>usage_windows.quota THEN usage_windows.quota+CAST((excluded.quota-usage_windows.quota)*?6 AS INTEGER) ELSE excluded.quota END,plan=excluded.plan",
   )
-    .bind(window, u.id, plan.chars, plan.id, await trialKey(u.email))
+    .bind(window, u.id, plan.chars, plan.id, await trialKey(u.email), left)
     .run();
   const usage = await e.DB.prepare(
     "SELECT used,quota FROM usage_windows WHERE id=?",
@@ -73,6 +82,8 @@ export async function allowance(e: Env, u: DbUser) {
       : !!sub,
     /** The plan is an administrator's grant (until periodEnd), not a paid subscription. */
     granted: granted && !!active,
+    /** A paid subscription whose latest payment has not gone through (renewal grace or already lapsed). */
+    paymentIssue: !!paid && !granted && (paid.status !== "active" || paid.period_end < now()),
   };
 }
 billing.post("/checkout", async (c) => {
@@ -253,7 +264,8 @@ async function subscriptionStatements(e: Env, sub: Stripe.Subscription, userId: 
   const unpaid = sub.status === "active" && (!invoice || typeof invoice !== "object" || invoice.status !== "paid");
   // A renewal or plan-change invoice is draft/open for a moment. Keep the stored, paid state (allowance()
   // grants a grace period on renewal) until it is paid, instead of dropping the customer to the trial.
-  const pending = unpaid && typeof invoice === "object" &&
+  // Stripe marks a subscription past_due at the first failed attempt and keeps retrying the card for days.
+  const pending = (unpaid || sub.status === "past_due") && typeof invoice === "object" &&
     ["subscription_cycle", "subscription_update"].includes(invoice?.billing_reason || "") &&
     !!(await e.DB.prepare("SELECT id FROM subscriptions WHERE id=? AND status='active'").bind(sub.id).first());
   if (pending) return [];

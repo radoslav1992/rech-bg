@@ -13,6 +13,7 @@ import {
 } from "../shared/media";
 import type { CaptionDocument } from "../shared/captions";
 import { CaptionEditor } from "./CaptionEditor";
+import { DubbingTool } from "./DubbingTool";
 import "./media-tools.css";
 import "./video-studio.css";
 
@@ -704,6 +705,7 @@ export function MediaTools() {
               uploaded
             />
           )}
+          <DubbingTool assets={data?.assets || []} onDone={reload} />
           <ProductAvatarPanel />
           <section className="vs-card">
             <h2>Вашите файлове</h2>

@@ -30,9 +30,11 @@ export function sceneMedia(doc: ProjectDoc, index: number, jobs: Job[]): SceneMe
   const owned = (id: string) => doc.scenes.some((s) => s.history.includes(id) || s.audioJobId === id);
   // Recordings made before scenes existed belong to the first scene. Only in such a project (no scene has
   // its own recordings yet): otherwise an unowned recording is one of a deleted scene, with another script.
+  // A recording made for a scene says so (scene_id): it belongs to that scene even if the editor closed before
+  // the project was saved, and never to another one.
   const legacy = index === 0 && doc.scenes.every((s) => !s.history.length);
   const audios = jobs
-    .filter((j) => j.kind !== "video" && (scene.history.includes(j.id) || scene.audioJobId === j.id || (legacy && !owned(j.id))))
+    .filter((j) => j.kind !== "video" && (scene.history.includes(j.id) || scene.audioJobId === j.id || j.scene_id === scene.id || (legacy && !j.scene_id && !owned(j.id))))
     .sort(newest);
   const audio = audios.find((j) => j.id === scene.audioJobId) || null;
   const videos = jobs.filter((j) => j.kind === "video" && audios.some((a) => a.id === j.source_job_id)).sort(newest);
@@ -48,6 +50,11 @@ export function sceneMedia(doc: ProjectDoc, index: number, jobs: Job[]): SceneMe
  */
 export function adoptedMedia(doc: ProjectDoc, index: number, media: SceneMedia): { audioJobId: string | null; videoJobId: string | null } | null {
   const scene = doc.scenes[index];
+  // A newer recording made for this scene that the project never saved (the editor closed in between) is the
+  // one the user asked for.
+  const unsaved = media.audios.find((j) => j.scene_id === scene.id && j.id !== scene.audioJobId && !scene.history.includes(j.id) && j.status !== "failed"
+    && (!media.audio || j.created_at >= media.audio.created_at));
+  if (unsaved) return { audioJobId: unsaved.id, videoJobId: null };
   const audio = media.audio ?? media.audios.find((j) => j.status === "completed") ?? null;
   if (!audio) return null;
   const forAudio = media.videos.filter((v) => v.source_job_id === audio.id);

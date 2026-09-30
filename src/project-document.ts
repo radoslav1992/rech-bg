@@ -23,7 +23,7 @@ export function useProjectDocument(projectId: string | undefined) {
   const [doc, setDoc] = useState<ProjectDoc | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [error, setError] = useState(""), [conflict, setConflict] = useState("");
-  const state = useRef({ projectId, revision: 0, pending: null as ProjectDoc | null, saving: false, loaded: false, failed: false });
+  const state = useRef({ projectId, revision: 0, pending: null as ProjectDoc | null, saving: false, loaded: false, failed: false, conflicted: false });
   const save = useCallback(async (leaving = false): Promise<void> => {
     const s = state.current, id = s.projectId;
     if (!id || s.saving || !s.pending || !s.loaded) return;
@@ -34,13 +34,14 @@ export function useProjectDocument(projectId: string | undefined) {
       const payload = JSON.stringify({ document: next, revision: s.revision });
       const r = await fetch("/api" + endpoint(id), {
         method: "PUT", headers: { "Content-Type": "application/json" }, body: payload,
-        // keepalive lets a save finish while the page closes, but browsers reject bodies over 64 KB with it.
-        keepalive: leaving && payload.length < 60000,
+        // keepalive lets a save finish while the page closes, but browsers reject bodies over 64 KB with it
+        // (bytes: Cyrillic takes two per character).
+        keepalive: leaving && new TextEncoder().encode(payload).length < 60000,
       });
       const body: any = await r.json().catch(() => ({}));
       if (state.current.projectId !== id) return;
       if (r.status === 409) {
-        s.revision = body.revision; s.pending = null;
+        s.revision = body.revision; s.pending = null; s.conflicted = true;
         const latest = normalize(body.document);
         if (latest) setDoc(latest);
         setConflict(body.error || ""); setSaveState("saved");
@@ -66,7 +67,7 @@ export function useProjectDocument(projectId: string | undefined) {
     }
   }, []);
   useEffect(() => {
-    state.current = { projectId, revision: 0, pending: null, saving: false, loaded: false, failed: false };
+    state.current = { projectId, revision: 0, pending: null, saving: false, loaded: false, failed: false, conflicted: false };
     setDoc(null); setError(""); setConflict(""); setSaveState("saved");
     if (!projectId) return;
     let live = true;
@@ -80,7 +81,12 @@ export function useProjectDocument(projectId: string | undefined) {
     }).catch(e => live && setError((e as Error).message));
     const flush = () => { void save(true); };
     window.addEventListener("pagehide", flush);
-    return () => { live = false; window.removeEventListener("pagehide", flush); void save(true); };
+    // Leaving the editor (not the page): save now and retry a few times, since nothing else will.
+    const s = state.current;
+    const detached = (tries: number): Promise<void> => save().then(() => {
+      if (s.pending && tries > 0 && state.current === s) return new Promise<void>((r) => setTimeout(r, 2000)).then(() => detached(tries - 1));
+    });
+    return () => { live = false; window.removeEventListener("pagehide", flush); void detached(3); };
   }, [projectId, save]);
   // Debounced autosave; a failed save retries on the next edit or after a longer pause.
   useEffect(() => {
@@ -93,7 +99,7 @@ export function useProjectDocument(projectId: string | undefined) {
       if (!current) return current;
       const next = change(current);
       if (next === current) return current;
-      state.current.pending = next; state.current.failed = false;
+      state.current.pending = next; state.current.failed = false; state.current.conflicted = false;
       setSaveState("dirty"); setConflict("");
       return next;
     });
@@ -105,6 +111,8 @@ export function useProjectDocument(projectId: string | undefined) {
       if (state.current.saving || state.current.pending) await new Promise(r => setTimeout(r, 200));
     }
     if (state.current.pending || state.current.failed) throw new Error("Проектът не беше запазен. Опитайте отново.");
+    // Another tab saved first and this view was replaced: let the user look at it before paying for anything.
+    if (state.current.conflicted) { state.current.conflicted = false; throw new Error("Проектът беше променен в друг прозорец и изгледът е обновен. Прегледайте го и опитайте отново."); }
   }, [save]);
   return { doc, update, flush, saveState, error, conflict };
 }

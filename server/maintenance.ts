@@ -1,4 +1,5 @@
 import type { Env } from "./types";
+import { failTool } from "./ai-tools";
 import { now, MINUTE, HOUR, DAY } from "./types";
 import { notifyVideo } from "./video-notifications";
 import { cleanupHeyGenAvatars } from "./video-heygen-avatar";
@@ -78,6 +79,32 @@ export async function maintenance(e: Env) {
     }
   });
   await stage("heygen", () => cleanupHeyGenAvatars(e));
+  await stage("tools", () => reconcileTools(e));
+}
+/** Media tools (dubbing): re-dispatch a task whose Workflow never started, fail one that is stuck (refunded). */
+async function reconcileTools(e: Env) {
+  if (!e.VIDEO_GENERATION) return;
+  const tasks = (await e.DB.prepare("SELECT id,status,created_at FROM ai_tasks WHERE status IN ('queued','running') AND updated_at<? LIMIT 50")
+    .bind(now() - 10 * MINUTE).all<{ id: string; status: string; created_at: number }>()).results;
+  for (const t of tasks) {
+    const expired = t.created_at < now() - JOB_CEILING;
+    try {
+      const instance = await e.VIDEO_GENERATION.get(t.id);
+      const status = await instance.status();
+      if (["errored", "terminated", "complete"].includes(status.status)) await failTool(e, t.id, "Обработката беше прекъсната. Кредитите са върнати.");
+      else if (expired) {
+        try { await instance.terminate(); } catch { /* Already finished. */ }
+        console.error("Stuck tool task failed after the time limit", { taskId: t.id });
+        await failTool(e, t.id, "Обработката не завърши навреме. Кредитите са върнати.");
+      }
+    } catch {
+      if (expired) await failTool(e, t.id, "Обработката беше прекъсната. Кредитите са върнати.");
+      else if (t.status === "queued") {
+        try { await e.VIDEO_GENERATION.create({ id: t.id, params: { toolTaskId: t.id } }); }
+        catch { console.error("Tool reconciliation pending", { taskId: t.id }); }
+      }
+    }
+  }
 }
 // Longer than the slowest workflow (video: ~6 h of polling plus avatar preparation), so only
 // genuinely stuck jobs hit it. Stuck jobs otherwise hold credits and block all of the user's generation.

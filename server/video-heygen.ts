@@ -128,3 +128,48 @@ export async function getHeyGenVideo(env: Env, ticket: HeyGenTicket, stage: Vide
     default: throw new VideoFailure(stage, "PROVIDER");
   }
 }
+
+// Video Translation (dubbing): POST /v3/video-translations, then GET /v3/video-translations/{id}.
+const translations = "https://api.heygen.com/v3/video-translations";
+export type HeyGenTranslationTicket = { provider: "heygen"; kind: "translate"; request_id: string };
+export async function submitHeyGenTranslation(env: Env, id: string, video: string, language: string, mode: "speed" | "precision", audioOnly: boolean): Promise<HeyGenTranslationTicket> {
+  const response = await videoFetch(translations, {
+    method: "POST",
+    headers: { ...headers(env, "SUBMIT"), "Content-Type": "application/json", "Idempotency-Key": id },
+    body: JSON.stringify({ video: { type: "url", url: video }, output_languages: [language], mode, translate_audio_only: audioOnly, title: `Rech BG ${id}` }),
+    signal: AbortSignal.timeout(60000),
+  });
+  if (!response.ok) throw await providerFailure(response, "SUBMIT");
+  const body = await response.json() as any;
+  const ids = body?.data?.video_translation_ids;
+  if (body?.error || !Array.isArray(ids) || ids.length !== 1) throw new VideoFailure("SUBMIT", "PROVIDER");
+  return { provider: "heygen", kind: "translate", request_id: validId(ids[0]) };
+}
+export async function getHeyGenTranslation(env: Env, ticket: HeyGenTranslationTicket, stage: VideoStage = "STATUS") {
+  const response = await videoFetch(`${translations}/${validId(ticket.request_id)}`, { headers: headers(env, stage), signal: AbortSignal.timeout(45000) });
+  if (!response.ok) throw await providerFailure(response, stage);
+  const body = await response.json() as any;
+  const data = body?.data;
+  if (body?.error || !data) throw new VideoFailure(stage, "PROVIDER");
+  switch (data.status) {
+    case "pending":
+    case "queued":
+    case "waiting": return { status: "IN_QUEUE" as const };
+    case "running":
+    case "processing": return { status: "IN_PROGRESS" as const };
+    case "completed":
+    case "success":
+      if (typeof data.video_url !== "string" || !data.video_url) throw new VideoFailure(stage, "PROVIDER");
+      return { status: "COMPLETED" as const, url: data.video_url as string };
+    default: throw new VideoFailure(stage, data.failure_code === "moderation" || /moderat|policy/i.test(String(data.failure_message || "")) ? "CONTENT" : "PROVIDER");
+  }
+}
+/** Target languages HeyGen accepts (names such as "English" or "Spanish (Spain)"). */
+export async function listHeyGenLanguages(env: Env): Promise<string[]> {
+  const response = await videoFetch(`${translations}/languages`, { headers: headers(env, "LOAD"), signal: AbortSignal.timeout(20000) });
+  if (!response.ok) throw await providerFailure(response, "LOAD");
+  const body = await response.json() as any;
+  const list = body?.data?.languages;
+  if (!Array.isArray(list)) throw new VideoFailure("LOAD", "PROVIDER");
+  return list.filter((l: unknown): l is string => typeof l === "string" && l.length > 0 && l.length <= 80).slice(0, 400);
+}

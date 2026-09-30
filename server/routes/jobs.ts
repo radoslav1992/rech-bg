@@ -67,7 +67,7 @@ jobs.post("/api/generate", async (c) => {
   const id = uid();
   try {
     await c.env.DB.batch([c.env.DB.prepare(
-      "INSERT INTO jobs(id,user_id,project_id,window_id,idempotency_key,title,mode,script,voice,second_voice,pause_ms,chars,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      "INSERT INTO jobs(id,user_id,project_id,window_id,idempotency_key,title,mode,script,voice,second_voice,pause_ms,chars,created_at,updated_at,video_meta) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
     )
       .bind(
         id,
@@ -84,6 +84,9 @@ jobs.post("/api/generate", async (c) => {
         chars,
         now(),
         now(),
+        // The scene a studio recording belongs to, so it is never lost or given to another scene when the editor
+        // closes before it saves the project.
+        p.mode === "studio" && d.sceneId ? JSON.stringify({ sceneId: d.sceneId }) : null,
       ), ...(await jobStorage(c.env,u,id,p.title,"audio",audioReserveBytes(turns.reduce((s, t) => s + t.text.length, 0), turns.length, p.pause_ms)))
       ]);
   } catch (e) {
@@ -111,12 +114,14 @@ jobs.post("/api/generate", async (c) => {
   return c.json({ id }, 202);
 });
 export const publicJob = (j: any) => {
-  const meta = j.kind === "video" ? JSON.parse(j.video_meta || "{}") : {};
+  let meta: any = {};
+  try { meta = JSON.parse(j.video_meta || "{}") || {}; } catch { /* Never let one malformed row hide the list. */ }
   return ({
   id: j.id, project_id: j.project_id, title: j.title, status: j.status,
   chars: j.chars, duration: j.duration, created_at: j.created_at, error: j.error,
   kind: j.kind || "audio", video_tier: ["low", "medium", "high"].includes(meta.tier) ? meta.tier : j.video_tier || null,
   source_job_id: j.source_job_id || null, mode: j.mode,
+  scene_id: j.kind !== "video" && typeof meta.sceneId === "string" ? meta.sceneId : null,
   video_phase: ["preparing", "queued", "processing", "saving"].includes(meta.phase) ? meta.phase : null,
   notify_email: meta.notifyEmail === true,
   email_status: ["sending", "sent", "failed"].includes(meta.emailStatus) ? meta.emailStatus : null,

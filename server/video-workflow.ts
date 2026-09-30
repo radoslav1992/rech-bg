@@ -11,6 +11,7 @@ import { hasVideoCredential, savedVideoProvider, type VideoProvider } from "./vi
 import { providerFailure, VideoFailure, videoFailureMessage, type VideoStage } from "./video-errors";
 import { videoFetch } from "./video-http";
 import { notifyVideo } from "./video-notifications";
+import { runToolTask } from "./tools-workflow";
 
 const FAST_POLLS = 180, SLOW_POLLS = 60;
 const HEYGEN_IDEMPOTENCY_WINDOW = 20 * 3600;
@@ -52,11 +53,11 @@ async function fetchOutput(url: string, signal: AbortSignal) {
   }
   throw new VideoFailure("DOWNLOAD", "MEDIA");
 }
-export async function storeVideo(env: Env, key: string, url: string) {
+export async function storeVideo(env: Env, key: string, url: string, maxBytes = 300 * 1024 * 1024) {
   const r = await fetchOutput(url, AbortSignal.timeout(240000));
   if (!r.ok || !r.body) throw new VideoFailure("DOWNLOAD", "MEDIA", r.status);
   // A 2-minute 1080p avatar video can exceed 100 MB.
-  const limit = 300 * 1024 * 1024;
+  const limit = maxBytes;
   if (Number(r.headers.get("Content-Length")) > limit) { await r.body.cancel(); throw new Error("Video too large"); }
   const upload = await env.AUDIO.createMultipartUpload(key, { httpMetadata: { contentType: "video/mp4" } });
   const reader = r.body.getReader();
@@ -87,9 +88,20 @@ export async function storeVideo(env: Env, key: string, url: string) {
     await upload.complete(parts);
   } catch (e) { await reader.cancel().catch(() => {}); await upload.abort().catch(() => {}); throw e; }
 }
-export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> {
-  async run(event: WorkflowEvent<{ jobId: string }>, step: WorkflowStep) {
-    const id = event.payload.jobId;
+/** Errors that do not mean the video failed: rate limits, provider 5xx, timeouts and network failures. */
+export function transientStatusError(e: unknown) {
+  if (!(e instanceof Error)) return false;
+  if (["TimeoutError", "AbortError", "TypeError"].includes(e.name)) return true;
+  const m = /^VIDEO_[A-Z]+_([A-Z]+)_(\d{1,3})$/.exec(e.message);
+  if (!m) return false;
+  const status = Number(m[2]);
+  return m[1] === "CAPACITY" || m[1] === "TIMEOUT" || status === 429 || status >= 500;
+}
+export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId?: string; toolTaskId?: string }> {
+  async run(event: WorkflowEvent<{ jobId?: string; toolTaskId?: string }>, step: WorkflowStep) {
+    // Media tools (dubbing) share this Workflow: the same provider polling, saving and refunds.
+    if (event.payload.toolTaskId) return runToolTask(this.env, event.payload.toolTaskId, step);
+    const id = event.payload.jobId!;
     let ticket: Ticket | undefined;
     let stage: VideoStage = "LOAD";
     try {
@@ -164,13 +176,20 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> 
         await this.env.DB.prepare("UPDATE jobs SET provider_request=?,updated_at=? WHERE id=?").bind(JSON.stringify(t), now(), id).run();
         return t;
       });
-      let completed = false;
+      let completed = false, unknown = 0;
       stage = "STATUS";
       // ~1 hour at 20 s, then up to ~5 more hours at 5 min: a slow provider queue still finishes (and is
       // still billed), so give up only when a result is very unlikely.
       for (let i = 0; i < FAST_POLLS + SLOW_POLLS; i++) {
         const status = await step.do(`video-status-${i}`, { retries: { limit: 2, delay: "10 seconds" }, timeout: "2 minutes" }, async () => {
-          const s = await getVideo(this.env, ticket!, "STATUS");
+          let s;
+          try { s = await getVideo(this.env, ticket!, "STATUS"); }
+          catch (e) {
+            // A provider outage or network error says nothing about the video, which is still rendering (and billed):
+            // keep polling. Only a real failure reported by the provider ends the job.
+            if (transientStatusError(e)) return "UNKNOWN";
+            throw e;
+          }
           await this.env.DB.prepare("UPDATE jobs SET updated_at=? WHERE id=?").bind(now(), id).run();
           if (!["IN_QUEUE", "IN_PROGRESS", "COMPLETED"].includes(s.status)) throw new Error("Unexpected video status");
           await this.env.DB.prepare("UPDATE jobs SET video_meta=json_set(video_meta,'$.phase',?) WHERE id=?")
@@ -178,6 +197,10 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> 
           return s.status as string;
         });
         if (status === "COMPLETED") { completed = true; break; }
+        if (status === "UNKNOWN") {
+          // About 15 minutes without an answer: give up (the timeout log below asks for a manual review).
+          if (++unknown >= 45) { console.error("Video status unavailable; review for manual pickup", { jobId: id, provider: ticket.provider, requestId: ticket.request_id }); throw new VideoFailure("STATUS", "CAPACITY"); }
+        } else unknown = 0;
         await step.sleep(`video-wait-${i}`, i < FAST_POLLS ? "20 seconds" : "5 minutes");
       }
       if (!completed) {

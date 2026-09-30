@@ -363,6 +363,30 @@ describe("Configurable video providers", () => {
     expect(mock.mock.calls.filter(c => c[1]?.method === "POST")).toHaveLength(1);
     expect(mock.mock.calls.every(c => c[0].startsWith(heygenUrl))).toBe(true);
   });
+  it("keeps polling through a short provider outage instead of refunding a video that is still rendering", async () => {
+    env.HEYGEN_API_KEY = "heygen-secret";
+    const id = await legacyHeyGen();
+    let gets = 0;
+    const mock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === output) return new Response(mp4);
+      if (init?.method === "POST") return Response.json({ data: { video_id: "v_video1" } });
+      gets++;
+      if (gets <= 3) return new Response("bad gateway", { status: gets === 2 ? 429 : 502 });
+      return Response.json({ data: { id: "v_video1", status: "completed", video_url: output } });
+    });
+    vi.stubGlobal("fetch", mock);
+    await new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step);
+    expect(sqlite.prepare("SELECT status FROM jobs WHERE id=?").get(id)!.status).toBe("completed");
+    expect(used()).toBe(36100);
+  });
+  it("still fails (and refunds) when the provider itself reports a failed video", async () => {
+    env.HEYGEN_API_KEY = "heygen-secret";
+    const id = await legacyHeyGen();
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => Response.json({ data: init?.method === "POST"
+      ? { video_id: "v_video1" } : { id: "v_video1", status: "failed" } })));
+    await expect(new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step)).rejects.toThrow("VIDEO_STATUS_PROVIDER_0");
+    expect(used()).toBe(100);
+  });
   it("does not retry an ambiguous paid HeyGen POST", async () => {
     env.VIDEO_PROVIDER = "heygen"; env.HEYGEN_API_KEY = "heygen-secret";
     const id = await legacyHeyGen();
