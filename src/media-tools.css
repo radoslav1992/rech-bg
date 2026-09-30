@@ -189,3 +189,18 @@
 .dubbing-status { font-size: 12px; font-weight: 650; padding: 2px 8px; border-radius: 99px; background: #fff5d6; color: #7a5b00; }
 .dubbing-status.completed { background: #eef2e6; color: #3d5a26; }
 .dubbing-status.failed { background: #fde8e6; color: #b42318; }
+.media-tools-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; margin: 0 0 22px; }
+.media-tool-card { position: relative; display: grid; align-content: start; gap: 6px; text-align: left; padding: 18px; border-radius: 18px; border: 1px solid #e0e4db; background: #fff; color: inherit; font: inherit; cursor: pointer; min-height: 170px; transition: border-color .15s, box-shadow .15s, transform .15s; }
+.media-tool-card:hover:not(:disabled) { border-color: #5667f5; box-shadow: 0 10px 30px #5667f51f; transform: translateY(-1px); }
+.media-tool-card:focus-visible { outline: 3px solid #5667f5; outline-offset: 2px; }
+.media-tool-card strong { font-size: 17px; }
+.media-tool-card small { color: #5d665a; line-height: 1.45; }
+.media-tool-icon { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; background: #eef0ff; color: #3140b8; margin-bottom: 4px; }
+.media-tool-meta { margin-top: auto; font-size: 12.5px; font-weight: 650; color: #3140b8; }
+.media-tool-card.soon { cursor: default; opacity: .6; }
+.media-tool-card.soon .media-tool-meta { color: #7b8473; }
+.media-tool-busy { position: absolute; top: 14px; right: 14px; font-size: 11.5px; font-weight: 650; padding: 2px 8px; border-radius: 99px; background: #fff5d6; color: #7a5b00; }
+.st-modal .vs-card { border: 0; box-shadow: none; padding: 0; margin: 0; background: transparent; }
+.media-tool-body { display: grid; gap: 12px; }
+.media-tool-body label { display: grid; gap: 6px; font-weight: 600; }
+.media-tool-body .checkbox-label { display: flex; align-items: flex-start; gap: 8px; font-weight: 500; }

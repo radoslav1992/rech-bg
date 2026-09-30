@@ -12,11 +12,11 @@ const phases: Record<string, string> = { queued: "На опашка", processing
  * "Превод с дублаж": a video from the library in another language, with the speakers' voices and (optionally)
  * their lips matched. The result is a new video in the library.
  */
-export function DubbingTool({ assets, onDone }: { assets: MediaAsset[]; onDone: () => void }) {
+export function DubbingTool({ assets, onDone, initialAsset = "" }: { assets: MediaAsset[]; onDone: () => void; initialAsset?: string }) {
   const { user, refresh } = useAuth();
   const [enabled, setEnabled] = useState<boolean | null>(null), [languages, setLanguages] = useState<string[]>([]), [popular, setPopular] = useState<string[]>([]);
   const [tasks, setTasks] = useState<AiTask[]>([]);
-  const [assetId, setAssetId] = useState(""), [language, setLanguage] = useState("English"), [mode, setMode] = useState<TranslateMode>("speed");
+  const [assetId, setAssetId] = useState(initialAsset), [language, setLanguage] = useState("English"), [mode, setMode] = useState<TranslateMode>("speed");
   const [consent, setConsent] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState(""), [done, setDone] = useState("");
   const key = useRef(crypto.randomUUID());
   const loadTasks = useCallback(() => api<{ tasks: AiTask[] }>("/tools/tasks").then((d) => setTasks(d.tasks)).catch(() => {}), []);
@@ -44,8 +44,9 @@ export function DubbingTool({ assets, onDone }: { assets: MediaAsset[]; onDone: 
     if (!first && fresh.length) { onDone(); void refresh(); }
   }, [tasks, onDone, refresh]);
 
-  if (enabled === false) return null;
-  const videos = assets.filter((a) => ["upload", "export"].includes(a.kind) && a.status === "ready" && a.mime.startsWith("video/") && a.duration > 0);
+  if (enabled === false) return <Notice>Преводът на видео ще бъде достъпен скоро.</Notice>;
+  // Uploads, studio exports and avatar videos made in the studio.
+  const videos = assets.filter((a) => ["upload", "export", "video"].includes(a.kind) && a.status === "ready" && a.mime.startsWith("video/") && a.duration > 0);
   const source = videos.find((a) => a.id === assetId);
   let cost = 0, costError = "";
   if (source) { try { cost = translateCredits(source.duration, mode); } catch (e) { costError = (e as Error).message; } }
@@ -66,8 +67,7 @@ export function DubbingTool({ assets, onDone }: { assets: MediaAsset[]; onDone: 
     } finally { setBusy(false); }
   };
   const others = languages.filter((l) => !popular.includes(l));
-  return <section className="vs-card dubbing-tool">
-    <h2><Languages /> Превод с дублаж</h2>
+  return <div className="dubbing-tool">
     <p>Преведете видео на друг език — със същите гласове и, по избор, с движение на устните по новия текст. Резултатът е ново видео във „Вашите файлове“.</p>
     {!allowed && <Notice>{VIDEO_PLAN_MESSAGE} <Link to="/app/billing">Вижте плановете</Link></Notice>}
     {error && <Notice error>{error}</Notice>}
@@ -78,7 +78,7 @@ export function DubbingTool({ assets, onDone }: { assets: MediaAsset[]; onDone: 
         {videos.map((a) => <option key={a.id} value={a.id}>{a.name} · {Math.ceil(a.duration)} сек.</option>)}
       </select>
     </label>
-    {!videos.length && <p className="vs-fine">Качете видео по-горе или експортирайте такова от видео студиото.</p>}
+    {!videos.length && <p className="vs-fine">Още нямате готово видео. Качете такова в „Субтитри“ или създайте видео във видео студиото.</p>}
     <label>Език на превода
       <select value={language} onChange={(e) => setLanguage(e.target.value)}>
         {!languages.length && <option value="English">English</option>}
@@ -111,5 +111,5 @@ export function DubbingTool({ assets, onDone }: { assets: MediaAsset[]; onDone: 
         {t.status === "failed" && t.error && <small>{t.error}</small>}
       </div>)}
     </div>}
-  </section>;
+  </div>;
 }
