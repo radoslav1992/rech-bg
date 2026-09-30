@@ -116,6 +116,13 @@ describe("Превод с дублаж", () => {
     expect(used()).toBe(0);
     expect(sqlite.prepare("SELECT COUNT(*) n FROM media_assets WHERE id=?").get(output)!.n).toBe(0);
   });
+  it("dubs an avatar video made in the studio too", async () => {
+    heygen();
+    const avatar = "99999999-8888-4777-8666-555555555555";
+    sqlite.prepare("INSERT INTO media_assets(id,user_id,object_key,name,kind,mime,bytes,status,duration,created_at,expires_at) VALUES(?,'u',?,'Сцена 1','video','video/mp4',1000,'ready',12.4,1,?)")
+      .run(avatar, `audio/u/${avatar}.mp4`, now() + 86400);
+    expect((await order({ assetId: avatar })).status).toBe(202);
+  });
   it("runs at most two tools at a time", async () => {
     heygen();
     expect((await order()).status).toBe(202);

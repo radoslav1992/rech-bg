@@ -64,7 +64,9 @@ Automated coverage includes migration triggers, storage/credit rollback, exactly
 
 ## Превод с дублаж (HeyGen Video Translation)
 
-Медийни инструменти → **Превод с дублаж** translates a video from the library (an upload or a studio export, up to 10 minutes) into another language, cloning the speakers' voices and, except in "Само глас", matching the lips to the new text. The result is a **new video in the library** (kind `upload`), so it can be downloaded, subtitled, used in the studio or translated again.
+Медийни инструменти shows one card per tool (Субтитри, Превод с дублаж, Аватар с продукт; Кратки клипове and Преозвучаване are marked "Скоро"); a card opens the tool in a dialog. `?tool=captions|dubbing|product` opens one directly (`?asset=` alone keeps opening Субтитри for that video, e.g. from the studio), and each ready video in "Вашите файлове" has a translate shortcut.
+
+**Превод с дублаж** translates a video from the library (an upload, a studio export or an avatar video made in the studio, up to 10 minutes) into another language, cloning the speakers' voices and, except in "Само глас", matching the lips to the new text. The result is a **new video in the library** (kind `upload`), so it can be downloaded, subtitled, used in the studio or translated again.
 
 - **Modes and prices** (`shared/tools.ts`, per started second of the source): Бързо (HeyGen `mode: speed`) 150 credits, Прецизно (`mode: precision`) 300, Само глас (`translate_audio_only: true`) 100. HeyGen API: $0.0135 / $0.025 / $0.0095 per second. Video plans only (Създател, Студио), verified email, consent to process the video and its voices.
 - **Languages** come from `GET /v3/video-translations/languages` (names such as "English" or "Spanish (Spain)"), cached for a day in R2 (`config/heygen-languages.json`); popular ones are listed first.

@@ -71,7 +71,8 @@ tools.post("/translate", async (c) => {
   const a = await mediaAllowance(c.env, user);
   if (!canCreateVideo(a.plan)) throw new HTTPException(403, { message: `${VIDEO_PLAN_MESSAGE} Изберете по-висок план.` });
   const asset = await ownedAsset(c.env, user.id, d.assetId);
-  if (!(videoAssetKinds as readonly string[]).includes(asset.kind) || !asset.mime.startsWith("video/") || !asset.duration)
+  // Uploads, studio exports and avatar videos made in the studio (kind "video").
+  if (![...videoAssetKinds, "video"].includes(asset.kind) || !asset.mime.startsWith("video/") || !asset.duration)
     throw new HTTPException(400, { message: "Изберете проверено видео от библиотеката." });
   if (!(await translationLanguages(c.env)).includes(d.language)) throw new HTTPException(400, { message: "Изберете език от списъка." });
   let credits: number;

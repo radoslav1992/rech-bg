@@ -2,7 +2,7 @@ import { AvatarLibraryPicker } from "./AvatarLibrary";
 import { canCreateVideo, VIDEO_PLAN_MESSAGE } from "../shared/catalog";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Captions, Package, Upload, Download, Trash2 } from "lucide-react";
+import { Captions, Package, Upload, Download, Trash2, Languages, Scissors, Mic, type LucideIcon } from "lucide-react";
 import { api, post, Button, Notice, number, useAuth } from "./lib";
 import {
   mediaCredits,
@@ -14,6 +14,8 @@ import {
 import type { CaptionDocument } from "../shared/captions";
 import { CaptionEditor } from "./CaptionEditor";
 import { DubbingTool } from "./DubbingTool";
+import { Modal } from "./studio/Modal";
+import "./studio/studio.css";
 import "./media-tools.css";
 import "./video-studio.css";
 
@@ -542,6 +544,15 @@ export function ProductAvatarPanel({
     </section>
   );
 }
+type Tool = "captions" | "dubbing" | "product" | "shorts" | "revoice";
+type ToolCard = { id: Tool; icon: LucideIcon; title: string; text: string; price: string; soon?: boolean };
+const toolCards: ToolCard[] = [
+  { id: "captions", icon: Captions, title: "Субтитри", text: "Разпознаване на речта, редакция на думите и видео с вградени субтитри.", price: "1 000 кредита / минута" },
+  { id: "dubbing", icon: Languages, title: "Превод с дублаж", text: "Видеото на друг език — със същите гласове и движение на устните.", price: "от 100 кредита / секунда" },
+  { id: "product", icon: Package, title: "Аватар с продукт", text: "Лице и продукт в една композиция за говорещо видео.", price: "Цена според броя варианти" },
+  { id: "shorts", icon: Scissors, title: "Кратки клипове", text: "Най-силните моменти от дълго видео — вертикално и със субтитри.", price: "", soon: true },
+  { id: "revoice", icon: Mic, title: "Преозвучаване", text: "Сменете думите в заснето видео — нов глас и движение на устните.", price: "", soon: true },
+];
 export function MediaTools() {
   const { data, error: loadError, enabled, reload } = useMediaLibrary(),
     { refresh, user } = useAuth();
@@ -553,6 +564,22 @@ export function MediaTools() {
   const selected = data?.assets.find((a) => a.id === params.get("asset")),
     active = data?.tasks.some((t) => ["queued", "running"].includes(t.status));
   const idempotency = useRef(crypto.randomUUID());
+  // Each tool opens in its own dialog; ?tool= (and ?asset=, e.g. from the studio) open it directly.
+  const tool = (params.get("tool") as Tool | null) || (params.get("asset") ? "captions" : null);
+  const openTool = (id: Tool) => setParams({ tool: id });
+  const closeTool = () => setParams({});
+  const [toolTasks, setToolTasks] = useState(0);
+  useEffect(() => {
+    api<{ tasks: { status: string }[] }>("/tools/tasks")
+      .then((d) => setToolTasks(d.tasks.filter((t) => t.status === "queued" || t.status === "running").length))
+      .catch(() => {});
+  }, [tool]);
+  const running: Record<Tool, number> = {
+    captions: (data?.tasks || []).filter((t) => ["inspect", "transcribe"].includes(t.kind) && ["queued", "running"].includes(t.status)).length,
+    dubbing: toolTasks,
+    product: (data?.tasks || []).filter((t) => t.kind === "product" && ["queued", "running"].includes(t.status)).length,
+    shorts: 0, revoice: 0,
+  };
   useEffect(() => {
     if (!busy) return;
     const warn = (e: BeforeUnloadEvent) => e.preventDefault();
@@ -580,8 +607,8 @@ export function MediaTools() {
           <span className="eyebrow">ОТ КАДЪР ДО ГОТОВА ПУБЛИКАЦИЯ</span>
           <h1>Вашата медийна работилница.</h1>
           <p>
-            Субтитри за вашите видеа. Продукти във вашите истории. Всичко на
-            едно място.
+            Субтитри, превод с дублаж и продукти във вашите истории. Изберете
+            инструмент — всичко на едно място.
           </p>
         </div>
       </header>
@@ -605,10 +632,25 @@ export function MediaTools() {
       )}
       {enabled && (
         <>
-          <section className="vs-card">
-            <h2>
-              <Captions /> Субтитри за ваше видео
-            </h2>
+          <section className="media-tools-grid" aria-label="Инструменти">
+            {toolCards.map((t) => (
+              <button
+                type="button"
+                key={t.id}
+                className={`media-tool-card${t.soon ? " soon" : ""}`}
+                disabled={t.soon}
+                onClick={() => openTool(t.id)}
+              >
+                <span className="media-tool-icon"><t.icon size={22} /></span>
+                <strong>{t.title}</strong>
+                <small>{t.text}</small>
+                <span className="media-tool-meta">{t.soon ? "Скоро" : t.price}</span>
+                {!t.soon && running[t.id] > 0 && <span className="media-tool-busy">В процес · {running[t.id]}</span>}
+              </button>
+            ))}
+          </section>
+          <Modal open={tool === "captions"} title="Субтитри за ваше видео" onClose={closeTool} wide>
+            <div className="media-tool-body">
             <p>
               Качете MP4, MOV или WebM до 500 MB, 10 минути и 4K. След
               проверката ще видите точната цена: 1 000 кредита за започната
@@ -696,17 +738,22 @@ export function MediaTools() {
                 {number(mediaCredits("transcribe", selected.duration))} кредита
               </Button>
             )}
-          </section>
-          {selected?.status === "ready" && !!selected.hasCaptions && (
-            <CaptionEditor
-              key={selected.id}
-              audioId={selected.id}
-              video={null}
-              uploaded
-            />
-          )}
-          <DubbingTool assets={data?.assets || []} onDone={reload} />
-          <ProductAvatarPanel />
+            {selected?.status === "ready" && !!selected.hasCaptions && (
+              <CaptionEditor
+                key={selected.id}
+                audioId={selected.id}
+                video={null}
+                uploaded
+              />
+            )}
+            </div>
+          </Modal>
+          <Modal open={tool === "dubbing"} title="Превод с дублаж" onClose={closeTool} wide>
+            <DubbingTool assets={data?.assets || []} onDone={reload} initialAsset={params.get("asset") || ""} />
+          </Modal>
+          <Modal open={tool === "product"} title="Аватар с продукт" onClose={closeTool} wide>
+            <ProductAvatarPanel />
+          </Modal>
           <section className="vs-card">
             <h2>Вашите файлове</h2>
             <p>
@@ -740,6 +787,17 @@ export function MediaTools() {
                       }}
                     >
                       Завърши качването
+                    </button>
+                  )}
+                  {a.status === "ready" && a.mime.startsWith("video/") && a.duration > 0 && ["upload", "export", "video"].includes(a.kind) && (
+                    <button
+                      type="button"
+                      className="btn"
+                      aria-label={`Преведи ${a.name}`}
+                      title="Превод с дублаж"
+                      onClick={() => setParams({ tool: "dubbing", asset: a.id })}
+                    >
+                      <Languages size={16} />
                     </button>
                   )}
                   {a.status === "ready" && (
