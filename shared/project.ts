@@ -22,6 +22,8 @@ export const portraitSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("library"), id: z.string().regex(/^(?:[a-z]{2,20}|avatar-[a-f0-9-]{36})$/) }),
   // A portrait, product variant or product image in the user's media library.
   z.object({ type: z.literal("asset"), id: z.uuid() }),
+  // One of the user's own saved video avatars ("Моите аватари").
+  z.object({ type: z.literal("avatar"), id: z.uuid() }),
 ]);
 /** A filmed video as the scene (instead of an avatar and a generated voice): its own picture and sound. */
 export const clipSchema = z.object({

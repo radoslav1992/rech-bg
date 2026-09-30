@@ -48,7 +48,7 @@ export async function ownedMedia(e: Env, userId: string, id: string, kinds: read
 async function checkReferences(e: Env, userId: string, projectId: string, next: ProjectDoc, previous: ProjectDoc | null) {
   const known = new Set<string>();
   for (const s of previous?.scenes || []) {
-    for (const id of [s.audioJobId, s.videoJobId, s.portrait?.type === "asset" ? s.portrait.id : null, ...s.history, ...layerAssets(s)]) if (id) known.add(id);
+    for (const id of [s.audioJobId, s.videoJobId, s.portrait?.type === "asset" || s.portrait?.type === "avatar" ? s.portrait.id : null, ...s.history, ...layerAssets(s)]) if (id) known.add(id);
   }
   if (previous?.music) known.add(previous.music.assetId);
   for (const b of [previous?.intro, previous?.outro]) if (b) known.add(`bumper:${b.assetId}`);
@@ -83,6 +83,9 @@ async function checkReferences(e: Env, userId: string, projectId: string, next: 
     if (s.clip && fresh(`clip:${s.clip.assetId}`) && !(await ownedMedia(e, userId, s.clip.assetId, videoAssetKinds, ["ready", "checking"])))
       throw invalid();
     if (s.background?.type === "image" && fresh(`background:${s.background.assetId}`) && !(await ownedMedia(e, userId, s.background.assetId, imageAssetKinds, ["ready"])))
+      throw invalid();
+    if (s.portrait?.type === "avatar" && fresh(s.portrait.id)
+      && !(await e.DB.prepare("SELECT id FROM user_avatars WHERE id=? AND user_id=? AND status!='failed'").bind(s.portrait.id, userId).first()))
       throw invalid();
     if (s.portrait?.type === "asset" && fresh(s.portrait.id)) {
       const asset = await e.DB.prepare("SELECT id FROM media_assets WHERE id=? AND user_id=? AND kind IN ('portrait','variant','product') AND status='ready'")

@@ -1,4 +1,5 @@
 import { avatars, avatarInputs } from "./avatars";
+import { userAvatars, userAvatarInputs } from "./user-avatars";
 import { Hono } from "hono";
 import { getCookie } from "hono/cookie";
 import { HTTPException } from "hono/http-exception";
@@ -76,6 +77,7 @@ app.post("/api/billing/webhook", async (c) =>
 app.route("/", publicRoutes);
 app.route("/api/video-inputs", videoInputs);
 app.route("/api/avatar-inputs", avatarInputs);
+app.route("/api/user-avatar-inputs", userAvatarInputs);
 app.route("/api/media-inputs", mediaInputs);
 app.use("/api/*", async (c, next) => {
   const t = getCookie(c, "rech_session");
@@ -106,6 +108,7 @@ app.route("/api/video-studio", studioBrand);
 app.route("/api/video-studio", studio);
 app.route("/api/media", media);
 app.route("/api/avatars", avatars);
+app.route("/api/my-avatars", userAvatars);
 app.route("/", projects);
 app.route("/", jobs);
 app.route("/", settings);

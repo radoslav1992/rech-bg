@@ -4,6 +4,8 @@ import { videoFetch } from "./video-http";
 
 export type HeyGenTicket = { provider: "heygen"; request_id: string; status_url: string; response_url: string };
 export type HeyGenAvatar = { lookId: string; groupId: string };
+/** Video engines (HeyGen `engine.type`): III and IV animate a photo avatar; V needs a video avatar. */
+export type HeyGenEngine = "avatar_iii" | "avatar_iv" | "avatar_v";
 const endpoint = "https://api.heygen.com/v3/videos";
 const avatars = "https://api.heygen.com/v3/avatars";
 
@@ -61,10 +63,16 @@ export async function getHeyGenLook(env: Env, lookId: string) {
   const look = body?.data;
   if (body?.error || !look || look.id !== lookId) throw new VideoFailure("STATUS", "PROVIDER");
   const status: "processing" | "completed" | "failed" = look.status === "processing" ? "processing" : look.status === "completed" ? "completed" : "failed";
+  const engines = Array.isArray(look.supported_api_engines)
+    ? look.supported_api_engines.filter((e: unknown): e is string => typeof e === "string" && /^[a-z0-9_]{1,40}$/.test(e)).slice(0, 10) as string[]
+    : [];
   return {
     status,
     groupId: typeof look.group_id === "string" && /^[a-zA-Z0-9_-]{1,160}$/.test(look.group_id) ? look.group_id as string : "",
-    avatarIII: look.avatar_type === "photo_avatar" && Array.isArray(look.supported_api_engines) && look.supported_api_engines.includes("avatar_iii"),
+    avatarIII: look.avatar_type === "photo_avatar" && engines.includes("avatar_iii"),
+    /** The engines HeyGen lists for this avatar (e.g. avatar_iii, avatar_iv). */
+    engines,
+    moderation: look.error?.code === "moderation_failed",
   };
 }
 
@@ -80,13 +88,13 @@ export async function deleteHeyGenAvatar(env: Env, groupId: string) {
   }
 }
 
-export async function submitHeyGenVideo(env: Env, id: string, image: string, audio: string, avatar?: HeyGenAvatar): Promise<HeyGenTicket> {
+export async function submitHeyGenVideo(env: Env, id: string, image: string, audio: string, avatar?: HeyGenAvatar, engine: HeyGenEngine = "avatar_iii"): Promise<HeyGenTicket> {
   const response = await videoFetch(endpoint, {
     method: "POST",
     headers: { ...headers(env, "SUBMIT"), "Content-Type": "application/json", "Idempotency-Key": id },
     body: JSON.stringify({
       ...(avatar
-        ? { type: "avatar", avatar_id: validId(avatar.lookId), engine: { type: "avatar_iii" } }
+        ? { type: "avatar", avatar_id: validId(avatar.lookId), engine: { type: engine } }
         : { type: "image", image: { type: "url", url: image },
             // Raw-image generation uses Avatar IV. III rejects these motion controls.
             motion_prompt: "A person speaking naturally to the camera. Subtle facial expressions and head movements.",

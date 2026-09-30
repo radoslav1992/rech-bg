@@ -22,3 +22,14 @@ export const defaultAvatars = [
   { id: "stefan", name: "Стефан", description: "Зрял и спокоен водещ за бизнес представяния и обяснителни видеа.", category: "business", presentation: "male" },
   { id: "yana", name: "Яна", description: "Топло присъствие в домашна обстановка за ежедневни истории и продукти.", category: "casual", presentation: "female" },
 ] as const;
+/** A user's own avatar ("Моите аватари"): a photo turned once into a reusable video avatar. */
+export type UserAvatar = {
+  id: string;
+  name: string;
+  status: "processing" | "ready" | "failed";
+  error: string | null;
+  imageUrl: string;
+  createdAt: number;
+  /** Video engines the avatar supports (e.g. avatar_iii, avatar_iv); empty while unknown. */
+  engines: string[];
+};

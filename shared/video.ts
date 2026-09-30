@@ -1,8 +1,12 @@
 export const videoTiers = {
-  low: { name: "Ниско качество", description: "Икономичен вариант за вашия портрет", creditsPerSecond: 300 },
-  medium: { name: "Средно качество", description: "Баланс между детайл и цена", creditsPerSecond: 900 },
-  high: { name: "Високо качество", description: "Повече детайл и изразително движение", creditsPerSecond: 1800 },
+  low: { name: "Ниско качество", description: "Бързо и икономично", creditsPerSecond: 150 },
+  medium: { name: "Средно качество", description: "По-изразително движение и мимика", creditsPerSecond: 400 },
+  high: { name: "Високо качество", description: "Дигитален двойник от ваше видео", creditsPerSecond: 1200 },
 } as const;
+/** One-time price of turning a photo into a reusable video avatar (HeyGen Photo Avatar). */
+export const AVATAR_CREDITS = 10000;
+/** Avatars one account can keep. */
+export const MAX_USER_AVATARS = 20;
 export type VideoTier = keyof typeof videoTiers;
 export const MIN_VIDEO_SECONDS = 5;
 /** Longest recording for one avatar video (one scene). Longer videos join several scenes. */

@@ -6,7 +6,8 @@ export type SaveState = "saved" | "saving" | "dirty" | "error";
 type Stored = { document: ProjectDoc | null; revision: number };
 const endpoint = (projectId: string) => `/video-studio/projects/${projectId}/document`;
 export const portraitUrl = (p: ProjectPortrait | null) =>
-  !p ? "" : p.type === "library" ? `/api/avatars/${encodeURIComponent(p.id)}/image` : `/api/media/assets/${p.id}/file`;
+  !p ? "" : p.type === "library" ? `/api/avatars/${encodeURIComponent(p.id)}/image`
+    : p.type === "avatar" ? `/api/my-avatars/${p.id}/image` : `/api/media/assets/${p.id}/file`;
 
 /**
  * The server copy of a studio project (scenes, timeline, media references). Edits apply locally at once

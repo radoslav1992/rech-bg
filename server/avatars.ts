@@ -20,7 +20,9 @@ const fields = z.object({
 const recordSchema = fields.extend({
   active: z.boolean(), mime: z.enum(["image/jpeg", "image/png"]), updatedAt: z.number(),
   // One reusable HeyGen photo avatar per library avatar (Medium quality with Avatar III).
-  heygen: z.object({ lookId: heygenId, groupId: z.string().max(160), status: z.enum(["processing", "ready", "failed"]) }).optional(),
+  heygen: z.object({ lookId: heygenId, groupId: z.string().max(160), status: z.enum(["processing", "ready", "failed"]),
+    // Video engines HeyGen lists for it (avatar_iii, avatar_iv…); missing for links made before this was kept.
+    engines: z.array(z.string().max(40)).max(10).optional() }).optional(),
   // Short-lived link HeyGen uses to fetch the portrait while creating that avatar.
   heygenInput: z.object({ token: z.string(), expires: z.number() }).optional(),
 });
@@ -71,7 +73,8 @@ export async function libraryAvatarInput(env: Env, id: string) {
   const body = await libraryImage(env, id);
   if (!body) throw new HTTPException(404, { message: "Изображението не е налично." });
   const bytes = new Uint8Array(await new Response(body).arrayBuffer());
-  return { bytes, mime: record.mime, name: record.name, heygen: record.heygen?.status === "ready" ? { lookId: record.heygen.lookId, groupId: record.heygen.groupId } : null };
+  return { bytes, mime: record.mime, name: record.name, heygen: record.heygen?.status === "ready" ? { lookId: record.heygen.lookId, groupId: record.heygen.groupId } : null,
+    engines: record.heygen?.engines ?? [] };
 }
 type Bindings = { Bindings: Env; Variables: ContextVars };
 export const avatars = new Hono<Bindings>();
@@ -156,7 +159,7 @@ adminAvatars.put("/:id/heygen", async c => {
   if (look.status === "failed") throw new HTTPException(400, { message: "Този аватар в HeyGen не е завършен успешно." });
   if (look.status === "completed" && !look.avatarIII)
     throw new HTTPException(400, { message: "Този аватар в HeyGen не поддържа Avatar III. Използвайте фото аватар." });
-  const next: RecordData = { ...record, heygen: { lookId, groupId: look.groupId, status: look.status === "completed" ? "ready" : "processing" }, updatedAt: now() };
+  const next: RecordData = { ...record, heygen: { lookId, groupId: look.groupId, status: look.status === "completed" ? "ready" : "processing", engines: look.engines }, updatedAt: now() };
   await save(c.env, id, next);
   return c.json({ avatar: publicAvatar(id, next, true) });
 });
@@ -186,7 +189,7 @@ adminAvatars.post("/:id/heygen/check", async c => {
   const status = look.status === "processing" ? "processing" : look.status === "completed" && look.avatarIII ? "ready" : "failed";
   const { heygenInput, ...rest } = record;
   const next: RecordData = { ...rest, ...(status === "processing" && heygenInput ? { heygenInput } : {}),
-    heygen: { ...record.heygen, groupId: look.groupId || record.heygen.groupId, status }, updatedAt: now() };
+    heygen: { ...record.heygen, groupId: look.groupId || record.heygen.groupId, status, engines: look.engines }, updatedAt: now() };
   await save(c.env, id, next);
   return c.json({ avatar: publicAvatar(id, next, true) });
 });

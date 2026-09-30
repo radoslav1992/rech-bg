@@ -15,20 +15,28 @@ import type { ProjectScene } from "../../shared/project";
 import { portraitUrl } from "../project-document";
 import { isBusy, type SceneMedia } from "./model";
 
-export type VideoConfig = { enabled: boolean; emailNotifications: boolean; mediumLibraryOnly: boolean; tiers: Record<VideoTier, boolean>;
+export type VideoConfig = { enabled: boolean; emailNotifications: boolean; tiers: Record<VideoTier, boolean>;
+  /** Every video uses a saved avatar (a linked library avatar or one of the user's own). */
+  avatarMode: boolean;
   /** Longest recording per tier for the model it currently uses. */
-  maxSeconds: Record<VideoTier, number> };
+  maxSeconds: Record<VideoTier, number>;
+  /** The tier animates a saved avatar, not a plain photo. */
+  needsAvatar: Record<VideoTier, boolean>;
+  /** Announced, not available yet. */
+  soon: Record<VideoTier, boolean> };
 export type VideoRequest = { tier: VideoTier; consent: boolean; notifyEmail: boolean };
 
 const when = (j: Job) => new Date(j.created_at * 1000).toLocaleString("bg");
 
 /** Everything about one scene: what is said, by whom, who presents it, and its timing and look. */
-export function SceneInspector({ scene, index, media, voices, studioEnabled, videoConfig, mediumAllowed = true, fit, assets, hasLogo, busy, clip,
+export function SceneInspector({ scene, index, media, voices, studioEnabled, videoConfig, avatarReady = false, avatarCredits = 0, fit, assets, hasLogo, busy, clip,
   onChange, onGenerateAudio, onCreateVideo, onChooseAvatar, onSelectAudio, onSelectVideo, onAddLayer, onAddMediaLayer }: {
   scene: ProjectScene; index: number; media: SceneMedia; voices: readonly StudioVoice[]; studioEnabled: boolean;
   videoConfig: VideoConfig | null;
-  /** False when Medium takes only linked library avatars and this scene's presenter is not one. */
-  mediumAllowed?: boolean;
+  /** The scene's presenter is a saved avatar ready for video (tiers that need one are open). */
+  avatarReady?: boolean;
+  /** One-time price of creating an avatar from a photo. */
+  avatarCredits?: number;
   fit: string; assets: MediaAsset[]; hasLogo: boolean;
   /** "audio" or "video" while that request for this scene is being sent. */
   busy: "audio" | "video" | null;
@@ -60,15 +68,15 @@ export function SceneInspector({ scene, index, media, voices, studioEnabled, vid
   useEffect(() => { setConsent(false); }, [scene.id, scene.portrait?.type, scene.portrait?.id]);
   // The tier the user picked in this scene; otherwise the default follows the configuration as it loads.
   const picked = useRef<{ scene: string; tier: VideoTier } | null>(null);
-  const tierOpen = (t: VideoTier) => !!videoConfig?.tiers[t] && (t !== "medium" || mediumAllowed);
+  const tierOpen = (t: VideoTier) => !!videoConfig?.tiers[t] && (!videoConfig.needsAvatar[t] || avatarReady);
   useEffect(() => {
     if (!videoConfig) return;
-    const open = (t: VideoTier) => videoConfig.tiers[t] && (t !== "medium" || mediumAllowed);
+    const open = (t: VideoTier) => videoConfig.tiers[t] && (!videoConfig.needsAvatar[t] || avatarReady);
     const preferred = open("medium") ? "medium" : open("low") ? "low" : "high";
     // Each scene starts from the default quality; within a scene the choice stays while it is available.
     const choice = picked.current?.scene === scene.id ? picked.current.tier : null;
     setTier(choice && open(choice) ? choice : preferred);
-  }, [videoConfig, mediumAllowed, scene.id]);
+  }, [videoConfig, avatarReady, scene.id]);
   useEffect(() => () => assistRequest.current?.abort(), []);
 
   // The most any available tier accepts (a scene longer than this cannot become a video).
@@ -121,7 +129,7 @@ export function SceneInspector({ scene, index, media, voices, studioEnabled, vid
       <div className="st-avatar-current">
         {avatarUrl ? <img src={avatarUrl} alt="Избраният аватар" /> : <span className="st-avatar-empty"><UserRound size={28} /></span>}
         <div>
-          <p>{scene.portrait ? scene.portrait.type === "library" ? "Готов аватар" : "Ваш портрет" : "Още няма избран аватар."}</p>
+          <p>{scene.portrait ? scene.portrait.type === "library" ? "Готов аватар" : scene.portrait.type === "avatar" ? "Ваш аватар" : "Ваш портрет" : "Още няма избран аватар."}</p>
           <button type="button" className="btn dark" onClick={onChooseAvatar}><UserRound size={15} /> {scene.portrait ? "Смени аватара" : "Избери аватар"}</button>
         </div>
       </div>
@@ -179,10 +187,16 @@ export function SceneInspector({ scene, index, media, voices, studioEnabled, vid
       <div className="st-tiers" role="group" aria-label="Качество на видеото">
         {(Object.keys(videoTiers) as VideoTier[]).map((id) => <button type="button" key={id} aria-pressed={tier === id} disabled={!tierOpen(id)} onClick={() => { picked.current = { scene: scene.id, tier: id }; setTier(id); }}>
           <strong>{videoTiers[id].name}</strong><small>{number(videoTiers[id].creditsPerSecond)} кр. / сек.</small>
-          <small>{videoConfig?.tiers[id] ? `до ${videoConfig.maxSeconds[id] >= 120 ? "2 мин." : `${videoConfig.maxSeconds[id]} сек.`}` : "Недостъпно"}</small>
+          <small>{videoConfig?.soon[id] ? "Скоро" : videoConfig?.tiers[id] ? `до ${videoConfig.maxSeconds[id] >= 120 ? "2 мин." : `${videoConfig.maxSeconds[id]} сек.`}` : "Недостъпно"}</small>
         </button>)}
       </div>
-      {videoConfig?.tiers.medium && !mediumAllowed && <p className="st-fine">Средно качество е достъпно с отбелязаните готови аватари. Изберете такъв от „Смени аватара“ или друго качество.</p>}
+      {videoConfig && !avatarReady && (Object.keys(videoTiers) as VideoTier[]).some((t) => videoConfig.tiers[t] && videoConfig.needsAvatar[t]) && <div className="st-avatar-needed">
+        <p>{videoConfig.avatarMode
+          ? <>Видеото се създава от готов аватар. Изберете аватар, отбелязан „Готов за видео“, или създайте свой от снимка в „Моите аватари“{avatarCredits ? <> — еднократно {number(avatarCredits)} кредита, след това го използвате във всяко видео</> : null}.</>
+          : <>Средно качество е достъпно с аватарите, отбелязани „Готов за видео“. Изберете такъв или друго качество.</>}</p>
+        <button type="button" className="btn" onClick={onChooseAvatar}><UserRound size={15} /> {videoConfig.avatarMode ? "Моите аватари" : "Смени аватара"}</button>
+      </div>}
+      {videoConfig?.soon.high && <p className="st-fine">Високо качество — дигитален двойник, създаден от кратко видео с вас — предстои.</p>}
       <label className="checkbox-label"><input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
         {scene.portrait?.type === "library" ? "Ще използвам синтетичния аватар за съдържание, за което имам необходимите права, и ще го обознача като създадено с ИИ, когато може да бъде възприето като истинско." : "Аз съм изобразеният човек или имам неговото изрично съгласие да бъде създадено видео с образа му и синтетичен глас. Ще обознача видеото като създадено с ИИ, когато го публикувам."}</label>
       {videoConfig?.emailNotifications && <label className="checkbox-label"><input type="checkbox" checked={notifyEmail} onChange={(e) => setNotifyEmail(e.target.checked)} /> Уведоми ме по имейл, когато е готово</label>}

@@ -11,8 +11,10 @@ import { rate, token, safeEqual } from "./security";
 import { videoTiers, videoCredits, type VideoTier } from "../shared/video";
 import { canCreateVideo, VIDEO_PLAN_MESSAGE } from "../shared/catalog";
 import { MB } from "../shared/media";
-import { configuredVideoProvider, hasVideoCredential, mediumUsesLibrary, videoMaxSeconds, type VideoProvider } from "./video-provider";
+import { avatarMode, configuredVideoProvider, hasVideoCredential, tierComingSoon, tierEngine, videoMaxSeconds, type VideoProvider } from "./video-provider";
 import { libraryAvatarInput } from "./avatars";
+import { supportsEngine, userAvatarInput } from "./user-avatars";
+import type { HeyGenEngine } from "./video-heygen";
 
 export const avatarMap: Record<string, string> = {
   mia: "Mia outdoor (UGC)", lara: "Lara (Masterclass)", ines: "Ines (UGC)",
@@ -31,8 +33,12 @@ export const videoModels = {
 export type VideoMeta = { tier?: VideoTier; provider?: VideoProvider; avatar: string; imageKey?: string; imageMime?: string; token: string; consent: boolean; notifyEmail?: boolean;
   /** When the user confirmed the rights to the portrait, and which confirmation text they saw (evidence). */
   consentAt?: number; consentText?: string;
-  /** A reusable HeyGen avatar (library avatar linked for Avatar III); set, it is used instead of creating one. */
-  heygenAvatar?: { lookId: string; groupId: string } };
+  /** A reusable HeyGen avatar (a linked library avatar or the user's own); set, it is used instead of creating one. */
+  heygenAvatar?: { lookId: string; groupId: string };
+  /** The HeyGen engine for a saved avatar. Missing on older jobs (their Medium used Avatar III). */
+  engine?: HeyGenEngine;
+  /** The user's own avatar the video uses (it cannot be deleted while the video is created). */
+  userAvatarId?: string };
 export function jobVideoTier(job: { video_meta: string; video_tier: string }): keyof typeof videoModels {
   const meta = JSON.parse(job.video_meta) as VideoMeta;
   const tier = meta.tier ?? job.video_tier;
@@ -50,10 +56,12 @@ export const videos = new Hono<{ Bindings: Env; Variables: ContextVars }>();
 videos.get("/config", (c) => {
   const available = Object.fromEntries((Object.keys(videoTiers) as VideoTier[]).map(tier => [tier, hasVideoCredential(c.env, configuredVideoProvider(c.env, tier))]));
   return c.json({ enabled: !!c.env.VIDEO_GENERATION && Object.values(available).some(Boolean), emailNotifications: !!c.env.EMAIL,
-    // Medium then works only with library avatars linked to HeyGen.
-    mediumLibraryOnly: mediumUsesLibrary(c.env),
+    // Every video then uses a saved avatar: a linked library avatar or one of the user's own.
+    avatarMode: avatarMode(c.env),
     tiers: Object.fromEntries(Object.entries(videoTiers).map(([id, tier]) => [id, { ...tier, enabled: !!c.env.VIDEO_GENERATION && available[id as VideoTier],
-      maxSeconds: videoMaxSeconds(configuredVideoProvider(c.env, id as VideoTier), id as VideoTier) }])) });
+      maxSeconds: videoMaxSeconds(configuredVideoProvider(c.env, id as VideoTier), id as VideoTier),
+      // The tier needs a saved avatar (not a plain photo); a coming-soon tier is shown but not offered yet.
+      needsAvatar: !!tierEngine(c.env, id as VideoTier), soon: tierComingSoon(c.env, id as VideoTier) }])) });
 });
 videos.post("/", async (c) => {
   const user = c.get("user");
@@ -85,22 +93,33 @@ videos.post("/", async (c) => {
   const id = uid();
   const meta: VideoMeta = { tier: d.tier, provider, avatar: "", token: token(), consent: form.get("consent") === "true", consentAt: now(), consentText: CONSENT_TEXT_VERSION, notifyEmail: !!c.env.EMAIL && form.get("notifyEmail") === "true" };
   let image: Uint8Array | undefined;
-  {
-    if (!meta.consent) throw new HTTPException(400, { message: "Потвърдете правото си да използвате изображението." });
+  if (!meta.consent) throw new HTTPException(400, { message: "Потвърдете правото си да използвате изображението." });
+  const libraryId = form.get("libraryAvatarId"), userAvatarId = form.get("userAvatarId");
+  const engine = tierEngine(c.env, d.tier);
+  if (engine) {
+    // A saved avatar: created once, only referenced here (no photo is sent with the video).
+    let saved: { heygen: { lookId: string; groupId: string } | null; engines: string[] };
+    if (typeof userAvatarId === "string" && userAvatarId) {
+      saved = await userAvatarInput(c.env, user.id, userAvatarId);
+      meta.userAvatarId = userAvatarId;
+      meta.avatar = `user:${userAvatarId}`;
+    } else if (typeof libraryId === "string" && libraryId) {
+      saved = await libraryAvatarInput(c.env, libraryId);
+      if (!saved.heygen) throw new HTTPException(400, { message: "Този аватар още не е подготвен за видео. Изберете друг." });
+      meta.avatar = libraryId;
+    } else throw new HTTPException(400, { message: avatarMode(c.env)
+      ? "За видео изберете готов аватар от библиотеката или създайте свой аватар от снимка."
+      : "Средно качество е достъпно само с готовите аватари от библиотеката." });
+    if (!supportsEngine(saved.engines, engine)) throw new HTTPException(400, { message: "Този аватар не поддържа избраното качество. Изберете друго качество." });
+    meta.heygenAvatar = saved.heygen!;
+    meta.engine = engine;
+  } else {
     let file = form.get("image");
-    const libraryId = form.get("libraryAvatarId");
     // Files the server reads itself (library, media library) may be larger than a direct upload.
     let serverFile = false;
-    const libraryOnly = d.tier === "medium" && mediumUsesLibrary(c.env);
-    if (libraryOnly && typeof libraryId !== "string")
-      throw new HTTPException(400, { message: "Средно качество е достъпно само с готовите аватари от библиотеката." });
     if (typeof libraryId === "string") {
       // The server reads the library portrait itself; the browser only names the avatar.
       const library = await libraryAvatarInput(c.env, libraryId);
-      if (libraryOnly) {
-        if (!library.heygen) throw new HTTPException(400, { message: "Този аватар още не е достъпен за Средно качество. Изберете друг или друго качество." });
-        meta.heygenAvatar = library.heygen;
-      }
       meta.avatar = libraryId;
       file = new File([library.bytes as BlobPart], "portrait", { type: library.mime });
       serverFile = true;

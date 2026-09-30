@@ -4,7 +4,7 @@ import { useJobs } from "../JobActivity";
 import { mergeJobs } from "../job-state";
 import type { StudioVoice } from "../../shared/studio";
 import type { VideoTier } from "../../shared/video";
-import type { LibraryAvatar } from "../../shared/avatars";
+import type { LibraryAvatar, UserAvatar } from "../../shared/avatars";
 import type { VideoConfig } from "./SceneInspector";
 
 /** Every recording and video of one project: loaded once, then kept fresh by the app-wide job polling. */
@@ -30,8 +30,8 @@ export function useProjectJobs(projectId: string) {
 export function useStudioConfig() {
   const [voices, setVoices] = useState<StudioVoice[] | null>(null), [enabled, setEnabled] = useState(false), [error, setError] = useState("");
   const [video, setVideo] = useState<VideoConfig | null>(null);
-  // Library avatars linked to HeyGen: the only ones Medium accepts when the server says so.
-  const [mediumAvatars, setMediumAvatars] = useState<Set<string>>(new Set());
+  // Library avatars linked to HeyGen: ready for tiers that need a saved avatar.
+  const [linkedAvatars, setLinkedAvatars] = useState<Set<string>>(new Set());
   const request = useRef(0);
   const loadVoices = useCallback(async () => {
     const n = ++request.current;
@@ -46,21 +46,23 @@ export function useStudioConfig() {
     void loadVoices();
     const refresh = () => { void loadVoices(); };
     window.addEventListener("rech:studio-voices-changed", refresh);
-    api<{ enabled: boolean; emailNotifications: boolean; mediumLibraryOnly?: boolean; tiers: Record<VideoTier, { enabled: boolean; maxSeconds?: number }> }>("/videos/config")
+    type Tier = { enabled: boolean; maxSeconds?: number; needsAvatar?: boolean; soon?: boolean };
+    const each = <T,>(f: (t: VideoTier) => T) => ({ low: f("low"), medium: f("medium"), high: f("high") });
+    api<{ enabled: boolean; emailNotifications: boolean; avatarMode?: boolean; tiers: Record<VideoTier, Tier> }>("/videos/config")
       .then((d) => setVideo({
-        enabled: d.enabled, emailNotifications: d.emailNotifications, mediumLibraryOnly: !!d.mediumLibraryOnly,
-        tiers: { low: !!d.tiers.low?.enabled, medium: !!d.tiers.medium?.enabled, high: !!d.tiers.high?.enabled },
-        maxSeconds: { low: d.tiers.low?.maxSeconds ?? 60, medium: d.tiers.medium?.maxSeconds ?? 60, high: d.tiers.high?.maxSeconds ?? 60 },
+        enabled: d.enabled, emailNotifications: d.emailNotifications, avatarMode: !!d.avatarMode,
+        tiers: each((t) => !!d.tiers[t]?.enabled), maxSeconds: each((t) => d.tiers[t]?.maxSeconds ?? 60),
+        needsAvatar: each((t) => !!d.tiers[t]?.needsAvatar), soon: each((t) => !!d.tiers[t]?.soon),
       }))
-      .catch(() => setVideo({ enabled: false, emailNotifications: false, mediumLibraryOnly: false, tiers: { low: false, medium: false, high: false }, maxSeconds: { low: 60, medium: 60, high: 60 } }));
+      .catch(() => setVideo({ enabled: false, emailNotifications: false, avatarMode: false, tiers: each(() => false), maxSeconds: each(() => 60), needsAvatar: each(() => false), soon: each(() => false) }));
     const loadAvatars = () => api<{ avatars: LibraryAvatar[] }>("/avatars")
-      .then((d) => setMediumAvatars(new Set(d.avatars.filter((a) => a.heygen).map((a) => a.id)))).catch(() => {});
+      .then((d) => setLinkedAvatars(new Set(d.avatars.filter((a) => a.heygen).map((a) => a.id)))).catch(() => {});
     void loadAvatars();
     window.addEventListener("rech:avatars-changed", loadAvatars);
     const pending = request;
     return () => { pending.current++; window.removeEventListener("rech:studio-voices-changed", refresh); window.removeEventListener("rech:avatars-changed", loadAvatars); };
   }, [loadVoices]);
-  return { voices, enabled, error, video, mediumAvatars, reloadVoices: loadVoices };
+  return { voices, enabled, error, video, linkedAvatars, reloadVoices: loadVoices };
 }
 
 /** Length of an audio file (e.g. the project music), read from its metadata. */
@@ -76,4 +78,23 @@ export function useAudioDuration(url: string | null) {
     return () => { audio.onloadedmetadata = null; audio.src = ""; };
   }, [url]);
   return duration;
+}
+
+export type MyAvatars = ReturnType<typeof useMyAvatars>;
+/** The user's own saved avatars ("Моите аватари"); followed while HeyGen creates one. */
+export function useMyAvatars() {
+  const [data, setData] = useState<{ avatars: UserAvatar[]; enabled: boolean; credits: number; max: number } | null>(null), [error, setError] = useState("");
+  const reload = useCallback(async () => {
+    try { setData(await api("/my-avatars")); setError(""); }
+    catch (e) { setError((e as Error).message); }
+  }, []);
+  useEffect(() => { void reload(); }, [reload]);
+  const creating = !!data?.avatars.some((a) => a.status === "processing");
+  useEffect(() => {
+    if (!creating) return;
+    const timer = window.setInterval(() => { if (!document.hidden) void reload(); }, 8000);
+    return () => window.clearInterval(timer);
+  }, [creating, reload]);
+  const ready = new Set((data?.avatars || []).filter((a) => a.status === "ready").map((a) => a.id));
+  return { avatars: data?.avatars || [], enabled: !!data?.enabled, credits: data?.credits ?? 0, max: data?.max ?? 0, loaded: !!data, error, ready, reload };
 }

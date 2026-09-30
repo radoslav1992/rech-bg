@@ -3,7 +3,7 @@ import worker, { maintenance } from "../server/index";
 import { VideoGeneration, outputUrl, queueUrl, storeVideo } from "../server/video-workflow";
 import { sha } from "../server/security";
 import { now } from "../server/types";
-import { videoCredits } from "../shared/video";
+import { videoCredits, videoTiers } from "../shared/video";
 import { videoFailureMessage } from "../server/video-errors";
 import { notifyVideo } from "../server/video-notifications";
 import { getHeyGenVideo } from "../server/video-heygen";
@@ -23,7 +23,7 @@ function request(path: string, init: RequestInit = {}, cookie = true) {
 }
 function form(tier = "medium", changes: Record<string, string> = {}) {
   const body = new FormData();
-  for (const [key, value] of Object.entries({ sourceId, tier, idempotencyKey: crypto.randomUUID(), credits: tier === "high" ? "54000" : tier === "low" ? "9000" : "27000", consent: "true", ...changes })) body.set(key, value);
+  for (const [key, value] of Object.entries({ sourceId, tier, idempotencyKey: crypto.randomUUID(), credits: tier in videoTiers ? String(videoCredits(30, tier as "low" | "medium" | "high")) : "12000", consent: "true", ...changes })) body.set(key, value);
   body.set("image", new Blob([png]), "portrait.png");
   return body;
 }
@@ -31,6 +31,15 @@ async function create(body = form()) {
   const r = await request("/videos", { method: "POST", body });
   expect(r.status).toBe(202);
   return (await r.json() as any).id as string;
+}
+/** A HeyGen job accepted by the previous release (a photo per video), before saved avatars. */
+async function legacyHeyGen(body = form("high")) {
+  const key = env.FAL_KEY, mode = env.VIDEO_PROVIDER;
+  env.FAL_KEY ||= "test-secret"; env.VIDEO_PROVIDER = "fal";
+  const id = await create(body);
+  env.FAL_KEY = key; env.VIDEO_PROVIDER = mode;
+  sqlite.prepare("UPDATE jobs SET video_meta=json_set(video_meta,'$.provider','heygen') WHERE id=?").run(id);
+  return id;
 }
 function mockProvider() {
   let checks = 0;
@@ -62,23 +71,23 @@ beforeEach(async () => {
 afterEach(() => { vi.unstubAllGlobals(); sqlite.close(); });
 describe("Video credits and request validation", () => {
   it("prices real duration, rounding up, and bounds supported clips", () => {
-    expect(videoCredits(30, "medium")).toBe(27000);
-    expect(videoCredits(30, "low")).toBe(9000);
-    expect(videoCredits(30.1, "low")).toBe(9300);
-    expect(videoCredits(30.1, "high")).toBe(55800);
+    expect(videoCredits(30, "medium")).toBe(12000);
+    expect(videoCredits(30, "low")).toBe(4500);
+    expect(videoCredits(30.1, "low")).toBe(4650);
+    expect(videoCredits(30.1, "high")).toBe(37200);
     expect(() => videoCredits(4.9, "medium")).toThrow();
     expect(() => videoCredits(120.1, "medium")).toThrow();
     expect(() => videoCredits(60.1, "medium", 60)).toThrow();
-    expect(videoCredits(120, "high")).toBe(216000);
+    expect(videoCredits(120, "high")).toBe(144000);
     expect(() => videoCredits(NaN, "high")).toThrow();
   });
   it("reserves credits once for retries and enforces a single active job", async () => {
     const body = form(); const id = await create(body);
     const retry = await request("/videos", { method: "POST", body });
     expect((await retry.json() as any).id).toBe(id);
-    expect(used()).toBe(27100); expect(env.VIDEO_GENERATION.create).toHaveBeenCalledTimes(1);
+    expect(used()).toBe(12100); expect(env.VIDEO_GENERATION.create).toHaveBeenCalledTimes(1);
     expect((await request("/videos", { method: "POST", body: form() })).status).toBe(409);
-    expect(used()).toBe(27100);
+    expect(used()).toBe(12100);
   });
   it("rejects missing auth, unverified users, cross-origin requests and missing configuration", async () => {
     expect((await request("/videos", { method: "POST", body: form() }, false)).status).toBe(401);
@@ -114,7 +123,7 @@ describe("Video credits and request validation", () => {
   });
   it("rejects prices quoted before the rate change without reserving credits", async () => {
     env.WAVESPEED_API_KEY = "test-key";
-    for (const [tier, credits] of [["low", "6000"], ["medium", "18000"], ["high", "36000"]]) {
+    for (const [tier, credits] of [["low", "9000"], ["medium", "27000"], ["high", "54000"]]) {
       expect((await request("/videos", { method: "POST", body: form(tier, { credits }) })).status).toBe(409);
     }
     expect(used()).toBe(100);
@@ -125,11 +134,11 @@ describe("Video credits and request validation", () => {
     const bad = form("high", { consent: "true" }); bad.set("image", new Blob(["x".repeat(100)]), "portrait.png");
     expect((await request("/videos", { method: "POST", body: bad })).status).toBe(400);
     const body = form("high", { consent: "true" }); body.set("image", new Blob([png]), "portrait.png");
-    await create(body); expect(used()).toBe(54100);
+    await create(body); expect(used()).toBe(36100);
   });
   it("keeps a reservation on ambiguous dispatch and cron selects the video workflow", async () => {
     env.VIDEO_GENERATION.create.mockRejectedValueOnce(new Error("timeout"));
-    const id = await create(); expect(used()).toBe(27100);
+    const id = await create(); expect(used()).toBe(12100);
     sqlite.prepare("UPDATE jobs SET updated_at=? WHERE id=?").run(now()-1000, id);
     env.VIDEO_GENERATION.get.mockRejectedValue(new Error("not found"));
     await maintenance(env);
@@ -182,7 +191,7 @@ describe("Three-tier provider routing", () => {
     }); vi.stubGlobal("fetch", mock);
     await new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step);
     const row = sqlite.prepare("SELECT * FROM jobs WHERE id=?").get(id)!;
-    expect(row.status).toBe("completed"); expect(used()).toBe(9100);
+    expect(row.status).toBe("completed"); expect(used()).toBe(4600);
     expect(JSON.parse(row.provider_request as string)).toMatchObject({ provider: "wavespeed", request_id: "wave-1", status_url: statusUrl });
     expect(env.AUDIO.objects.has(JSON.parse(row.video_meta as string).imageKey)).toBe(false);
     expect((await (await request(`/jobs/${id}`)).json() as any).job.video_tier).toBe("low");
@@ -220,7 +229,7 @@ describe("Three-tier provider routing", () => {
       return Response.json({ data: { id: "wave-1", status: "completed", outputs: [{ url: videoUrl }] } });
     }); vi.stubGlobal("fetch", mock);
     await new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step);
-    expect(used()).toBe(9100);
+    expect(used()).toBe(4600);
   });
   it("preserves old Argil job routing and does not offer Argil for new requests", async () => {
     expect((await request("/videos", { method: "POST", body: form("standard") })).status).toBe(400);
@@ -231,7 +240,7 @@ describe("Three-tier provider routing", () => {
     const call = mock.mock.calls.find(c => c[1]?.method === "POST")!;
     expect(call[0]).toBe("https://queue.fal.run/argil/avatars/audio-to-video");
     expect(JSON.parse(call[1]!.body as string).avatar).toBe("Mia outdoor (UGC)");
-    expect(used()).toBe(27100);
+    expect(used()).toBe(12100);
   });
 });
 describe("Configurable video providers", () => {
@@ -256,42 +265,39 @@ describe("Configurable video providers", () => {
     vi.stubGlobal("fetch", mock);
     return mock;
   }
-  it("offers Medium/High in HeyGen mode, never falls back, and rejects invalid configuration", async () => {
+  it("offers Low/Medium with saved avatars in HeyGen mode, High as coming soon, and rejects invalid configuration", async () => {
     env.VIDEO_PROVIDER = " HEYGEN ";
     env.WAVESPEED_API_KEY = "wave-secret";
-    expect((await (await request("/videos/config")).json() as any).tiers.medium.enabled).toBe(true);
-    expect((await request("/videos", { method: "POST", body: form("high") })).status).toBe(503);
+    expect((await (await request("/videos/config")).json() as any).tiers.medium.enabled).toBe(false);
+    expect((await request("/videos", { method: "POST", body: form("medium") })).status).toBe(503);
     env.HEYGEN_API_KEY = "heygen-secret";
     const config = await (await request("/videos/config")).json() as any;
     expect(config.enabled).toBe(true);
-    expect(config.tiers.high).toMatchObject({ enabled: true, creditsPerSecond: 1800 });
-    // Low uses WaveSpeed InfiniteTalk in HeyGen mode too.
-    expect(config.tiers.low).toMatchObject({ enabled: true, maxSeconds: 120 });
-    expect(config.tiers.medium).toMatchObject({ enabled: true, creditsPerSecond: 900, maxSeconds: 60 });
-    expect(config.tiers.high).toMatchObject({ maxSeconds: 120 });
+    expect(config.avatarMode).toBe(true);
+    expect(config.tiers.low).toMatchObject({ enabled: true, creditsPerSecond: 150, maxSeconds: 120, needsAvatar: true, soon: false });
+    expect(config.tiers.medium).toMatchObject({ enabled: true, creditsPerSecond: 400, maxSeconds: 120, needsAvatar: true, soon: false });
+    // High waits for the Avatar V digital twin: shown, not offered.
+    expect(config.tiers.high).toMatchObject({ enabled: false, creditsPerSecond: 1200, soon: true });
     expect(JSON.stringify(config)).not.toMatch(/heygen|secret|\bfal\b/i);
-    delete env.FAL_KEY;
-    const noFal = await (await request("/videos/config")).json() as any;
-    expect(noFal.tiers.medium.enabled).toBe(false);
-    expect(noFal.tiers.high.enabled).toBe(true);
-    expect((await request("/videos", { method: "POST", body: form() })).status).toBe(503);
-    env.FAL_KEY = "test-secret";
+    expect((await request("/videos", { method: "POST", body: form("high") })).status).toBe(503);
+    // A plain photo is not enough: a saved avatar is required.
+    expect((await request("/videos", { method: "POST", body: form("medium") })).status).toBe(400);
     env.VIDEO_PROVIDER = "typo";
     expect((await (await request("/videos/config")).json() as any).enabled).toBe(false);
     expect((await request("/videos", { method: "POST", body: form("high") })).status).toBe(503);
     expect(used()).toBe(100);
     expect(env.VIDEO_GENERATION.create).not.toHaveBeenCalled();
     env.VIDEO_PROVIDER = "fal.ai";
-    expect((await (await request("/videos/config")).json() as any).tiers.medium.enabled).toBe(true);
+    const fal = await (await request("/videos/config")).json() as any;
+    expect(fal.tiers.medium).toMatchObject({ enabled: true, needsAvatar: false, soon: false });
+    expect(fal.avatarMode).toBe(false);
   });
-  it("uses HeyGen's image schema and approved audio, then privately stores a completed video", async () => {
-    env.VIDEO_PROVIDER = "heygen"; env.HEYGEN_API_KEY = " heygen-secret\n";
-    delete env.FAL_KEY;
-    const body = form("high"); const id = await create(body);
+  it("finishes a High job accepted by the previous release with HeyGen's image schema, then privately stores it", async () => {
+    env.HEYGEN_API_KEY = " heygen-secret\n";
+    const body = form("high"); const id = await legacyHeyGen(body);
     const meta = JSON.parse(sqlite.prepare("SELECT video_meta FROM jobs WHERE id=?").get(id)!.video_meta as string);
     expect(meta.provider).toBe("heygen");
-    // A deployment changes the setting before the accepted job even starts.
-    env.VIDEO_PROVIDER = "fal";
+    delete env.FAL_KEY;
     const retry = await request("/videos", { method: "POST", body });
     expect((await retry.json() as any).id).toBe(id);
     const mock = heygenMock();
@@ -307,7 +313,7 @@ describe("Configurable video providers", () => {
       motion_prompt: "A person speaking naturally to the camera. Subtle facial expressions and head movements.", expressiveness: "low",
     });
     const row = sqlite.prepare("SELECT * FROM jobs WHERE id=?").get(id)!;
-    expect(row.status).toBe("completed"); expect(used()).toBe(54100);
+    expect(row.status).toBe("completed"); expect(used()).toBe(36100);
     expect(JSON.parse(row.provider_request as string)).toMatchObject({ provider: "heygen", request_id: "v_video1" });
     expect(env.AUDIO.objects.has(meta.imageKey)).toBe(false);
     expect((await request(`/video-inputs/${id}/image?token=${meta.token}`, {}, false)).status).toBe(404);
@@ -321,11 +327,11 @@ describe("Configurable video providers", () => {
     const mock = mockProvider();
     await new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step);
     expect(mock.mock.calls.find(c => c[1]?.method === "POST")![0]).toContain("queue.fal.run");
-    expect(used()).toBe(27100);
+    expect(used()).toBe(12100);
   });
   it("resumes a saved HeyGen request without submitting again or trusting stored URLs", async () => {
     env.VIDEO_PROVIDER = "heygen"; env.HEYGEN_API_KEY = "heygen-secret";
-    const id = await create(form("high"));
+    const id = await legacyHeyGen();
     sqlite.prepare("UPDATE jobs SET submitted_at=?,provider_request=? WHERE id=?").run(now(), JSON.stringify({ provider: "heygen", request_id: "v_video1", status_url: "https://evil.invalid/status", response_url: "https://evil.invalid/result" }), id);
     env.VIDEO_PROVIDER = "fal";
     const mock = heygenMock();
@@ -335,7 +341,7 @@ describe("Configurable video providers", () => {
   });
   it.each([401, 402, 422, 429])("refunds a rejected HeyGen submission (%s) without fallback", async status => {
     env.VIDEO_PROVIDER = "heygen"; env.HEYGEN_API_KEY = "heygen-secret";
-    const id = await create(form("high"));
+    const id = await legacyHeyGen();
     const mock = vi.fn().mockResolvedValue(Response.json({ error: { code: "rejected", message: "private input heygen-secret" } }, { status }));
     vi.stubGlobal("fetch", mock);
     const flow = new (VideoGeneration as any)({}, env);
@@ -347,7 +353,7 @@ describe("Configurable video providers", () => {
   });
   it("refunds failed rendering and does not try a fal cancellation or fallback", async () => {
     env.VIDEO_PROVIDER = "heygen"; env.HEYGEN_API_KEY = "heygen-secret";
-    const id = await create(form("high"));
+    const id = await legacyHeyGen();
     const mock = vi.fn(async (_url: string, init?: RequestInit) => Response.json({ data: init?.method === "POST"
       ? { video_id: "v_video1" }
       : { id: "v_video1", status: "failed", failure_message: "private provider details" } }));
@@ -359,7 +365,7 @@ describe("Configurable video providers", () => {
   });
   it("does not retry an ambiguous paid HeyGen POST", async () => {
     env.VIDEO_PROVIDER = "heygen"; env.HEYGEN_API_KEY = "heygen-secret";
-    const id = await create(form("high"));
+    const id = await legacyHeyGen();
     const mock = vi.fn().mockRejectedValue(new Error("network interrupted")); vi.stubGlobal("fetch", mock);
     const flow = new (VideoGeneration as any)({}, env);
     await expect(flow.run({ payload: { jobId: id } }, step)).rejects.toThrow();
@@ -378,8 +384,8 @@ describe("Configurable video providers", () => {
     expect(() => outputUrl("https://files.heygen.ai.evil.invalid/video.mp4")).toThrow();
     expect(() => outputUrl("https://user:secret@files.heygen.ai/video.mp4")).toThrow();
   });
-  it.each(["fal", "heygen"])("routes new Medium jobs through Kling Standard in %s mode without creating a photo avatar", async mode => {
-    env.VIDEO_PROVIDER = mode; env.HEYGEN_API_KEY = "heygen-secret";
+  it("routes new Medium jobs through Kling Standard in fal mode without creating a photo avatar", async () => {
+    env.VIDEO_PROVIDER = "fal"; env.HEYGEN_API_KEY = "heygen-secret";
     const id = await create(); const mock = mockProvider();
     const meta = JSON.parse(sqlite.prepare("SELECT video_meta FROM jobs WHERE id=?").get(id)!.video_meta as string);
     expect(meta.provider).toBe("fal");
@@ -390,17 +396,10 @@ describe("Configurable video providers", () => {
     expect(mock.mock.calls.some(c => c[0].includes("heygen.com"))).toBe(false);
     expect(sqlite.prepare("SELECT * FROM cleanup_tasks WHERE prefix LIKE 'heygen-avatar/%'").all()).toHaveLength(0);
     expect(sqlite.prepare("SELECT status FROM jobs WHERE id=?").get(id)!.status).toBe("completed");
-    expect(used()).toBe(27100);
+    expect(used()).toBe(12100);
   });
   // Simulate a job accepted by the previous release. New requests no longer use III.
-  async function legacyMedium() {
-    const key = env.FAL_KEY;
-    env.FAL_KEY ||= "test-secret";
-    const id = await create();
-    env.FAL_KEY = key;
-    sqlite.prepare("UPDATE jobs SET video_meta=json_set(video_meta,'$.provider','heygen') WHERE id=?").run(id);
-    return id;
-  }
+  async function legacyMedium() { return legacyHeyGen(form()); }
   function photoMock(id: string, lookResult?: Record<string, unknown>) {
     const mock = heygenMock();
     const video = mock.getMockImplementation()!;
@@ -449,7 +448,7 @@ describe("Configurable video providers", () => {
     });
     expect(workflowStep.sleep).toHaveBeenCalledWith("photo-avatar-wait-0", "10 seconds");
     const row = sqlite.prepare("SELECT * FROM jobs WHERE id=?").get(id)!;
-    expect(row.status).toBe("completed"); expect(used()).toBe(27100);
+    expect(row.status).toBe("completed"); expect(used()).toBe(12100);
     expect(JSON.parse(row.video_meta as string).heygenAvatar).toEqual({ lookId: "look_photo1", groupId: "group_photo1" });
     expect(mock.mock.calls.filter(c => c[1]?.method === "DELETE")).toHaveLength(1);
     expect(sqlite.prepare("SELECT * FROM cleanup_tasks WHERE prefix LIKE 'heygen-avatar/%'").all()).toHaveLength(0);
@@ -503,12 +502,12 @@ describe("Configurable video providers", () => {
     await new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step);
     expect(sqlite.prepare("SELECT * FROM cleanup_tasks WHERE prefix LIKE 'heygen-avatar/%'").all()).toHaveLength(1);
     expect(sqlite.prepare("SELECT status FROM jobs WHERE id=?").get(id)!.status).toBe("completed");
-    expect(used()).toBe(27100);
+    expect(used()).toBe(12100);
     mock.mockImplementation(normal);
     await maintenance(env);
     expect(mock.mock.calls.filter(c => c[1]?.method === "DELETE")).toHaveLength(2);
     expect(sqlite.prepare("SELECT * FROM cleanup_tasks WHERE prefix LIKE 'heygen-avatar/%'").all()).toHaveLength(0);
-    expect(used()).toBe(27100);
+    expect(used()).toBe(12100);
   });
   it("preserves active avatar cleanup tasks and cleans up even after the job is deleted", async () => {
     env.VIDEO_PROVIDER = "heygen"; env.HEYGEN_API_KEY = "heygen-secret";
@@ -546,7 +545,7 @@ describe("Video workflow and private assets", () => {
     await new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step);
     await notifyVideo(env, id);
     expect(send).toHaveBeenCalledTimes(1);
-    expect(used()).toBe(27100);
+    expect(used()).toBe(12100);
     expect((await (await request(`/jobs/${id}`)).json() as any).job).toMatchObject({ status: "completed", email_status: "failed" });
     expect((await request(`/jobs/${id}/video`)).status).toBe(200);
   });
@@ -612,7 +611,7 @@ describe("Video workflow and private assets", () => {
     expect(typeof input.image_url).toBe("string"); expect(typeof input.audio_url).toBe("string");
     expect(input.avatar).toBeUndefined();
     expect(sqlite.prepare("SELECT status FROM jobs WHERE id=?").get(id)!.status).toBe("completed");
-    expect(used()).toBe(27100);
+    expect(used()).toBe(12100);
     expect((await request(`/video-inputs/${id}/audio?token=${meta.token}`, {}, false)).status).toBe(404);
     expect((await request(`/jobs/${id}/video`, {}, false)).status).toBe(401);
     const r = await request(`/jobs/${id}/video?download=1`);
@@ -631,7 +630,7 @@ describe("Video workflow and private assets", () => {
     expect(call[0]).toBe("https://queue.fal.run/fal-ai/kling-video/ai-avatar/v2/pro");
     expect(JSON.parse(call[1]!.body as string).image_url).toContain(`/video-inputs/${id}/image?token=`);
     expect(env.AUDIO.objects.has(meta.imageKey)).toBe(false);
-    expect(used()).toBe(54100);
+    expect(used()).toBe(36100);
   });
   it("refunds the original window exactly once when provider submission fails", async () => {
     const id = await create();
@@ -691,7 +690,7 @@ describe("Recovery of slow, interrupted and stuck video jobs", () => {
   }
   it("recovers a HeyGen submission interrupted before its ticket was saved, using the same idempotency key", async () => {
     env.VIDEO_PROVIDER = "heygen"; env.HEYGEN_API_KEY = "heygen-secret";
-    const id = await create(form("high"));
+    const id = await legacyHeyGen();
     // The Worker was evicted after claiming the submission but before saving the ticket.
     sqlite.prepare("UPDATE jobs SET submitted_at=? WHERE id=?").run(now() - 60, id);
     const mock = heygen();
@@ -700,11 +699,11 @@ describe("Recovery of slow, interrupted and stuck video jobs", () => {
     expect(submits).toHaveLength(1);
     expect((submits[0][1]?.headers as any)["Idempotency-Key"]).toBe(id);
     expect(sqlite.prepare("SELECT status FROM jobs WHERE id=?").get(id)!.status).toBe("completed");
-    expect(used()).toBe(54100);
+    expect(used()).toBe(36100);
   });
   it("does not resubmit to HeyGen once its idempotency window has passed", async () => {
     env.VIDEO_PROVIDER = "heygen"; env.HEYGEN_API_KEY = "heygen-secret";
-    const id = await create(form("high"));
+    const id = await legacyHeyGen();
     sqlite.prepare("UPDATE jobs SET submitted_at=? WHERE id=?").run(now() - 21 * 3600, id);
     const mock = heygen();
     await expect(new (VideoGeneration as any)({}, env).run({ payload: { jobId: id } }, step)).rejects.toThrow();
@@ -712,7 +711,7 @@ describe("Recovery of slow, interrupted and stuck video jobs", () => {
   });
   it("keeps polling a slow provider for more than an hour instead of refunding a video that is still rendering", async () => {
     env.VIDEO_PROVIDER = "heygen"; env.HEYGEN_API_KEY = "heygen-secret";
-    const id = await create(form("high"));
+    const id = await legacyHeyGen();
     const sleeps: string[] = [];
     const slowStep = { ...step, sleep: async (_: string, duration: string) => { sleeps.push(duration); } };
     heygen([...Array(200).fill("processing"), "completed"]);
@@ -811,13 +810,13 @@ describe("Per-model recording limits", () => {
   it("allows 2-minute recordings except on Kling Standard, which takes at most 60 s", async () => {
     sqlite.prepare("UPDATE jobs SET duration=90 WHERE id=?").run(sourceId);
     // Medium on Kling Standard (fal): 60 s at most.
-    const kling = await request("/videos", { method: "POST", body: form("medium", { credits: "81000" }) });
+    const kling = await request("/videos", { method: "POST", body: form("medium", { credits: "36000" }) });
     expect(kling.status).toBe(400);
     expect((await kling.json() as any).error).toContain("до 60 секунди");
     // High (Kling Pro) takes it.
-    expect((await request("/videos", { method: "POST", body: form("high", { credits: "162000" }) })).status).toBe(202);
+    expect((await request("/videos", { method: "POST", body: form("high", { credits: "108000" }) })).status).toBe(202);
     sqlite.prepare("UPDATE jobs SET duration=121 WHERE id=?").run(sourceId);
     sqlite.prepare("UPDATE jobs SET status='completed' WHERE kind='video'").run();
-    expect((await request("/videos", { method: "POST", body: form("high", { credits: String(121 * 1800) }) })).status).toBe(400);
+    expect((await request("/videos", { method: "POST", body: form("high", { credits: String(121 * 1200) }) })).status).toBe(400);
   });
 });

@@ -102,9 +102,11 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> 
         return row;
       });
       stage = "SUBMIT";
-      let avatar: HeyGenAvatar | null = null;
-      const jobTier = jobVideoTier(job);
-      if (savedVideoProvider(JSON.parse(job.video_meta).provider, jobTier) === "heygen" && jobTier === "medium") {
+      const jobTier = jobVideoTier(job), jobMeta: VideoMeta = JSON.parse(job.video_meta);
+      // A saved avatar (library or the user's own) is used as it is. Older Medium jobs created a
+      // temporary avatar from the photo first.
+      let avatar: HeyGenAvatar | null = jobMeta.engine && jobMeta.heygenAvatar ? jobMeta.heygenAvatar : null;
+      if (!jobMeta.engine && savedVideoProvider(jobMeta.provider, jobTier) === "heygen" && jobTier === "medium") {
         avatar = await step.do("create-photo-avatar-once", { retries: { limit: 0, delay: "1 second" }, timeout: "2 minutes" },
           () => prepareHeyGenAvatar(this.env, id));
         if (avatar) {
@@ -128,10 +130,10 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> 
         const meta: VideoMeta = JSON.parse(job.video_meta);
         const provider = savedVideoProvider(meta.provider, tier);
         if (!hasVideoCredential(this.env, provider)) throw new VideoFailure("SUBMIT", "AUTH");
-        if (provider === "heygen" && tier === "medium" && !avatar) throw new VideoFailure("SUBMIT", "INTERNAL");
+        if (provider === "heygen" && (meta.engine || tier === "medium") && !avatar) throw new VideoFailure("SUBMIT", "INTERNAL");
         const source = await this.env.DB.prepare("SELECT audio_key FROM jobs WHERE id=? AND user_id=? AND status='completed'").bind(job.source_job_id, job.user_id).first<any>();
         if (!source?.audio_key || !(await this.env.AUDIO.head(source.audio_key))) throw new Error("Missing audio");
-        if (tier !== "standard" && (!meta.imageKey || !(await this.env.AUDIO.head(meta.imageKey)))) throw new Error("Missing portrait");
+        if (tier !== "standard" && !meta.engine && (!meta.imageKey || !(await this.env.AUDIO.head(meta.imageKey)))) throw new Error("Missing portrait");
         const base = `${withDefaults(this.env).SITE_URL!.replace(/\/$/, "")}/api/video-inputs/${id}`;
         const audio_url = `${base}/audio?token=${meta.token}`;
         const input = tier === "standard"
@@ -144,7 +146,7 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId: string }> 
           throw new Error("Submission requires reconciliation");
         if (provider === "heygen" || provider === "wavespeed") {
           const t = provider === "heygen"
-            ? await submitHeyGenVideo(this.env, id, `${base}/image?token=${meta.token}`, audio_url, avatar || undefined)
+            ? await submitHeyGenVideo(this.env, id, `${base}/image?token=${meta.token}`, audio_url, avatar || undefined, meta.engine ?? "avatar_iii")
             : await submitWaveVideo(this.env, `${base}/image?token=${meta.token}`, audio_url);
           await this.env.DB.prepare("UPDATE jobs SET provider_request=?,updated_at=? WHERE id=?").bind(JSON.stringify(t), now(), id).run();
           return t;
