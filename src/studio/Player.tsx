@@ -6,7 +6,8 @@ import { musicGain, formatTime } from "../../shared/timeline";
 import { drawCaptions, fitSource, frameSize } from "../caption-render";
 import { drawBackground, drawLayers, mediaUrl, type Visual } from "../layers-render";
 import { portraitUrl } from "../project-document";
-import type { SceneMedia, Segment } from "./model";
+import { toSourceTime } from "../../shared/cuts";
+import { captionId, type SceneMedia, type Segment } from "./model";
 
 export type PlayerInput = {
   doc: ProjectDoc; segments: Segment[]; total: number; media: SceneMedia[];
@@ -95,8 +96,13 @@ export function usePlayer(input: PlayerInput) {
       // Voices of other scenes are parked; only the scene under the playhead plays.
       for (const seg of segments) {
         if (seg.kind !== "scene" || seg.estimated) continue;
-        const scene = doc.scenes[seg.index], el = voices.current.get(scene.id);
-        sync(el, t - seg.start - scene.speechStart, seg.speech, scene.voiceVolume, c.playing && seg === current);
+        const scene = doc.scenes[seg.index], el = voices.current.get(scene.id), local = t - seg.start - scene.speechStart;
+        if (scene.clip && el) {
+          // A filmed scene plays only its kept parts: the cut clip's clock maps onto the source video.
+          const source = Number.isFinite(el.duration) ? el.duration : seg.speech;
+          sync(el, toSourceTime(Math.min(Math.max(0, local), Math.max(0, seg.speech - .05)), scene.clip.keep), source, scene.voiceVolume,
+            c.playing && seg === current && local >= 0 && local < seg.speech);
+        } else sync(el, local, seg.speech, scene.voiceVolume, c.playing && seg === current);
       }
       for (const seg of segments) {
         if (seg.kind !== "bumper" || !seg.video) continue;
@@ -123,6 +129,7 @@ export function usePlayer(input: PlayerInput) {
           const voice = voices.current.get(scene.id), still = scene.portrait ? image(portraitUrl(scene.portrait)) : null;
           if (voice instanceof HTMLVideoElement && voice.readyState >= 2) fitSource(ctx, voice, voice.videoWidth, voice.videoHeight, w, h, look.fit);
           else if (still) fitSource(ctx, still, still.naturalWidth, still.naturalHeight, w, h, look.fit);
+          else if (scene.clip) placeholder(ctx, w, h, current.estimated ? "Видеото се проверява…" : "Зареждане на видеото…");
           else if (!scene.portrait) placeholder(ctx, w, h, "Изберете аватар");
           for (const l of scene.layers) {
             if (l.type !== "broll") continue;
@@ -130,7 +137,7 @@ export function usePlayer(input: PlayerInput) {
             if (v instanceof HTMLVideoElement) sync(v, local - l.start + l.trim, Number.isFinite(v.duration) ? v.duration : 0, 0, c.playing && local >= l.start && local < l.end);
           }
           drawLayers(ctx, w, h, local, scene.layers, (l) => (l.type === "text" ? null : visual(l.assetId)));
-          const words = m.audio && captions[m.audio.id];
+          const id = captionId(scene, m), words = id ? captions[id] : null;
           if (words && !current.estimated) drawCaptions(ctx, w, h, local - scene.speechStart, words, captionGroups(words.words));
         }
       }
@@ -156,6 +163,7 @@ export function usePlayer(input: PlayerInput) {
       if (seg.kind !== "scene" || seg.estimated) return null;
       const scene = doc.scenes[seg.index], m = media[seg.index];
       const ref = (el: HTMLMediaElement | null) => { if (el) voices.current.set(scene.id, el); else voices.current.delete(scene.id); };
+      if (scene.clip) return <video key={`${scene.id}:clip:${scene.clip.assetId}`} ref={ref} src={mediaUrl(scene.clip.assetId)} className="st-media" playsInline preload="auto" aria-hidden="true" />;
       return m.video?.status === "completed"
         ? <video key={`${scene.id}:${m.video.id}`} ref={ref} src={`/api/jobs/${m.video.id}/video`} className="st-media" playsInline preload="auto" aria-hidden="true" />
         : <audio key={`${scene.id}:${m.audio!.id}`} ref={ref} src={`/api/jobs/${m.audio!.id}/audio`} preload="auto" aria-hidden="true" />;

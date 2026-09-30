@@ -4337,3 +4337,7 @@ main h1[tabindex="-1"]:focus {
 .empty-state .heading-actions { justify-content: center; }
 /* Only rendered while the mobile menu is open. */
 .sidebar-backdrop { position: fixed; inset: 70px 0 0 0; z-index: 24; border: 0; padding: 0; background: #10140f66; }
+.grant-list { list-style: none; padding: 0; margin: 8px 0 12px; display: grid; gap: 8px; }
+.grant-list li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border: 1px solid #e0e4db; border-radius: 10px; }
+.grant-list span { min-width: 0; overflow-wrap: anywhere; }
+.grant-actions { display: flex; gap: 6px; }

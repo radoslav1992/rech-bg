@@ -178,6 +178,13 @@ export function Pricing({ inApp = false }: { inApp?: boolean }) {
           потвърждение. Ако не се отрази, презаредете след малко.
         </Notice>
       )}
+      {inApp && user?.granted && user.periodEnd && (
+        <Notice good>
+          Имате безплатен достъп до плана „{plans.find((p) => p.id === user.plan)?.name || user.plan}“ до{" "}
+          {new Date(user.periodEnd * 1000).toLocaleDateString("bg")} — без плащане. След това
+          се връщате към {user.hasSubscription ? "платения си абонамент" : "безплатния достъп"}, освен ако не изберете план.
+        </Notice>
+      )}
       {inApp && user && (
         <div className="billing-summary">
           <span>
@@ -194,7 +201,7 @@ export function Pricing({ inApp = false }: { inApp?: boolean }) {
           </span>
           {user.periodEnd && (
             <span>
-              Период до{" "}
+              {user.granted ? "Безплатен достъп до " : "Период до "}
               {new Date(user.periodEnd * 1000).toLocaleDateString("bg")}
             </span>
           )}

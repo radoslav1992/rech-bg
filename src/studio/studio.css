@@ -141,3 +141,17 @@
   .st-canvas canvas { max-height: 52vh; }
   .st-title input { font-size: 18px; }
 }
+.st-quote { margin: 0; padding: 10px 12px; border-left: 3px solid var(--st-blue); background: #f4f6f0; border-radius: 8px; }
+.st-clip-picker { display: grid; gap: 8px; }
+.st-clip-picker .tl-upload.disabled { opacity: .55; cursor: not-allowed; }
+.st-cut-summary { display: grid; gap: 4px; padding: 10px 12px; border-radius: 10px; background: #eef2e6; }
+.st-cut-summary span { font-size: 13px; color: #56604f; }
+.st-cut-summary .btn { justify-self: start; margin-top: 4px; display: inline-flex; align-items: center; gap: 6px; }
+.st-add-menu { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
+.st-add-menu .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: 13px; padding-inline: 8px; }
+.st-writer { display: grid; gap: 10px; }
+.st-writer textarea { min-height: 96px; }
+.st-writer-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.st-written { display: grid; gap: 8px; padding: 0; margin: 4px 0 10px; list-style: none; counter-reset: written; }
+.st-written li { border: 1px solid var(--st-line); border-radius: 10px; padding: 10px 12px; background: #fff; }
+.st-written p { margin: 4px 0 0; font-size: 14px; line-height: 1.5; white-space: pre-wrap; }

@@ -10,7 +10,7 @@ import {
   Upload,
   UserRound,
 } from "lucide-react";
-import { voiceList, sampleSentence } from "../shared/catalog";
+import { voiceList, sampleSentence, plans } from "../shared/catalog";
 import { api, post, Button, Notice, useAuth, type Voice } from "./lib";
 // Admin-only panels load only for admins.
 const AvatarLibraryAdmin = lazy(() => import("./AvatarLibrary").then(m => ({ default: m.AvatarLibraryAdmin })));
@@ -178,7 +178,7 @@ export function SettingsPage() {
           Изтеглете данните
         </a>
       </section>
-      {user?.admin && <Suspense fallback={<p role="status">Зареждане…</p>}><BillingHealth /><AvatarLibraryAdmin /><StudioVoiceAdmin /><AdminSettings /></Suspense>}
+      {user?.admin && <Suspense fallback={<p role="status">Зареждане…</p>}><BillingHealth /><PlanGrants /><AvatarLibraryAdmin /><StudioVoiceAdmin /><AdminSettings /></Suspense>}
       <section className="settings-card danger-zone">
         <h2>
           <Trash2 size={21} />
@@ -430,6 +430,64 @@ function BillingHealth() {
         {!health.prices && <Notice error>Липсва някоя от STRIPE_PRICE_STARTER / CREATOR / STUDIO.</Notice>}
         <p className="small-note">Ако след плащане или смяна на план тук няма ново събитие, проверете в Stripe → Developers → Webhooks адреса https://rechbg.com/api/billing/webhook, режима (test/live), избраните събития и секрета. Приложението допълнително чете абонамента от Stripe при отваряне на „Абонамент“ и веднъж на сесия.</p>
       </>}
+    </section>
+  );
+}
+
+type Grant = { id: string; plan: string; start: number; end: number; email: string; name: string; used: number };
+const planName = (id: string) => plans.find((p) => p.id === id)?.name || id;
+const day = (t: number) => new Date(t * 1000).toLocaleDateString("bg");
+/** Admin: a paid plan for one month without payment (testers, partners), with the running grants. */
+function PlanGrants() {
+  const [data, setData] = useState<{ grants: Grant[]; now: number } | null>(null);
+  const [email, setEmail] = useState(""), [plan, setPlan] = useState("studio");
+  const [busy, setBusy] = useState(""), [error, setError] = useState(""), [done, setDone] = useState("");
+  const load = () => api<{ grants: Grant[]; now: number }>("/admin/grants").then(setData).catch((e) => setError(e.message));
+  useEffect(() => { void load(); }, []);
+  const grant = async (to: string, chosen: string, key = "grant") => {
+    setBusy(key); setError(""); setDone("");
+    try {
+      const r = await post<{ end: number; paidPlan: string | null }>("/admin/grants", { email: to, plan: chosen });
+      setDone(`${to} има план „${planName(chosen)}“ до ${day(r.end)}` +
+        (r.paidPlan ? ` — внимание: има и платен абонамент „${planName(r.paidPlan)}“ в Stripe, който продължава да се таксува.` : ""));
+      if (key === "grant") setEmail("");
+      await load();
+    } catch (e) { setError((e as Error).message); }
+    finally { setBusy(""); }
+  };
+  const end = async (g: Grant) => {
+    if (!confirm(`Да прекратим ли плана „${planName(g.plan)}“ на ${g.email} сега?`)) return;
+    setBusy(g.id); setError(""); setDone("");
+    try { await api(`/admin/grants/${g.id}`, { method: "DELETE" }); await load(); }
+    catch (e) { setError((e as Error).message); }
+    finally { setBusy(""); }
+  };
+  const running = data?.grants.filter((g) => g.end > data.now) || [], ended = data?.grants.filter((g) => g.end <= data.now) || [];
+  return (
+    <section className="settings-card">
+      <h2><Sparkles size={21} /> Безплатен план за 1 месец</h2>
+      <p className="small-note">За тестери и партньори: избраният план с пълните му кредити за 30 дни, без плащане. Накрая потребителят се връща към платения си план или към безплатния достъп. Повторно предоставяне започва нов месец с нови кредити.</p>
+      {error && <Notice error>{error}</Notice>}
+      {done && <Notice good>{done}</Notice>}
+      <form onSubmit={(e) => { e.preventDefault(); void grant(email.trim(), plan); }}>
+        <label>Имейл на потребителя<input type="email" required value={email} maxLength={254} onChange={(e) => setEmail(e.target.value)} placeholder="name@example.com" /></label>
+        <label>План<select value={plan} onChange={(e) => setPlan(e.target.value)}>
+          {plans.filter((p) => p.price > 0).map((p) => <option key={p.id} value={p.id}>{p.name} · {p.chars.toLocaleString("bg")} кредита</option>)}
+        </select></label>
+        <Button type="submit" busy={busy === "grant"} disabled={!email.trim() || !!busy} className="btn primary">Дай плана за 1 месец</Button>
+      </form>
+      {running.length > 0 && <>
+        <h3>Активни</h3>
+        <ul className="grant-list">{running.map((g) => <li key={g.id}>
+          <span><strong>{g.email}</strong> · {planName(g.plan)} · до {day(g.end)} · използвани {Number(g.used).toLocaleString("bg")} кредита</span>
+          <span className="grant-actions">
+            <Button className="btn outline" busy={busy === "renew:" + g.id} disabled={!!busy}
+              onClick={() => { if (confirm(`Нов месец „${planName(g.plan)}“ за ${g.email} от днес, с нови кредити?`)) void grant(g.email, g.plan, "renew:" + g.id); }}>Нов месец</Button>
+            <Button className="btn outline" busy={busy === g.id} disabled={!!busy} onClick={() => end(g)}>Прекрати</Button>
+          </span>
+        </li>)}</ul>
+      </>}
+      {ended.length > 0 && <p className="small-note">Приключили през последните 90 дни: {ended.map((g) => `${g.email} (${planName(g.plan)}, до ${day(g.end)})`).join(", ")}.</p>}
     </section>
   );
 }

@@ -6,7 +6,7 @@ import { MAX_SCENES, type ProjectDoc } from "../../shared/project";
 import { clampMusicStart, formatTime, MAX_LEAD, moveWords } from "../../shared/timeline";
 import { layerNames } from "../LayerTools";
 import { portraitUrl } from "../project-document";
-import type { SceneMedia, Segment } from "./model";
+import { captionId, type SceneMedia, type Segment } from "./model";
 import type { Player } from "./Player";
 
 export type Selection =
@@ -116,8 +116,8 @@ export function ProjectTimeline({ doc, segments, total, media, captions, assets,
             if (seg.kind === "bumper") return <button type="button" key={seg.which} className={`tl-clip st-bumper${selection.kind === "project" ? " selected" : ""}`} style={at(seg.start, seg.length)}
               onClick={() => { onSelect({ kind: "project" }); player.seek(seg.start); }}><span>{seg.which === "intro" ? "Интро" : "Финал"}</span></button>;
             const scene = doc.scenes[seg.index], m = media[seg.index], thumb = portraitUrl(scene.portrait);
-            const state = m.video?.status === "completed" ? "Видео ✓" : m.pendingVideo ? "Видео…" : m.audio?.status === "completed" ? (m.stale ? "Глас · остарял" : "Глас ✓") : m.audio && m.audio.status !== "failed" ? "Глас…" : "Чернова";
-            return <button type="button" key={scene.id} className={`tl-clip tl-visual st-scene-clip${isScene(seg.index) ? " selected" : ""}${m.video?.status === "completed" ? " ready" : ""}`}
+            const state = scene.clip ? (seg.estimated ? "Заснето · проверка" : "Заснето ✓") : m.video?.status === "completed" ? "Видео ✓" : m.pendingVideo ? "Видео…" : m.audio?.status === "completed" ? (m.stale ? "Глас · остарял" : "Глас ✓") : m.audio && m.audio.status !== "failed" ? "Глас…" : "Чернова";
+            return <button type="button" key={scene.id} className={`tl-clip tl-visual st-scene-clip${isScene(seg.index) ? " selected" : ""}${m.video?.status === "completed" || (scene.clip && !seg.estimated) ? " ready" : ""}`}
               style={{ ...at(seg.start, seg.length), ...(thumb ? { backgroundImage: `url("${thumb}")` } : {}) }}
               aria-label={`Сцена ${seg.index + 1}${scene.title ? ` „${scene.title}“` : ""}, ${state}`}
               onClick={() => { onSelect({ kind: "scene", scene: seg.index }); player.seek(seg.start); }}>
@@ -133,13 +133,13 @@ export function ProjectTimeline({ doc, segments, total, media, captions, assets,
             const scene = doc.scenes[seg.index], start = seg.start + scene.speechStart;
             const select = () => onSelect({ kind: "scene", scene: seg.index });
             if (seg.estimated) return <button type="button" key={scene.id} className="tl-clip st-voice-empty" style={at(start, seg.speech)} onClick={select}>
-              <span>{media[seg.index].audio && media[seg.index].audio!.status !== "failed" ? "Гласът се създава…" : "Още няма глас"}</span></button>;
+              <span>{scene.clip ? "Видеото се проверява…" : media[seg.index].audio && media[seg.index].audio!.status !== "failed" ? "Гласът се създава…" : "Още няма глас"}</span></button>;
             return <button type="button" key={scene.id} className={`tl-clip tl-voice${isScene(seg.index) ? " selected" : ""}`} style={at(start, seg.speech)}
-              aria-label={`Глас на сцена ${seg.index + 1}, ${seg.speech.toFixed(1)} сек., начало ${scene.speechStart.toFixed(1)} сек.`}
+              aria-label={`${scene.clip ? "Звук на видеото" : "Глас"} в сцена ${seg.index + 1}, ${seg.speech.toFixed(1)} сек., начало ${scene.speechStart.toFixed(1)} сек.`}
               onPointerDown={(e) => { const s = scene.speechStart; drag(e, pxPerSecond, (d) => moveSpeech(seg.index, s, d), select); }}
               onClick={(e) => { if (e.detail === 0) select(); }}
               onKeyDown={(e) => { const d = nudge(e); if (d) { e.preventDefault(); moveSpeech(seg.index, scene.speechStart, d); } }}>
-              <span>{seg.speech.toFixed(1)} сек.</span></button>;
+              <span>{scene.clip ? "Звук от видеото · " : ""}{seg.speech.toFixed(1)} сек.</span></button>;
           })}
         </div></div>
 
@@ -165,20 +165,23 @@ export function ProjectTimeline({ doc, segments, total, media, captions, assets,
         <div className="tl-row"><div className="tl-label"><Captions size={15} /> Субтитри</div><div className="tl-lane" style={laneStyle} onPointerDown={seekFromLane}>
           {scenes.flatMap((seg) => {
             if (seg.kind !== "scene" || seg.estimated) return [];
-            const scene = doc.scenes[seg.index], audio = media[seg.index].audio!, caption = captions[audio.id];
-            if (!caption) return [];
+            const scene = doc.scenes[seg.index], id = captionId(scene, media[seg.index]), caption = id ? captions[id] : null;
+            if (!id || !caption) return [];
+            // A filmed clip's captions follow its cuts: they are selected here and edited in the media library.
+            const fixed = !!scene.clip;
             const groups = captionGroups(caption.words);
             let first = 0;
             return groups.map((g, i) => {
               const from = first; first += g.length;
               const open = () => { onSelect({ kind: "caption", scene: seg.index, group: i }); player.seek(seg.start + scene.speechStart + g[0].start); };
-              const move = (words: CaptionDocument["words"], delta: number) =>
-                editCaptions(audio.id, (d) => ({ ...d, words: moveWords(words, from, from + g.length - 1, delta, seg.speech) }));
+              const move = (words: CaptionDocument["words"], delta: number) => {
+                if (!fixed) editCaptions(id, (d) => ({ ...d, words: moveWords(words, from, from + g.length - 1, delta, seg.speech) }));
+              };
               const selected = selection.kind === "caption" && selection.scene === seg.index && selection.group === i;
-              return <button type="button" key={`${audio.id}:${from}`} className={`tl-clip tl-caption${selected ? " selected" : ""}${caption.enabled ? "" : " muted"}`}
+              return <button type="button" key={`${id}:${from}`} className={`tl-clip tl-caption${selected ? " selected" : ""}${caption.enabled ? "" : " muted"}`}
                 style={at(seg.start + scene.speechStart + g[0].start, g.at(-1)!.end - g[0].start)} title={g.map((w) => w.text).join(" ")}
-                onPointerDown={(e) => { const words = caption.words; drag(e, pxPerSecond, (d) => move(words, d), open); }}
-                onClick={(e) => { if (e.detail === 0) open(); }}
+                onPointerDown={fixed ? undefined : (e) => { const words = caption.words; drag(e, pxPerSecond, (d) => move(words, d), open); }}
+                onClick={(e) => { if (fixed || e.detail === 0) open(); }}
                 onKeyDown={(e) => { const d = nudge(e); if (d) { e.preventDefault(); move(caption.words, d); } }}>{g.map((w) => w.text).join(" ")}</button>;
             });
           })}

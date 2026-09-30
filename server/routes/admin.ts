@@ -1,6 +1,7 @@
 import type { Env, ContextVars } from "../types";
 import { Hono } from "hono";
 import { adminAvatars } from "../avatars";
+import { planGrants } from "../plan-grants";
 import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
 import { isStudioVoice, resolveStudioVoice, studioVoiceCatalog, studioVoiceKey, studioVoiceSchema } from "../studio-voices";
 import { HTTPException } from "hono/http-exception";
@@ -17,6 +18,7 @@ admin.use("/api/admin/*", async (c, next) => {
   await next();
 });
 admin.route("/api/admin/avatars", adminAvatars);
+admin.route("/api/admin/grants", planGrants);
 /** Whether Stripe webhooks arrive: the last processed event and how many in the last 7 days. */
 admin.get("/api/admin/billing-health", async (c) => {
   const row = await c.env.DB.prepare("SELECT MAX(created_at) last, SUM(created_at>?) week FROM billing_events").bind(now() - 7 * 86400).first<{ last: number | null; week: number | null }>();

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Film, Image as ImageIcon, Mic, RefreshCw, Sparkles, UserRound } from "lucide-react";
 import { api, Button, Notice, number, useAuth, type Job } from "../lib";
@@ -23,7 +23,7 @@ export type VideoRequest = { tier: VideoTier; consent: boolean; notifyEmail: boo
 const when = (j: Job) => new Date(j.created_at * 1000).toLocaleString("bg");
 
 /** Everything about one scene: what is said, by whom, who presents it, and its timing and look. */
-export function SceneInspector({ scene, index, media, voices, studioEnabled, videoConfig, mediumAllowed = true, fit, assets, hasLogo, busy,
+export function SceneInspector({ scene, index, media, voices, studioEnabled, videoConfig, mediumAllowed = true, fit, assets, hasLogo, busy, clip,
   onChange, onGenerateAudio, onCreateVideo, onChooseAvatar, onSelectAudio, onSelectVideo, onAddLayer, onAddMediaLayer }: {
   scene: ProjectScene; index: number; media: SceneMedia; voices: readonly StudioVoice[]; studioEnabled: boolean;
   videoConfig: VideoConfig | null;
@@ -32,6 +32,8 @@ export function SceneInspector({ scene, index, media, voices, studioEnabled, vid
   fit: string; assets: MediaAsset[]; hasLogo: boolean;
   /** "audio" or "video" while that request for this scene is being sent. */
   busy: "audio" | "video" | null;
+  /** A filmed scene's video and cuts, shown instead of the presenter, script and voice. */
+  clip?: ReactNode;
   onChange: (change: (s: ProjectScene) => ProjectScene) => void;
   onGenerateAudio: (credits: number) => void;
   onCreateVideo: (request: VideoRequest, credits: number) => void;
@@ -113,6 +115,7 @@ export function SceneInspector({ scene, index, media, voices, studioEnabled, vid
   return <div className="st-inspector-body">
     <label>Име на сцената<input value={scene.title} maxLength={80} placeholder={`Сцена ${index + 1}`} onChange={(e) => onChange((s) => ({ ...s, title: e.target.value }))} /></label>
 
+    {clip || <>
     <section className="st-block" aria-labelledby="st-avatar-h">
       <h3 id="st-avatar-h"><UserRound size={17} /> Аватар</h3>
       <div className="st-avatar-current">
@@ -191,11 +194,12 @@ export function SceneInspector({ scene, index, media, voices, studioEnabled, vid
       {videoCost > remaining && <p className="st-fine">Нямате достатъчно кредити. <Link to="/app/billing">Вижте плановете</Link></p>}
       <p className="st-fine">Видеото се таксува отделно от гласа, за всяка започната секунда. При неуспех кредитите се връщат.</p>
     </section>
+    </>}
 
     <section className="st-block" aria-labelledby="st-timing-h">
       <h3 id="st-timing-h"><ImageIcon size={17} /> Време и фон</h3>
-      <label>Сила на гласа · {Math.round(scene.voiceVolume * 100)}%<input type="range" min="0" max="1" step=".05" value={scene.voiceVolume} onChange={(e) => onChange((s) => ({ ...s, voiceVolume: Number(e.target.value) }))} /></label>
-      <label>Пауза преди гласа · {scene.speechStart.toFixed(1)} сек.<input type="range" min="0" max={MAX_LEAD} step=".1" value={scene.speechStart} onChange={(e) => onChange((s) => ({ ...s, speechStart: Number(e.target.value) }))} /></label>
+      <label>{scene.clip ? "Сила на звука" : "Сила на гласа"} · {Math.round(scene.voiceVolume * 100)}%<input type="range" min="0" max="1" step=".05" value={scene.voiceVolume} onChange={(e) => onChange((s) => ({ ...s, voiceVolume: Number(e.target.value) }))} /></label>
+      <label>{scene.clip ? "Пауза преди видеото" : "Пауза преди гласа"} · {scene.speechStart.toFixed(1)} сек.<input type="range" min="0" max={MAX_LEAD} step=".1" value={scene.speechStart} onChange={(e) => onChange((s) => ({ ...s, speechStart: Number(e.target.value) }))} /></label>
       <label>Задържане в края · {scene.tail.toFixed(1)} сек.<input type="range" min="0" max={MAX_TAIL} step=".1" value={scene.tail} onChange={(e) => onChange((s) => ({ ...s, tail: Number(e.target.value) }))} /></label>
       <BackgroundControl background={scene.background} assets={assets} fit={fit} onChange={(background) => onChange((s) => ({ ...s, background }))} />
     </section>

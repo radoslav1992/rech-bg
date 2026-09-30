@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../server/index";
 import { AudioGeneration } from "../server/workflow";
 import { database, bucket } from "./helpers";
@@ -219,4 +219,24 @@ it("strips performance cues from timed captions and exports proper subtitle file
   expect(() => validateSuggestedDelivery("Здравей!", "[excited]Здравей!")).not.toThrow();
   expect(() => validateSuggestedDelivery("Здравей!", "[excited]Друго!")).toThrow();
   expect(() => validateStudioScript("[unknown]Текст")).toThrow();
+});
+describe("AI script writer", () => {
+  const plan = { scenes: [{ title: "Кука", script: "Знаете ли, че [excited] кафето <b>събужда</b> града?" }, { title: "Покана", script: "Елате днес." }] };
+  it("returns clean scenes, counts only successful scripts and treats the topic as data", async () => {
+    env.AI.run.mockResolvedValue({ output_text: "```json\n" + JSON.stringify(plan) + "\n```" });
+    const r = await request("/video-studio/write", { topic: "Ново кафе в центъра на София", tone: "ad", seconds: 60 });
+    expect(r.status).toBe(200);
+    expect(await r.json()).toEqual({ scenes: [{ title: "Кука", script: "Знаете ли, че кафето събужда града?" }, { title: "Покана", script: "Елате днес." }] });
+    const call = env.AI.run.mock.calls[0][1];
+    expect(JSON.parse(call.input)).toEqual({ topic: "Ново кафе в центъра на София" });
+    expect(call.instructions).toContain("exactly 2 scene(s)");
+    env.AI.run.mockResolvedValue({ output_text: "Not JSON" });
+    for (let i = 0; i < 12; i++) expect((await request("/video-studio/write", { topic: "Тема", tone: "story", seconds: 30 })).status).toBe(422);
+    env.AI.run.mockResolvedValue({ output_text: JSON.stringify(plan) });
+    expect((await request("/video-studio/write", { topic: "Тема", tone: "calm", seconds: 30 })).status).toBe(200);
+  });
+  it("rejects invalid lengths and empty topics", async () => {
+    expect((await request("/video-studio/write", { topic: "Тема", tone: "ad", seconds: 45 })).status).toBe(400);
+    expect((await request("/video-studio/write", { topic: " ", tone: "ad", seconds: 30 })).status).toBe(400);
+  });
 });

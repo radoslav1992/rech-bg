@@ -12,6 +12,7 @@ import { MB } from "../shared/media";
 import { MAX_DOC_BYTES, MAX_PROJECT_SECONDS, projectDocSchema, sceneTimeline, type ProjectDoc } from "../shared/project";
 import { speechRanges, timelineLength } from "../shared/timeline";
 import { imageAssetKinds, videoAssetKinds } from "../shared/layers";
+import { cutWords, keptDuration, normalizeKeep } from "../shared/cuts";
 
 // Server-side video studio projects: the JSON document (scenes, timeline, media references) and its render.
 export const studioProjects = new Hono<{ Bindings: Env; Variables: ContextVars }>();
@@ -34,6 +35,7 @@ const invalid = () => new HTTPException(400, { message: "Проектът съд
 export const layerAssets = (s: ProjectDoc["scenes"][number]) => [
   ...s.layers.flatMap((l) => (l.type === "text" ? [] : [`${l.type}:${l.assetId}`])),
   ...(s.background?.type === "image" ? [`background:${s.background.assetId}`] : []),
+  ...(s.clip ? [`clip:${s.clip.assetId}`] : []),
 ];
 export async function ownedMedia(e: Env, userId: string, id: string, kinds: readonly string[], statuses: string[]) {
   return e.DB.prepare(
@@ -77,6 +79,9 @@ async function checkReferences(e: Env, userId: string, projectId: string, next: 
       const statuses = layer.type === "image" ? ["ready"] : ["ready", "checking"];
       if (!(await ownedMedia(e, userId, layer.assetId, kinds, statuses))) throw invalid();
     }
+    // A filmed scene: an uploaded video (it may still be under its automatic check).
+    if (s.clip && fresh(`clip:${s.clip.assetId}`) && !(await ownedMedia(e, userId, s.clip.assetId, videoAssetKinds, ["ready", "checking"])))
+      throw invalid();
     if (s.background?.type === "image" && fresh(`background:${s.background.assetId}`) && !(await ownedMedia(e, userId, s.background.assetId, imageAssetKinds, ["ready"])))
       throw invalid();
     if (s.portrait?.type === "asset" && fresh(s.portrait.id)) {
@@ -159,18 +164,40 @@ async function renderPlan(e: Env, user: DbUser, projectId: string) {
   const intro = await bumper(stored.document.intro, "Интро: ");
   const outro = await bumper(stored.document.outro, "Финал: ");
   let offset = intro?.seconds || 0;
+  // A filmed clip without a paid transcription makes the export paid, as for any uploaded video.
+  let untranscribed = false;
   for (const [i, scene] of stored.document.scenes.entries()) {
     const label = stored.document.scenes.length > 1 ? `Сцена ${i + 1}: ` : "";
-    if (!scene.audioJobId || !scene.videoJobId)
-      throw new HTTPException(400, { message: `${label}Експортът се отключва, когато видео аватарът е готов.` });
-    const audio = await e.DB.prepare("SELECT audio_key,duration FROM jobs WHERE id=? AND user_id=? AND kind='audio' AND status='completed'")
-      .bind(scene.audioJobId, user.id)
-      .first<{ audio_key: string; duration: number }>();
-    if (!audio?.audio_key) throw invalid();
-    const video = await exportSource(e, user.id, scene.videoJobId);
-    if (!video.generated) throw invalid();
-    const saved = await e.AUDIO.get(captionKey(user.id, scene.audioJobId));
-    const captions = validDocument(saved ? await new Response(saved.body).json() : defaultCaptions, audio.duration);
+    let audio: { audio_key: string; duration: number }, video: { key: string }, captions: ReturnType<typeof validDocument>;
+    let clip: { keep: [number, number][] | null; clean: boolean } | null = null;
+    if (scene.clip) {
+      // A filmed scene: the clip's own picture and sound, cut as the editor shows it; captions from its transcript.
+      const asset = await e.DB.prepare(
+        `SELECT object_key,duration,captions FROM media_assets WHERE id=? AND user_id=? AND status='ready' AND expires_at>? AND kind IN (${videoAssetKinds.map(() => "?").join(",")})`,
+      ).bind(scene.clip.assetId, user.id, now(), ...videoAssetKinds).first<{ object_key: string; duration: number; captions: string | null }>();
+      if (!asset?.duration) throw new HTTPException(400, { message: `${label}Видеото на сцената вече не е налично или още се проверява.` });
+      const keep = scene.clip.keep ? normalizeKeep(scene.clip.keep, asset.duration) : null;
+      if (keep && !keep.length) throw new HTTPException(400, { message: `${label}Монтажът изряза цялото видео.` });
+      const source = validDocument(asset.captions ? JSON.parse(asset.captions) : defaultCaptions, asset.duration);
+      clip = { keep, clean: scene.clip.clean };
+      if (!asset.captions) untranscribed = true;
+      audio = { audio_key: asset.object_key, duration: keptDuration(keep, asset.duration) };
+      video = { key: asset.object_key };
+      captions = { ...source, words: cutWords(source.words, keep) };
+    } else {
+      if (!scene.audioJobId || !scene.videoJobId)
+        throw new HTTPException(400, { message: `${label}Експортът се отключва, когато видео аватарът е готов.` });
+      const voice = await e.DB.prepare("SELECT audio_key,duration FROM jobs WHERE id=? AND user_id=? AND kind='audio' AND status='completed'")
+        .bind(scene.audioJobId, user.id)
+        .first<{ audio_key: string; duration: number }>();
+      if (!voice?.audio_key) throw invalid();
+      audio = voice;
+      const generated = await exportSource(e, user.id, scene.videoJobId);
+      if (!generated.generated) throw invalid();
+      video = generated;
+      const saved = await e.AUDIO.get(captionKey(user.id, scene.audioJobId));
+      captions = validDocument(saved ? await new Response(saved.body).json() : defaultCaptions, audio.duration);
+    }
     const settings = sceneTimeline(scene, music);
     const length = timelineLength(settings, audio.duration);
     let background: { color: string } | { input: number } | null = null;
@@ -193,7 +220,7 @@ async function renderPlan(e: Env, user: DbUser, projectId: string) {
         ? { kind: "image", input, start, end, position: layer.position, width: layer.width, opacity: layer.opacity }
         : { kind: "broll", input, start, end, trim: still || layer.type !== "broll" ? 0 : layer.trim, still });
     }
-    scenes.push({ scene, audio, video, captions, settings, offset, length, background });
+    scenes.push({ scene, audio, video, captions, settings, offset, length, background, clip });
     offset += length;
   }
   offset += outro?.seconds || 0;
@@ -208,8 +235,8 @@ async function renderPlan(e: Env, user: DbUser, projectId: string) {
     musicKey = asset.object_key;
   }
   // A one-scene project keeps pricing per generated video; a multi-scene project is priced as one video.
-  const source = scenes.length === 1 ? scenes[0].scene.videoJobId! : projectId;
-  const credits = await exportQuote(e, user.id, source, offset, true);
+  const source = scenes.length === 1 && !scenes[0].clip ? scenes[0].scene.videoJobId! : projectId;
+  const credits = await exportQuote(e, user.id, source, offset, !untranscribed);
   if (extras.length > 40) throw new HTTPException(400, { message: "Проектът използва твърде много файлове в слоевете (до 40)." });
   return { scenes, length: offset, credits, source, music, musicKey, extras, overlays, texts, intro, outro };
 }
@@ -247,6 +274,8 @@ studioProjects.post("/:id/render", async (c) => {
           tail: x.settings.tail,
           voiceVolume: x.settings.voiceVolume,
           speechDuration: x.audio.duration,
+          // A filmed scene plays its own sound, cut to the kept parts, optionally cleaned up.
+          clip: x.clip,
           background: x.background && ("color" in x.background ? x.background : { input: first + x.background.input }),
         })),
         layers: plan.overlays.map((o) => ({ ...o, input: first + o.input })),

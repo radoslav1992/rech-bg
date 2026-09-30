@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { Captions, Download, Music, Trash2, Upload } from "lucide-react";
 import { Button, Disclosure, Notice } from "../lib";
 import { LayerInspector } from "../LayerTools";
@@ -14,7 +15,7 @@ import type { MediaAsset } from "../../shared/media";
 import { sceneTimeline, type ProjectDoc } from "../../shared/project";
 import { formatTime } from "../../shared/timeline";
 import { mediaUrl } from "../layers-render";
-import type { SceneMedia, SceneSegment } from "./model";
+import { captionId, readyClip, type SceneMedia, type SceneSegment } from "./model";
 import type { Selection } from "./ProjectTimeline";
 
 /** The clip selected on the timeline: a layer, a caption block or the music. */
@@ -41,7 +42,14 @@ export function ElementInspector({ selection, doc, segment, captions, assets, up
     const group = groups[selection.group];
     if (!group) return <p className="st-fine">Субтитърът е премахнат.</p>;
     const first = groups.slice(0, selection.group).reduce((n, g) => n + g.length, 0);
-    const speechStart = doc.scenes[selection.scene].speechStart;
+    const scene = doc.scenes[selection.scene], speechStart = scene.speechStart;
+    if (scene.clip) return <div className="tl-inspector st-inspector-body">
+      <h3><Captions size={17} /> Субтитър {selection.group + 1} · сцена {selection.scene + 1}</h3>
+      <p>{formatTime(group[0].start + speechStart)} – {formatTime(group.at(-1)!.end + speechStart)} в сцената</p>
+      <blockquote className="st-quote">{group.map((w) => w.text).join(" ")}</blockquote>
+      <p className="st-fine">Субтитрите на заснето видео следват монтажа. Думите се поправят в <Link to={`/app/media?asset=${scene.clip.assetId}`}>Медия → Субтитри</Link>.</p>
+      <label className="checkbox-label"><input type="checkbox" checked={captions.enabled} onChange={(e) => editCaptions((d) => ({ ...d, enabled: e.target.checked }))} /> Субтитри в тази сцена</label>
+    </div>;
     return <div className="tl-inspector st-inspector-body">
       <h3><Captions size={17} /> Субтитър {selection.group + 1} · сцена {selection.scene + 1}</h3>
       <p>{formatTime(group[0].start + speechStart)} – {formatTime(group.at(-1)!.end + speechStart)} в сцената · плъзнете блока, за да го преместите.</p>
@@ -108,16 +116,18 @@ export function ProjectPanel({ projectId, doc, look, update, editLook, brand, on
 }
 
 /** Final video: the server joins every scene; a one-scene project can also be exported free in the browser. */
-export function ExportPanel({ projectId, doc, media, segments, captions, look, onSave }: {
-  projectId: string; doc: ProjectDoc; media: SceneMedia[]; segments: SceneSegment[];
+export function ExportPanel({ projectId, doc, media, segments, captions, look, assets, onSave }: {
+  projectId: string; doc: ProjectDoc; media: SceneMedia[]; segments: SceneSegment[]; assets: MediaAsset[];
   captions: Record<string, CaptionDocument>; look: CaptionDocument; onSave: () => Promise<void>;
 }) {
   const [exporting, setExporting] = useState(false), [progress, setProgress] = useState(0), [error, setError] = useState("");
   const abort = useRef<AbortController | null>(null);
   // Closing the dialog stops a browser export instead of leaving it running unseen.
   useEffect(() => () => abort.current?.abort(), []);
-  const missing = doc.scenes.map((s, i) => ({ i, s, m: media[i] })).filter(({ m }) => m.audio?.status !== "completed" || m.video?.status !== "completed");
-  const single = doc.scenes.length === 1 && !doc.intro && !doc.outro && missing.length === 0;
+  const missing = doc.scenes.map((s, i) => ({ i, s, m: media[i] }))
+    .filter(({ s, m }) => s.clip ? !readyClip(s, assets) : m.audio?.status !== "completed" || m.video?.status !== "completed");
+  // The browser export joins a generated video with its voice; filmed scenes and cuts need the server.
+  const single = doc.scenes.length === 1 && !doc.scenes[0].clip && !doc.intro && !doc.outro && missing.length === 0;
   const browserExport = async () => {
     const scene = doc.scenes[0], m = media[0], caption = captions[m.audio!.id];
     if (!caption) return;
@@ -136,10 +146,10 @@ export function ExportPanel({ projectId, doc, media, segments, captions, look, o
   const hasVideoBroll = doc.scenes[0].layers.some((l) => l.type === "broll");
   return <div className="st-export">
     {missing.length > 0 ? <>
-      <Notice>Финалното видео се отключва, когато всяка сцена има готов глас и видео аватар.</Notice>
+      <Notice>Финалното видео се отключва, когато всяка сцена има готов глас и видео аватар или проверено заснето видео.</Notice>
       <ul className="st-checklist">{missing.map(({ i, s, m }) => <li key={s.id}>
         <strong>Сцена {i + 1}{s.title ? ` · ${s.title}` : ""}</strong>
-        <span>{m.audio?.status !== "completed" ? "няма готов глас" : m.pendingVideo ? "видеото се създава" : "няма видео аватар"}</span>
+        <span>{s.clip ? "видеото още се проверява или вече не е налично" : m.audio?.status !== "completed" ? "няма готов глас" : m.pendingVideo ? "видеото се създава" : "няма видео аватар"}</span>
       </li>)}</ul>
     </> : <BackgroundExport sourceId={projectId} projectId={projectId} document={look} onSave={onSave} />}
     {single && <Disclosure className="tl-more" summary="Безплатен експорт в браузъра">
@@ -150,11 +160,11 @@ export function ExportPanel({ projectId, doc, media, segments, captions, look, o
     </Disclosure>}
     <h3>Файлове по сцени</h3>
     <ul className="st-files">{segments.map((seg) => {
-      const m = media[seg.index], caption = m.audio && captions[m.audio.id];
+      const m = media[seg.index], id = captionId(doc.scenes[seg.index], m), caption = id ? captions[id] : null;
       return <li key={doc.scenes[seg.index].id}>
         <strong>Сцена {seg.index + 1}</strong>
-        {m.audio?.status === "completed" && <a className="btn" href={`/api/jobs/${m.audio.id}/audio`} download>WAV</a>}
-        {m.video?.status === "completed" && <a className="btn" href={`/api/jobs/${m.video.id}/video`} download>Видео аватар</a>}
+        {!doc.scenes[seg.index].clip && m.audio?.status === "completed" && <a className="btn" href={`/api/jobs/${m.audio.id}/audio`} download>WAV</a>}
+        {!doc.scenes[seg.index].clip && m.video?.status === "completed" && <a className="btn" href={`/api/jobs/${m.video.id}/video`} download>Видео аватар</a>}
         {caption && caption.words.length > 0 && (["srt", "vtt"] as const).map((type) => <button key={type} type="button" className="btn"
           onClick={() => downloadBlob(new Blob([subtitleFile(caption.words, type)], { type: "text/plain;charset=utf-8" }), `rechbg-scene-${seg.index + 1}.${type}`)}>{type.toUpperCase()}</button>)}
       </li>;
