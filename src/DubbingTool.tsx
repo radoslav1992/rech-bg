@@ -22,7 +22,7 @@ export function DubbingTool({ assets, onDone, initialAsset = "" }: { assets: Med
   const [assetId, setAssetId] = useState(initialAsset), [language, setLanguage] = useState("English"), [mode, setMode] = useState<TranslateMode>("speed");
   const [consent, setConsent] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState(""), [done, setDone] = useState("");
   const key = useRef(crypto.randomUUID());
-  const loadTasks = useCallback(() => api<{ tasks: AiTask[] }>("/tools/tasks").then((d) => setTasks(d.tasks)).catch(() => {}), []);
+  const loadTasks = useCallback(() => api<{ tasks: AiTask[] }>("/tools/tasks").then((d) => setTasks(d.tasks.filter((t) => t.kind === "translate"))).catch(() => {}), []);
   useEffect(() => {
     api<{ translate: { enabled: boolean } }>("/tools/config").then((d) => {
       setEnabled(d.translate.enabled);
@@ -101,7 +101,7 @@ export function DubbingTool({ assets, onDone, initialAsset = "" }: { assets: Med
     {tasks.length > 0 && <div className="dubbing-tasks" aria-live="polite">
       <h3>Последни преводи</h3>
       {tasks.slice(0, 6).map((t) => <div key={t.id} className="dubbing-task">
-        <span><strong>{t.sourceName}</strong> → {t.language} · {t.mode ? translateModes[t.mode].name : ""}</span>
+        <span><strong>{t.sourceName}</strong> → {t.language} · {t.mode && t.mode in translateModes ? translateModes[t.mode as TranslateMode].name : ""}</span>
         <span className={`dubbing-status ${t.status}`}>{t.status === "failed" ? "Неуспешен" : phases[t.status === "completed" ? "completed" : t.phase] || "Обработва се"}</span>
         {t.status === "completed" && <a className="btn" href={`/api/media/assets/${t.outputAssetId}/file`} download aria-label={`Изтегли превода на ${t.sourceName}`}><Download size={15} /></a>}
         {t.status === "failed" && t.error && <small>{t.error}</small>}

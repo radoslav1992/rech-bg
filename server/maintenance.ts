@@ -3,8 +3,11 @@ import { failTool } from "./ai-tools";
 import { now, MINUTE, HOUR, DAY } from "./types";
 import { notifyVideo } from "./video-notifications";
 import { cleanupHeyGenAvatars } from "./video-heygen-avatar";
+import { cleanupHeyGenFiles } from "./video-heygen";
+import { cleanupVoiceClones } from "./revoice-speech";
 import { maintainMedia } from "./media-maintenance";
 import { reconcileUserAvatars } from "./user-avatars";
+import { reconcileStripe } from "./billing";
 
 async function deletePrefix(e: Env, prefix: string) {
   let cursor: string | undefined;
@@ -18,7 +21,7 @@ async function deletePrefix(e: Env, prefix: string) {
 export async function drainCleanup(e: Env) {
   const tasks = (
     await e.DB.prepare(
-      "SELECT prefix FROM cleanup_tasks WHERE prefix NOT LIKE 'heygen-avatar/%' ORDER BY created_at LIMIT 100",
+      "SELECT prefix FROM cleanup_tasks WHERE prefix NOT LIKE 'heygen-avatar/%' AND prefix NOT LIKE 'heygen-file/%' AND prefix NOT LIKE 'elevenlabs-voice/%' ORDER BY created_at LIMIT 100",
     ).all<{ prefix: string }>()
   ).results;
   for (const task of tasks) {
@@ -82,7 +85,11 @@ export async function maintenance(e: Env) {
     }
   });
   await stage("heygen", () => cleanupHeyGenAvatars(e));
+  await stage("heygen-files", () => cleanupHeyGenFiles(e));
+  await stage("voice-clones", () => cleanupVoiceClones(e));
   await stage("tools", () => reconcileTools(e));
+  // Once a day (the 03:00 UTC run): compare doubtful subscriptions with Stripe.
+  if (new Date().getUTCHours() === 3) await stage("stripe", () => reconcileStripe(e));
   await stage("summary", () => summary(e));
 }
 /**

@@ -28,6 +28,8 @@ function sync(el: HTMLMediaElement | null | undefined, local: number, duration: 
     if (!el.seeking && Number.isFinite(target) && Math.abs(el.currentTime - target) > .04) el.currentTime = target;
   }
 }
+/** Still downloading what it needs to play on (a broken or missing file never holds the preview). */
+const buffering = (el: HTMLMediaElement) => el.readyState < 3 && !el.error && el.networkState === HTMLMediaElement.NETWORK_LOADING;
 function placeholder(ctx: CanvasRenderingContext2D, w: number, h: number, text: string) {
   const base = Math.min(w, h);
   ctx.fillStyle = "#30392d"; ctx.beginPath(); ctx.arc(w / 2, h * .4, base * .16, 0, Math.PI * 2); ctx.fill();
@@ -42,6 +44,8 @@ function placeholder(ctx: CanvasRenderingContext2D, w: number, h: number, text: 
  */
 export function usePlayer(input: PlayerInput) {
   const [playing, setPlaying] = useState(false);
+  // The scene under the playhead: it and the next one load in full; others only their metadata (slow networks).
+  const [activeScene, setActiveScene] = useState(0);
   const canvas = useRef<HTMLCanvasElement>(null), playhead = useRef<HTMLDivElement>(null), timecode = useRef<HTMLSpanElement>(null);
   const musicEl = useRef<HTMLAudioElement>(null);
   const clock = useRef({ playing: false, base: 0, startedAt: 0 }), time = useRef(0), pxPerSecond = useRef(10);
@@ -84,15 +88,25 @@ export function usePlayer(input: PlayerInput) {
   const pause = () => { if (clock.current.playing) toggle(); };
 
   useEffect(() => {
-    let frame = 0;
+    let frame = 0, stalled = false, stalledSince = 0, lastPaint = 0, lastTime = -1, lastInput: PlayerInput | null = null, lastScene = -1;
     const paint = (now: number) => {
       const { doc, segments, total, media, captions, look, ranges } = live.current, c = clock.current;
+      // Paused and nothing changed: repaint only a few times a second (media still loading), not 60 (battery).
+      if (!c.playing && live.current === lastInput && time.current === lastTime && now - lastPaint < 300) { frame = requestAnimationFrame(paint); return; }
+      lastPaint = now; lastInput = live.current;
       if (c.playing) {
-        time.current = c.base + (now - c.startedAt) / 1000;
+        // While the playing scene's media buffers, the clock waits for it instead of running ahead and seeking.
+        // At most 4 s, so media that cannot load never freezes the preview.
+        if (stalled && now - stalledSince < 4000) { c.base = time.current; c.startedAt = now; }
+        else time.current = c.base + (now - c.startedAt) / 1000;
         if (time.current >= total) { time.current = total; c.playing = false; c.base = total; setPlaying(false); }
       }
       const t = time.current;
+      lastTime = t;
+      const wasStalled = stalled;
+      stalled = false;
       const current = segments.find((s) => t >= s.start && t < s.start + s.length) || segments.at(-1);
+      if (current?.kind === "scene" && current.index !== lastScene) { lastScene = current.index; setActiveScene(current.index); }
       // Voices of other scenes are parked; only the scene under the playhead plays.
       for (const seg of segments) {
         if (seg.kind !== "scene" || seg.estimated) continue;
@@ -100,9 +114,14 @@ export function usePlayer(input: PlayerInput) {
         if (scene.clip && el) {
           // A filmed scene plays only its kept parts: the cut clip's clock maps onto the source video.
           const source = Number.isFinite(el.duration) ? el.duration : seg.speech;
-          sync(el, toSourceTime(Math.min(Math.max(0, local), Math.max(0, seg.speech - .05)), scene.clip.keep), source, scene.voiceVolume,
-            c.playing && seg === current && local >= 0 && local < seg.speech);
-        } else sync(el, local, seg.speech, scene.voiceVolume, c.playing && seg === current);
+          const active = c.playing && seg === current && local >= 0 && local < seg.speech;
+          sync(el, toSourceTime(Math.min(Math.max(0, local), Math.max(0, seg.speech - .05)), scene.clip.keep), source, scene.voiceVolume, active);
+          if (active && buffering(el)) stalled = true;
+        } else {
+          const active = c.playing && seg === current;
+          sync(el, local, seg.speech, scene.voiceVolume, active);
+          if (active && el && local >= 0 && local < seg.speech && buffering(el)) stalled = true;
+        }
       }
       for (const seg of segments) {
         if (seg.kind !== "bumper" || !seg.video) continue;
@@ -141,6 +160,7 @@ export function usePlayer(input: PlayerInput) {
           if (words && !current.estimated) drawCaptions(ctx, w, h, local - scene.speechStart, words, captionGroups(words.words));
         }
       }
+      if (stalled && !wasStalled) stalledSince = now;
       if (playhead.current) playhead.current.style.transform = `translateX(${t * pxPerSecond.current}px)`;
       if (timecode.current) timecode.current.textContent = `${formatTime(t)} / ${formatTime(total)}`;
       frame = requestAnimationFrame(paint);
@@ -162,11 +182,12 @@ export function usePlayer(input: PlayerInput) {
     {segments.map((seg) => {
       if (seg.kind !== "scene" || seg.estimated) return null;
       const scene = doc.scenes[seg.index], m = media[seg.index];
+      const preload = seg.index === activeScene || seg.index === activeScene + 1 ? "auto" : "metadata";
       const ref = (el: HTMLMediaElement | null) => { if (el) voices.current.set(scene.id, el); else voices.current.delete(scene.id); };
-      if (scene.clip) return <video key={`${scene.id}:clip:${scene.clip.assetId}`} ref={ref} src={mediaUrl(scene.clip.assetId)} className="st-media" playsInline preload="auto" aria-hidden="true" />;
+      if (scene.clip) return <video key={`${scene.id}:clip:${scene.clip.assetId}`} ref={ref} src={mediaUrl(scene.clip.assetId)} className="st-media" playsInline preload={preload} aria-hidden="true" />;
       return m.video?.status === "completed"
-        ? <video key={`${scene.id}:${m.video.id}`} ref={ref} src={`/api/jobs/${m.video.id}/video`} className="st-media" playsInline preload="auto" aria-hidden="true" />
-        : <audio key={`${scene.id}:${m.audio!.id}`} ref={ref} src={`/api/jobs/${m.audio!.id}/audio`} preload="auto" aria-hidden="true" />;
+        ? <video key={`${scene.id}:${m.video.id}`} ref={ref} src={`/api/jobs/${m.video.id}/video`} className="st-media" playsInline preload={preload} aria-hidden="true" />
+        : <audio key={`${scene.id}:${m.audio!.id}`} ref={ref} src={`/api/jobs/${m.audio!.id}/audio`} preload={preload} aria-hidden="true" />;
     })}
     {doc.music && <audio key={doc.music.assetId} ref={musicEl} src={mediaUrl(doc.music.assetId)} preload="auto" aria-hidden="true" />}
   </>;

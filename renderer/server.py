@@ -48,7 +48,7 @@ def export_settings(job, payload):
 
 def download(url, path, origin):
     parsed = urlparse(url)
-    if f'{parsed.scheme}://{parsed.netloc}' != origin or not re.fullmatch(r'/api/media-inputs/[a-f0-9-]+/[0-9]+', parsed.path):
+    if f'{parsed.scheme}://{parsed.netloc}' != origin or not re.fullmatch(r'/api/(media-inputs/[a-f0-9-]+/[0-9]+|tool-inputs/[a-f0-9-]+)', parsed.path):
         raise ValueError('Invalid input')
     deadline = time.time() + DOWNLOAD_DEADLINE
     with urllib.request.build_opener(NoRedirect).open(url, timeout=90) as response, open(path, 'wb') as out:
@@ -272,6 +272,16 @@ def process(job, payload, id=None):
             job.update(status='completed',duration=length,file=output)
             return
         download(payload['url'], source, origin)
+        if payload['operation'] == 'sample':
+            # A voice sample for cloning: the first two minutes of the video's sound, mono MP3.
+            info = probe(source)
+            if not any(s.get('codec_type') == 'audio' for s in info.get('streams', [])): raise ValueError('Video has no audio')
+            output = os.path.join(job['dir'], 'sample.mp3')
+            command(['ffmpeg','-nostdin','-v','error','-threads','1','-protocol_whitelist','file,pipe','-i',source,'-map','0:a:0','-t','120',
+                     '-ac','1','-ar','44100','-c:a','libmp3lame','-b:a','128k',output], timeout=300)
+            duration = min(120.0, float(info.get('format', {}).get('duration') or 0))
+            job.update(status='completed', duration=duration, file=output)
+            return
         data = json.loads(command(['ffprobe','-v','error','-protocol_whitelist','file,pipe','-show_format','-show_streams','-of','json',source]))
         duration = float(data.get('format',{}).get('duration',0))
         video = next((s for s in data.get('streams',[]) if s.get('codec_type')=='video'),None)
@@ -315,7 +325,7 @@ class Handler(BaseHTTPRequestHandler):
         size=int(self.headers.get('Content-Length','0'))
         if size<=0 or size>2*1024*1024:return self.respond(413,{})
         payload=json.loads(self.rfile.read(size));id=payload.get('id','')
-        if not re.fullmatch(r'[a-f0-9-]{36}',id) or payload.get('operation') not in ('inspect','export','timeline'):return self.respond(400,{})
+        if not re.fullmatch(r'[a-f0-9-]{36}',id) or payload.get('operation') not in ('inspect','export','timeline','sample'):return self.respond(400,{})
         with LOCK:
             for key,old in list(JOBS.items()):
                 if old.get('finished',time.time())<time.time()-1800:
@@ -329,7 +339,7 @@ class Handler(BaseHTTPRequestHandler):
         parts=self.path.split('/');job=JOBS.get(parts[2]) if len(parts)>=3 and parts[1]=='jobs' else None
         if not job:return self.respond(404,{})
         if len(parts)==4 and parts[3]=='file' and job.get('file'):
-            size=os.path.getsize(job['file']);self.send_response(200);self.send_header('Content-Type','video/mp4');self.send_header('Content-Length',str(size));self.end_headers()
+            size=os.path.getsize(job['file']);self.send_response(200);self.send_header('Content-Type','audio/mpeg' if job['file'].endswith('.mp3') else 'video/mp4');self.send_header('Content-Length',str(size));self.end_headers()
             with open(job['file'],'rb') as f: shutil.copyfileobj(f,self.wfile,1024*1024)
             return
         return self.respond(200,{k:job[k] for k in ('status','duration','error') if k in job})

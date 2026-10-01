@@ -474,7 +474,7 @@ describe("Configurable video providers", () => {
     const row = sqlite.prepare("SELECT * FROM jobs WHERE id=?").get(id)!;
     expect(row.status).toBe("completed"); expect(used()).toBe(12100);
     expect(JSON.parse(row.video_meta as string).heygenAvatar).toEqual({ lookId: "look_photo1", groupId: "group_photo1" });
-    expect(mock.mock.calls.filter(c => c[1]?.method === "DELETE")).toHaveLength(1);
+    expect(mock.mock.calls.filter(c => c[1]?.method === "DELETE" && String(c[0]).includes("/v3/avatars/"))).toHaveLength(1);
     expect(sqlite.prepare("SELECT * FROM cleanup_tasks WHERE prefix LIKE 'heygen-avatar/%'").all()).toHaveLength(0);
     expect(await (await request(`/jobs/${id}`)).text()).not.toMatch(/look_photo1|group_photo1|heygenAvatar/);
   });
@@ -529,8 +529,8 @@ describe("Configurable video providers", () => {
     expect(used()).toBe(12100);
     mock.mockImplementation(normal);
     await maintenance(env);
-    expect(mock.mock.calls.filter(c => c[1]?.method === "DELETE")).toHaveLength(2);
-    expect(sqlite.prepare("SELECT * FROM cleanup_tasks WHERE prefix LIKE 'heygen-avatar/%'").all()).toHaveLength(0);
+    expect(mock.mock.calls.filter(c => c[1]?.method === "DELETE" && String(c[0]).includes("/v3/avatars/"))).toHaveLength(2);
+    expect(sqlite.prepare("SELECT * FROM cleanup_tasks WHERE prefix LIKE 'heygen-avatar/%' OR prefix LIKE 'heygen-file/%'").all()).toHaveLength(0);
     expect(used()).toBe(12100);
   });
   it("preserves active avatar cleanup tasks and cleans up even after the job is deleted", async () => {
@@ -824,7 +824,7 @@ describe("Medium with reusable HeyGen library avatars", () => {
     const posts = mock.mock.calls.filter(c => c[1]?.method === "POST");
     expect(posts).toHaveLength(1);
     expect(JSON.parse(posts[0][1]!.body as string)).toMatchObject({ type: "avatar", avatar_id: "look_lib", engine: { type: "avatar_iii" } });
-    expect(mock.mock.calls.some(c => c[1]?.method === "DELETE")).toBe(false);
+    expect(mock.mock.calls.some(c => c[1]?.method === "DELETE" && String(c[0]).includes("/v3/avatars/"))).toBe(false);
     expect(sqlite.prepare("SELECT * FROM cleanup_tasks WHERE prefix LIKE 'heygen-avatar/%'").all()).toHaveLength(0);
     expect(sqlite.prepare("SELECT status FROM jobs WHERE id=?").get(id)!.status).toBe("completed");
     expect(await (await request(`/jobs/${id}`)).text()).not.toMatch(/look_lib|group_lib/);

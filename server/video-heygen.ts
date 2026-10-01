@@ -164,6 +164,78 @@ export async function getHeyGenTranslation(env: Env, ticket: HeyGenTranslationTi
     default: throw new VideoFailure(stage, data.failure_code === "moderation" || /moderat|policy/i.test(String(data.failure_message || "")) ? "CONTENT" : "PROVIDER");
   }
 }
+// Lipsync ("Преозвучаване"): POST /v3/lipsyncs with the filmed video and the new speech, then GET /v3/lipsyncs/{id}.
+const lipsyncs = "https://api.heygen.com/v3/lipsyncs";
+export type HeyGenLipsyncTicket = { provider: "heygen"; kind: "lipsync"; request_id: string };
+export async function submitHeyGenLipsync(env: Env, id: string, video: string, audio: string, mode: "speed" | "precision"): Promise<HeyGenLipsyncTicket> {
+  const response = await videoFetch(lipsyncs, {
+    method: "POST",
+    headers: { ...headers(env, "SUBMIT"), "Content-Type": "application/json", "Idempotency-Key": id },
+    body: JSON.stringify({
+      video: { type: "url", url: video }, audio: { type: "url", url: audio }, mode, title: `Rech BG ${id}`,
+      // The video follows the new speech's length; its picture keeps the original format.
+      keep_the_same_format: true, enable_dynamic_duration: true, enable_caption: false, enable_watermark: false,
+    }),
+    signal: AbortSignal.timeout(60000),
+  });
+  if (!response.ok) throw await providerFailure(response, "SUBMIT");
+  const body = await response.json() as any;
+  const lipsyncId = body?.data?.lipsync_id ?? body?.data?.id;
+  if (body?.error || !lipsyncId) throw new VideoFailure("SUBMIT", "PROVIDER");
+  return { provider: "heygen", kind: "lipsync", request_id: validId(lipsyncId) };
+}
+export async function getHeyGenLipsync(env: Env, ticket: HeyGenLipsyncTicket, stage: VideoStage = "STATUS") {
+  const response = await videoFetch(`${lipsyncs}/${validId(ticket.request_id)}`, { headers: headers(env, stage), signal: AbortSignal.timeout(45000) });
+  if (!response.ok) throw await providerFailure(response, stage);
+  const body = await response.json() as any;
+  const data = body?.data;
+  if (body?.error || !data) throw new VideoFailure(stage, "PROVIDER");
+  switch (data.status) {
+    case "pending":
+    case "queued":
+    case "waiting": return { status: "IN_QUEUE" as const };
+    case "running":
+    case "processing": return { status: "IN_PROGRESS" as const };
+    case "completed":
+      if (typeof data.video_url !== "string" || !data.video_url) throw new VideoFailure(stage, "PROVIDER");
+      return { status: "COMPLETED" as const, url: data.video_url as string, duration: typeof data.duration === "number" ? data.duration : 0 };
+    default: throw new VideoFailure(stage, /moderat|policy/i.test(String(data.failure_message || data.failure_code || "")) ? "CONTENT" : "PROVIDER");
+  }
+}
+
+/**
+ * Our copies at HeyGen: once a result is saved in our storage (or the request failed) the provider's copy is
+ * deleted. Queued as cleanup tasks `heygen-file/{kind}/{id}`, retried by maintenance.
+ */
+const heygenFiles = { translation: translations, lipsync: lipsyncs, video: endpoint } as const;
+export type HeyGenFileKind = keyof typeof heygenFiles;
+export async function deleteHeyGenFile(env: Env, kind: HeyGenFileKind, id: string) {
+  const response = await videoFetch(`${heygenFiles[kind]}/${validId(id)}`, {
+    method: "DELETE", headers: headers(env, "CLEANUP"), signal: AbortSignal.timeout(15000),
+  });
+  if (response.status === 404 || response.ok) return;
+  throw await providerFailure(response, "CLEANUP");
+}
+export const queueHeyGenFile = (env: Env, kind: HeyGenFileKind, id: string) =>
+  env.DB.prepare("INSERT OR IGNORE INTO cleanup_tasks(prefix,created_at) VALUES (?,?)").bind(`heygen-file/${kind}/${validId(id)}`, Math.floor(Date.now() / 1000)).run();
+export async function cleanupHeyGenFiles(env: Env) {
+  if (!env.HEYGEN_API_KEY?.trim()) return;
+  const tasks = (await env.DB.prepare("SELECT prefix,created_at FROM cleanup_tasks WHERE prefix LIKE 'heygen-file/%' ORDER BY created_at LIMIT 50").all<{ prefix: string; created_at: number }>()).results;
+  for (const task of tasks) {
+    const match = /^heygen-file\/(translation|lipsync|video)\/([a-zA-Z0-9_-]{1,160})$/.exec(task.prefix);
+    try {
+      if (match) await deleteHeyGenFile(env, match[1] as HeyGenFileKind, match[2]);
+      await env.DB.prepare("DELETE FROM cleanup_tasks WHERE prefix=?").bind(task.prefix).run();
+    } catch {
+      // Give up after two weeks: HeyGen's own retention removes it eventually; the log says which one.
+      if (task.created_at < Date.now() / 1000 - 14 * 86400) {
+        console.error("HeyGen copy could not be deleted; remove it in HeyGen", { file: task.prefix });
+        await env.DB.prepare("DELETE FROM cleanup_tasks WHERE prefix=?").bind(task.prefix).run();
+      } else console.error("HeyGen copy cleanup will retry", { file: task.prefix });
+    }
+  }
+}
+
 /** Target languages HeyGen accepts (names such as "English" or "Spanish (Spain)"). */
 export async function listHeyGenLanguages(env: Env): Promise<string[]> {
   const response = await videoFetch(`${translations}/languages`, { headers: headers(env, "LOAD"), signal: AbortSignal.timeout(20000) });

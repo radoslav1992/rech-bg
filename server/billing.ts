@@ -215,6 +215,32 @@ billing.post("/sync", async (c) => {
   return c.json({ ok: true });
 });
 /**
+ * Nightly backstop for missed webhooks: re-reads from Stripe the customers whose plan looks doubtful — a paid
+ * period that ended without renewal, a payment problem, or a checkout with no active subscription after it.
+ */
+export async function reconcileStripe(e: Env) {
+  if (e.BILLING_ENABLED !== "true" || !ready(e)) return;
+  const users = (await e.DB.prepare(
+    `SELECT u.id,u.stripe_customer FROM users u WHERE u.stripe_customer IS NOT NULL AND (
+      EXISTS(SELECT 1 FROM subscriptions s WHERE s.user_id=u.id AND substr(s.id,1,6)<>?1 AND ((s.status='active' AND s.period_end<?2) OR s.status IN ('past_due','incomplete','trialing','unpaid')))
+      OR (EXISTS(SELECT 1 FROM checkout_intents c WHERE c.user_id=u.id AND c.expires_at>?2-2*86400) AND NOT EXISTS(SELECT 1 FROM subscriptions s WHERE s.user_id=u.id AND substr(s.id,1,6)<>?1 AND s.status='active'))
+    ) LIMIT 50`,
+  ).bind(GRANT_PREFIX, now()).all<{ id: string; stripe_customer: string }>()).results;
+  let changed = 0;
+  for (const u of users) {
+    try {
+      const fetchedAt = now();
+      const list = await stripe(e).subscriptions.list({ customer: u.stripe_customer, status: "all", limit: 10, expand: ["data.latest_invoice"] });
+      const statements: D1PreparedStatement[] = [];
+      for (const sub of list.data) statements.push(...(await subscriptionStatements(e, sub, u.id, fetchedAt)));
+      if (statements.length) { await e.DB.batch(statements); changed++; }
+    } catch (error) {
+      console.error("Stripe reconciliation failed", { userId: u.id, error: (error as Error)?.name });
+    }
+  }
+  if (users.length) console.log("Stripe reconciliation", { checked: users.length, updated: changed });
+}
+/**
  * A Customer Portal link. With a plan, it opens straight on the confirmation of that plan change and
  * returns to the app by itself once confirmed (the plain portal only shows a "back" link, so people stayed
  * in Stripe and the app never refreshed). Falls back to the plain portal if the flow is not possible.
