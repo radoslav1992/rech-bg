@@ -37,7 +37,7 @@ export function MediaPicker({ assets, video = false, value, onPick, disabled }: 
       </select>
     </label>
     <label className="btn tl-upload"><Upload size={15} /> {progress !== null ? `Качване · ${progress}%` : "Качи файл"}
-      <input type="file" hidden disabled={disabled || progress !== null} accept={video ? "image/jpeg,image/png,video/mp4,video/quicktime,video/webm" : "image/jpeg,image/png"}
+      <input type="file" className="file-input" disabled={disabled || progress !== null} accept={video ? "image/jpeg,image/png,video/mp4,video/quicktime,video/webm" : "image/jpeg,image/png"}
         onChange={(e) => { void upload(e.target.files?.[0]); e.target.value = ""; }} />
     </label>
     {video && <small>Качените видеа се проверяват автоматично; клипът става наличен след проверката.</small>}

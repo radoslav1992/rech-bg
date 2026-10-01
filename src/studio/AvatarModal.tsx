@@ -97,7 +97,7 @@ export function AvatarModal({ open, selected, onClose, onSelect, linkedAvatars =
         <label className={`st-avatar st-avatar-upload${upload !== null ? " busy" : ""}`}>
           <span className="st-avatar-photo"><ImagePlus size={30} /></span>
           <strong>{upload !== null ? `Качване · ${upload}%` : "Качете портрет"}</strong><small>JPG или PNG до 8 MB, с ясно видимо лице</small>
-          <input type="file" hidden accept="image/jpeg,image/png" disabled={upload !== null} onChange={(e) => { void uploadPortrait(e.target.files?.[0]); e.target.value = ""; }} />
+          <input type="file" className="file-input" accept="image/jpeg,image/png" disabled={upload !== null} onChange={(e) => { void uploadPortrait(e.target.files?.[0]); e.target.value = ""; }} />
         </label>
         {mine.map((a) => {
           const p: ProjectPortrait = { type: "asset", id: a.id };
@@ -194,7 +194,7 @@ function SavedAvatars({ my, portraits, isSelected, choose, onPortraitUploaded }:
             </select>
           </label>
           <label className="btn tl-upload"><ImagePlus size={15} /> {file ? file.name : "Или качете снимка"}
-            <input type="file" hidden style={{ display: "none" }} accept="image/jpeg,image/png" onChange={(e) => {
+            <input type="file" className="file-input" accept="image/jpeg,image/png" onChange={(e) => {
               const f = e.target.files?.[0]; e.target.value = "";
               if (!f) return;
               if (!["image/jpeg", "image/png"].includes(f.type) || f.size > 5 * 1024 * 1024) { setError("Изберете JPG или PNG снимка до 5 MB."); return; }

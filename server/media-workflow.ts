@@ -73,13 +73,35 @@ async function paidClaim(e: Env, id: string) {
     .run();
   if (!claim.meta.changes) throw new Error("MEDIA_SUBMISSION_UNCERTAIN");
 }
+/** The renderer slot a media task runs on (one of three containers). */
+export const rendererFor = (e: Env, id: string) =>
+  e.MEDIA_RENDERER!.get(e.MEDIA_RENDERER!.idFromName(`render-${parseInt(id.slice(0, 8), 16) % 3}`));
+
+/** Best effort: stop a render that is still running for a task that failed or timed out, freeing its slot. */
+export async function stopRender(e: Env, id: string) {
+  if (!e.MEDIA_RENDERER) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      rendererFor(e, id).fetch(`http://renderer/jobs/${id}`, { method: "DELETE" }),
+      new Promise((resolve) => { timer = setTimeout(resolve, 10000); }),
+    ]);
+  } catch {
+    /* The container may be asleep or gone; then nothing runs. */
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function failMedia(e: Env, id: string) {
   const row = await e.DB.prepare(
-    "SELECT payload,kind,source_id FROM media_tasks WHERE id=?",
+    "SELECT payload,kind,source_id,status FROM media_tasks WHERE id=?",
   )
     .bind(id)
     .first<any>();
-  await e.DB.prepare(
+  // A task that completed meanwhile (maintenance racing its last step) keeps its result.
+  if (!row || row.status === "completed") return;
+  const failed = await e.DB.prepare(
     "UPDATE media_tasks SET status='failed',phase='failed',error=?,updated_at=? WHERE id=? AND status IN ('queued','running')",
   )
     .bind(
@@ -89,7 +111,9 @@ export async function failMedia(e: Env, id: string) {
       id,
     )
     .run();
-  if (row) {
+  // Completed between the read and the update: nothing to clean up. A retry after a failure still cleans up.
+  if (!failed.meta.changes && row.status !== "failed") return;
+  {
     for (const output of JSON.parse(row.payload).outputs || [])
       await e.DB.prepare(
         "UPDATE media_assets SET status='deleting',expires_at=? WHERE id=? AND status<>'ready'",
@@ -141,9 +165,7 @@ export class MediaGeneration extends WorkflowEntrypoint<
       retries: { limit: 0, delay: "1 second" as const },
       timeout: "15 minutes" as const,
     };
-    const slot = parseInt(id.slice(0, 8), 16) % 3;
-    const container = () =>
-      e.MEDIA_RENDERER!.get(e.MEDIA_RENDERER!.idFromName(`render-${slot}`));
+    const container = () => rendererFor(e, id);
     try {
       if (task.kind === "inspect" || task.kind === "export") {
         const [width, height] = p.document
@@ -506,6 +528,8 @@ export class MediaGeneration extends WorkflowEntrypoint<
         kind: task.kind,
         code,
       });
+      if (task.kind === "inspect" || task.kind === "export")
+        await step.do("stop-render", () => stopRender(e, id));
       await step.do("refund", () => failMedia(e, id));
       throw new Error("MEDIA_PROCESSING_FAILED");
     }

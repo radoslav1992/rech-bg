@@ -59,7 +59,7 @@ export function VideoSource({ assets, eligible, value, onChange, onUploaded, des
       <label className="checkbox-label"><input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} /> Имам право да обработвам видеото, което качвам, и съдържанието му.</label>
       <label className={`btn${!consent || progress !== null || checking ? " disabled" : ""}`}>
         <Upload size={15} /> {progress !== null ? `Качване · ${progress}%` : "Качете ново видео"}
-        <input type="file" hidden style={{ display: "none" }} accept="video/mp4,video/quicktime,video/webm"
+        <input type="file" className="file-input" accept="video/mp4,video/quicktime,video/webm"
           disabled={!consent || progress !== null || checking} onChange={(e) => { void upload(e.target.files?.[0]); e.target.value = ""; }} />
       </label>
       <small className="vs-fine">MP4, MOV или WebM до 500 MB и 10 минути. Качването е без заплащане; видеото се пази в „Вашите файлове“.</small>

@@ -79,8 +79,8 @@ describe("Кратки клипове", () => {
     const doc = JSON.parse((sqlite.prepare("SELECT document FROM project_documents WHERE project_id=?").get(id) as any).document);
     expect(doc.scenes[0].clip).toEqual({ assetId: video, keep: [[7.85, 23.85]], clean: true });
     expect(doc.captionLook).toMatchObject({ format: "9:16", fit: "cover" });
-    // 16 s of the clip, charged as an export (no paid transcription).
-    expect(await (await request(`/video-studio/projects/${id}/render/quote`)).json()).toEqual({ credits: 500, length: 16 });
+    // 16 s of the clip (widened to whole frames), charged as an export (no paid transcription).
+    expect(await (await request(`/video-studio/projects/${id}/render/quote`)).json()).toEqual({ credits: 500, length: 16.03 });
     expect((await request("/tools/shorts/project", { assetId: video, start: 10, end: 11, title: "x" })).status).toBe(400);
   });
 });

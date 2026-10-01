@@ -4,6 +4,7 @@ import { now, MINUTE, HOUR, DAY } from "./types";
 import { notifyVideo } from "./video-notifications";
 import { cleanupHeyGenAvatars } from "./video-heygen-avatar";
 import { maintainMedia } from "./media-maintenance";
+import { reconcileUserAvatars } from "./user-avatars";
 
 async function deletePrefix(e: Env, prefix: string) {
   let cursor: string | undefined;
@@ -41,6 +42,8 @@ async function stage(name: string, work: () => Promise<unknown>) {
 }
 export async function maintenance(e: Env) {
   if (e.MEDIA_ENABLED === "true") await stage("media", () => maintainMedia(e));
+  // Before the cleanup stage, which then removes the photos of expired failed avatars in the same run.
+  await stage("avatars", () => reconcileUserAvatars(e));
   await stage("cleanup", () => drainCleanup(e));
   await stage("expiry", () =>
     e.DB.batch([
@@ -80,6 +83,22 @@ export async function maintenance(e: Env) {
   });
   await stage("heygen", () => cleanupHeyGenAvatars(e));
   await stage("tools", () => reconcileTools(e));
+  await stage("summary", () => summary(e));
+}
+/**
+ * One log line per run with what is overdue. Anything above zero after maintenance is worth a look; a Cloudflare
+ * alert on "Maintenance attention" surfaces it before customers write in.
+ */
+async function summary(e: Env) {
+  const r = await e.DB.prepare(
+    `SELECT
+      (SELECT COUNT(*) FROM jobs WHERE status IN ('queued','running') AND created_at<?1) jobs,
+      (SELECT COUNT(*) FROM media_tasks WHERE status IN ('queued','running') AND created_at<?1) media,
+      (SELECT COUNT(*) FROM ai_tasks WHERE status IN ('queued','running') AND created_at<?2) tools,
+      (SELECT COUNT(*) FROM user_avatars WHERE status='processing' AND created_at<?1) avatars,
+      (SELECT COUNT(*) FROM cleanup_tasks WHERE created_at<?3) cleanup`,
+  ).bind(now() - 3 * HOUR, now() - 12 * HOUR, now() - DAY).first<Record<string, number>>();
+  if (r && Object.values(r).some((n) => n > 0)) console.error("Maintenance attention", r);
 }
 /** Media tools (dubbing): re-dispatch a task whose Workflow never started, fail one that is stuck (refunded). */
 async function reconcileTools(e: Env) {

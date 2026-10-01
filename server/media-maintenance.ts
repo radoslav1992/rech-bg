@@ -1,7 +1,7 @@
 import type { Env } from "./types";
 import { now } from "./types";
 import { mediaAllowance } from "./media";
-import { failMedia } from "./media-workflow";
+import { failMedia, stopRender } from "./media-workflow";
 export async function maintainMedia(e: Env) {
   // Index pre-upgrade recordings without retroactively expiring them. Already indexed/deleted files never reappear.
   const legacy = (
@@ -71,17 +71,31 @@ export async function maintainMedia(e: Env) {
       .all<any>()
   ).results;
   for (const task of tasks) {
+    const stale = task.created_at < now() - 7200;
+    const fail = async () => {
+      // A render may still run in its container after the workflow gave up; stop it so the slot frees up.
+      if (task.kind === "inspect" || task.kind === "export") await stopRender(e, task.id);
+      await failMedia(e, task.id);
+      console.error("Stuck media task failed", { taskId: task.id, kind: task.kind });
+    };
     try {
       const instance = await e.MEDIA_GENERATION!.get(task.id),
         status = await instance.status();
-      if (["errored", "terminated"].includes(status.status))
-        await failMedia(e, task.id);
-      else if (task.created_at < now() - 7200) {
-        await instance.terminate();
-        await failMedia(e, task.id);
+      // "complete" with the task still open means the workflow ended without recording a result.
+      if (["errored", "terminated", "complete"].includes(status.status)) await fail();
+      else if (stale) {
+        try {
+          await instance.terminate();
+        } catch {
+          /* Finished meanwhile. */
+        }
+        await fail();
       }
     } catch {
-      if (task.status === "queued") {
+      // No workflow instance: after two hours the task is failed (and refunded) whatever its state, so one lost
+      // task never blocks the user's next render or file deletion.
+      if (stale) await fail();
+      else if (task.status === "queued") {
         try {
           await e.MEDIA_GENERATION!.create({
             id: task.id,

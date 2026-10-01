@@ -11,11 +11,12 @@ describe("Мигновен монтаж", () => {
   });
   it("keeps speech with some air around it and cuts long pauses and fillers", () => {
     const keep = autoCuts(words, 8);
-    expect(keep).toEqual([[0.38, 1.2], [1.58, 2.2], [3.88, 5.1]]);
-    expect(keptDuration(keep, 8)).toBe(2.66);
+    // Cut points sit on the 1/30 s frame grid (0.38 → 0.366667), so the render cuts picture and sound alike.
+    expect(keep).toEqual([[0.366667, 1.2], [1.566667, 2.2], [3.866667, 5.1]]);
+    expect(keptDuration(keep, 8)).toBe(2.7);
     // Keeping fillers joins the first phrase; a longer allowed pause keeps the gap after "днес" too.
-    expect(autoCuts(words, 8, { maxPause: 0.6, fillers: false })).toEqual([[0.38, 2.2], [3.88, 5.1]]);
-    expect(autoCuts(words, 8, { maxPause: 3, fillers: true })).toEqual([[0.38, 5.1]]);
+    expect(autoCuts(words, 8, { maxPause: 0.6, fillers: false })).toEqual([[0.366667, 2.2], [3.866667, 5.1]]);
+    expect(autoCuts(words, 8, { maxPause: 3, fillers: true })).toEqual([[0.366667, 5.1]]);
   });
   it("never needs more parts than the render accepts", () => {
     const choppy = Array.from({ length: 400 }, (_, i) => w("дума", i * 1.5, i * 1.5 + 0.3));

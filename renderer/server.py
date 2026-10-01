@@ -6,15 +6,33 @@ from urllib.parse import urlparse
 JOBS = {}
 LOCK = threading.Lock()
 MAX_BYTES = 500 * 1024 * 1024
+MAX_PIXELS = 4096 * 4096
+DOWNLOAD_DEADLINE = 600
+CURRENT = threading.local()  # the job this worker thread processes, so a cancel can stop its FFmpeg
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         raise ValueError('Redirect refused')
 
+def cancelled():
+    job = getattr(CURRENT, 'job', None)
+    return bool(job and job.get('cancelled'))
+
 def command(args, timeout=90):
-    p = subprocess.run(args, capture_output=True, timeout=timeout)
-    if p.returncode:
+    job = getattr(CURRENT, 'job', None)
+    p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if job is not None:
+        job['proc'] = p
+        if job.get('cancelled'): p.kill()
+    try:
+        out, _ = p.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        p.kill(); p.communicate()
+        raise ValueError('Media processing timed out')
+    finally:
+        if job is not None: job.pop('proc', None)
+    if p.returncode or cancelled():
         raise ValueError('Media processing failed')
-    return p.stdout
+    return out
 
 def export_settings(job, payload):
     width,height=payload['width'],payload['height']
@@ -32,9 +50,12 @@ def download(url, path, origin):
     parsed = urlparse(url)
     if f'{parsed.scheme}://{parsed.netloc}' != origin or not re.fullmatch(r'/api/media-inputs/[a-f0-9-]+/[0-9]+', parsed.path):
         raise ValueError('Invalid input')
+    deadline = time.time() + DOWNLOAD_DEADLINE
     with urllib.request.build_opener(NoRedirect).open(url, timeout=90) as response, open(path, 'wb') as out:
         total = 0
         while True:
+            # The socket timeout is per read; the whole download also has a deadline, and stops on cancel.
+            if cancelled() or time.time() > deadline: raise ValueError('Download stopped')
             chunk = response.read(1024 * 1024)
             if not chunk: break
             total += len(chunk)
@@ -43,6 +64,14 @@ def download(url, path, origin):
 
 def probe(path):
     return json.loads(command(['ffprobe','-v','error','-protocol_whitelist','file,pipe','-show_format','-show_streams','-of','json',path]))
+
+def check_extra(path):
+    """Backgrounds, overlays, B-roll, intro/outro: a real picture or video of sane size. Image headers can declare
+    enormous dimensions in a tiny file; decoding those would exhaust memory for every render on this machine."""
+    video = next((s for s in probe(path).get('streams', []) if s.get('codec_type') == 'video'), None)
+    if not video: raise ValueError('Invalid input')
+    w, h = int(video.get('width') or 0), int(video.get('height') or 0)
+    if not 0 < w <= 4096 or not 0 < h <= 4096 or w * h > MAX_PIXELS: raise ValueError('Input resolution too large')
 
 def number(value, low, high):
     value = float(value)
@@ -88,6 +117,7 @@ def timeline(job, payload, origin, width, height, scale, ass, output):
         if url in fetched: os.link(fetched[url], path)
         else: download(url, path, origin); fetched[url] = path
         files.append(path)
+    for i in range(first_extra, music_input): check_extra(files[i])
     graph, video_labels, voice_labels, total = [], '', '', 0.0
     loops = {}  # still images (backgrounds, intro/outro) are looped for their segment's length
     fit_cover = payload.get('fit') == 'cover'
@@ -141,10 +171,13 @@ def timeline(job, payload, origin, width, height, scale, ass, output):
                 for a, b in keep:
                     a, b = number(a, 0, 600), number(b, 0, 600)
                     if b - a < 0.05 or a < last: raise ValueError('Invalid cuts')
-                    ranges.append(f'between(t,{a:.3f},{b:.3f})'); last = b
+                    # Half-open ranges, nudged below the frame grid the server snaps cuts to (1/30 s), so picture and
+                    # sound keep exactly the same length per range and many cuts do not add up to drift.
+                    ranges.append(f'gte(t,{a - 0.001:.6f})*lt(t,{b - 0.001:.6f})'); last = b
                 expr = '+'.join(ranges)
                 graph.append(f"[{2 * i}:v:0]fps=30,select='{expr}',setpts=N/30/TB[cut{i}]")
-                graph.append(f"[{2 * i}:a:0]aselect='{expr}',asetpts=N/SR/TB[cuta{i}]")
+                # Sound is selected in 160-sample blocks (1/300 s at 48 kHz): ten per video frame.
+                graph.append(f"[{2 * i}:a:0]aresample=48000,asetnsamples=n=160:p=0,aselect='{expr}',asetpts=N/SR/TB[cuta{i}]")
                 picture, sound = f'[cut{i}]', f'[cuta{i}]'
             else:
                 sound = f'[{2 * i}:a:0]'
@@ -227,7 +260,8 @@ def timeline(job, payload, origin, width, height, scale, ass, output):
              '-movflags','+faststart',output],timeout=3000)
     return total
 
-def process(job, payload):
+def process(job, payload, id=None):
+    CURRENT.job = job
     try:
         origin = os.environ.get('SOURCE_ORIGIN', 'https://rechbg.com')
         source = os.path.join(job['dir'], 'source')
@@ -261,6 +295,14 @@ def process(job, payload):
         job.update(status='failed',error='MEDIA_PROCESSING_FAILED')
     finally:
         job['finished']=time.time()
+        CURRENT.job = None
+        if job.get('cancelled'):
+            # Stopped by the Worker (timeout or failure): nothing to keep, and the slot is free at once.
+            job.update(status='failed',error='MEDIA_CANCELLED')
+            shutil.rmtree(job['dir'],ignore_errors=True)
+            with LOCK:
+                if JOBS.get(id) is job: del JOBS[id]
+            return
         for name in os.listdir(job['dir']):
             if name == 'source' or name.startswith('input'): os.remove(os.path.join(job['dir'], name))
 
@@ -281,7 +323,7 @@ class Handler(BaseHTTPRequestHandler):
             if id in JOBS:return self.respond(200,{'status':JOBS[id]['status']})
             if any(j['status']=='running' for j in JOBS.values()):return self.respond(429,{'status':'busy'})
             job={'status':'running','dir':tempfile.mkdtemp(prefix='rech-')};JOBS[id]=job
-            threading.Thread(target=process,args=(job,payload),daemon=True).start()
+            threading.Thread(target=process,args=(job,payload,id),daemon=True).start()
         return self.respond(202,{'status':'running'})
     def do_GET(self):
         parts=self.path.split('/');job=JOBS.get(parts[2]) if len(parts)>=3 and parts[1]=='jobs' else None
@@ -296,6 +338,13 @@ class Handler(BaseHTTPRequestHandler):
         with LOCK:
             job=JOBS.get(id)
             if job and job['status']!='running':shutil.rmtree(job['dir'],ignore_errors=True);del JOBS[id]
+            elif job:
+                # A running job is stopped: its FFmpeg is killed and the thread cleans up when it returns.
+                job['cancelled']=True
+                proc=job.get('proc')
+                if proc:
+                    try: proc.kill()
+                    except OSError: pass
         return self.respond(200,{})
 
 if __name__=='__main__': ThreadingHTTPServer(('0.0.0.0',8080),Handler).serve_forever()

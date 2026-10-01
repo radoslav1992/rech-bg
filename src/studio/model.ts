@@ -55,13 +55,17 @@ export function adoptedMedia(doc: ProjectDoc, index: number, media: SceneMedia):
   const unsaved = media.audios.find((j) => j.scene_id === scene.id && j.id !== scene.audioJobId && !scene.history.includes(j.id) && j.status !== "failed"
     && (!media.audio || j.created_at >= media.audio.created_at));
   if (unsaved) return { audioJobId: unsaved.id, videoJobId: null };
+  // A chosen recording missing from the list (it failed to load, or is older than the list reaches) stays as it
+  // is: switching to another one would pair the scene's video with a different voice.
+  if (scene.audioJobId && !media.audio) return null;
   const audio = media.audio ?? media.audios.find((j) => j.status === "completed") ?? null;
   if (!audio) return null;
   const forAudio = media.videos.filter((v) => v.source_job_id === audio.id);
   const current = forAudio.find((v) => v.id === scene.videoJobId), done = forAudio.find((v) => v.status === "completed");
   let videoJobId = scene.videoJobId;
   // A video not in the list yet (just created) is kept; one made for another recording is not.
-  if (!current) videoJobId = done?.id ?? (media.videos.some((v) => v.id === scene.videoJobId) ? null : scene.videoJobId);
+  // A video belongs to one recording: with another recording, only that recording's videos qualify.
+  if (!current) videoJobId = done?.id ?? (audio.id !== scene.audioJobId || media.videos.some((v) => v.id === scene.videoJobId) ? null : scene.videoJobId);
   else if (current.status === "failed" && done) videoJobId = done.id;
   if (audio.id === scene.audioJobId && videoJobId === scene.videoJobId) return null;
   return { audioJobId: audio.id, videoJobId };

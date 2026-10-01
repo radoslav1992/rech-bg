@@ -41,7 +41,11 @@ export async function finishJobStorage(
     .first<any>();
   if (!a) return;
   const o = await e.AUDIO.head(key);
-  if (!o || o.size > a.bytes) throw new Error("MEDIA_OUTPUT_LIMIT");
+  if (!o) throw new Error("MEDIA_OUTPUT_LIMIT");
+  // The reservation is an estimate. A finished, paid result larger than it (a sharp 1080p minute can pass 100 MB)
+  // is kept with its real size; the download itself is capped (300 MB for video), and an account over its
+  // storage limit cannot reserve more until files are deleted.
+  if (o.size > a.bytes) console.warn("Job output larger than its storage reservation", { jobId: id, reserved: a.bytes, size: o.size });
   await e.DB.prepare(
     "UPDATE media_assets SET status='ready',bytes=?,duration=? WHERE id=?",
   )

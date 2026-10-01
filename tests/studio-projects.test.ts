@@ -85,6 +85,13 @@ describe("project documents", () => {
     expect((await save(doc({ speechStart: 99 }), 0)).status).toBe(400);
     expect((await save(doc({ portrait: { type: "library", id: "mila" } }), 0)).status).toBe(200);
   });
+  it("never exports an avatar video with a voice recording it was not made from", async () => {
+    const second = crypto.randomUUID();
+    sqlite.prepare("INSERT INTO jobs(id,user_id,project_id,window_id,idempotency_key,title,mode,script,voice,second_voice,pause_ms,chars,status,audio_key,duration,created_at,updated_at) VALUES(?,'u',?,'w',?,'x','studio','x','studio-mila','boris',0,1,'completed',?,5,1,1)")
+      .run(second, project, second, `audio/u/${second}.wav`);
+    expect((await save(doc({ audioJobId: second, history: [second, audio] }), 0)).status).toBe(400);
+    expect((await save(doc({ audioJobId: second, videoJobId: null, history: [second, audio] }), 0)).status).toBe(200);
+  });
   it("keeps saving a project whose already-referenced music has since expired", async () => {
     expect((await save(doc(), 0)).status).toBe(200);
     sqlite.prepare("UPDATE media_assets SET status='deleting' WHERE id=?").run(music);
@@ -280,19 +287,20 @@ describe("filmed scenes", () => {
   it("renders a filmed scene with its own sound, the kept parts and captions moved onto the cut clock", async () => {
     transcribed(film);
     expect((await save(filmed({ assetId: otherFilm, keep: null, clean: false }), 0)).status).toBe(400);
-    const keep = [[0.38, 1.2], [3.88, 4.8]];
+    // On the 1/30 s frame grid, as the editor saves cuts.
+    const keep = [[0.4, 1.2], [3.9, 4.8]];
     expect((await save(filmed({ assetId: film, keep, clean: true }), 0)).status).toBe(200);
     const quote = await (await call(`/video-studio/projects/${project}/render/quote`)).json() as any;
-    // 1.5 s lead-in + (0.82 + 0.92) s kept + 2 s hold
-    expect(quote).toEqual({ credits: 0, length: 5.24 });
+    // 1.5 s lead-in + (0.8 + 0.9) s kept + 2 s hold
+    expect(quote).toEqual({ credits: 0, length: 5.2 });
     expect((await call(`/video-studio/projects/${project}/render`, "POST", { idempotencyKey: crypto.randomUUID(), credits: 0 })).status).toBe(202);
     const task = sqlite.prepare("SELECT * FROM media_tasks WHERE kind='export'").get() as any;
     expect(task.source_id).toBe(project);
     const payload = JSON.parse(task.payload);
     expect(payload.inputs).toEqual([`media/u/${film}/original`, `media/u/${film}/original`]);
-    expect(payload.timeline.scenes[0]).toMatchObject({ speechDuration: 1.74, clip: { keep, clean: true } });
-    // "ъъъ" was cut; "приятели" moved from 4 s to 0.82 + 0.12 s.
-    expect(payload.captions[0].document.words).toEqual([{ text: "Здравейте", start: 0.12, end: 0.62 }, { text: "приятели", start: 0.94, end: 1.54 }]);
+    expect(payload.timeline.scenes[0]).toMatchObject({ speechDuration: 1.7, clip: { keep, clean: true } });
+    // "ъъъ" was cut; "приятели" moved from 4 s to 0.8 + 0.1 s.
+    expect(payload.captions[0].document.words).toEqual([{ text: "Здравейте", start: 0.1, end: 0.6 }, { text: "приятели", start: 0.9, end: 1.5 }]);
     expect(payload.document.style).toBe("bold");
   });
   it("counts a paid transcription for one free export only, and never captions typed in by hand", async () => {

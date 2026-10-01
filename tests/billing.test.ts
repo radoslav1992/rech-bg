@@ -1,7 +1,7 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import Stripe from "stripe";
 import { database } from "./helpers";
-import { webhook, allowance } from "../server/billing";
+import { webhook, allowance, mailbox } from "../server/billing";
 import { now } from "../server/types";
 const stripe = new Stripe("sk_test_local_only", {
   httpClient: Stripe.createFetchHttpClient(),
@@ -239,5 +239,20 @@ describe("Signed Stripe lifecycle", () => {
     expect(sqlite.prepare("SELECT plan,status FROM subscriptions").get()).toEqual({ plan: "studio", status: "canceled" });
     expect((await allowance(env, u)).plan).toBe("free");
     log.mockRestore();
+  });
+});
+describe("free trial", () => {
+  it("is once per mailbox: +tags and Gmail dots do not make a new one", async () => {
+    expect(mailbox(" Ivan.Petrov+promo@GoogleMail.com")).toBe("ivanpetrov@gmail.com");
+    expect(mailbox("ivan.petrov+x@firma.bg")).toBe("ivan.petrov@firma.bg");
+    sqlite.exec("INSERT INTO users VALUES('g1','ivan.petrov@gmail.com','A','hash',1,NULL,1); INSERT INTO users VALUES('g2','ivanpetrov+2@gmail.com','B','hash',1,NULL,1); INSERT INTO users VALUES('g3','maria@gmail.com','C','hash',1,NULL,1)");
+    const user = (id: string) => sqlite.prepare("SELECT * FROM users WHERE id=?").get(id) as any;
+    const first = await allowance(env, user("g1"));
+    expect(first.used).toBe(0);
+    // The same account keeps its own trial.
+    expect((await allowance(env, user("g1"))).used).toBe(0);
+    const alias = await allowance(env, user("g2"));
+    expect(alias.used).toBe(alias.limit);
+    expect((await allowance(env, user("g3"))).used).toBe(0);
   });
 });
