@@ -69,12 +69,40 @@ export async function userAvatarInput(env: Env, userId: string, id: string) {
 /** Whether a saved avatar can be animated by the engine (unknown lists are allowed; HeyGen then decides). */
 export const supportsEngine = (engines: string[], engine: HeyGenEngine) => !engines.length || engines.includes(engine);
 
+/**
+ * Maintenance: follows every avatar still being created (refunding stuck ones), removes the HeyGen avatar of a
+ * failed one straight away, and deletes failed avatars with their photo after the 7 days they stay visible.
+ */
+export async function reconcileUserAvatars(env: Env) {
+  if (env.HEYGEN_API_KEY?.trim()) {
+    const processing = (await env.DB.prepare("SELECT * FROM user_avatars WHERE status='processing' ORDER BY created_at LIMIT 50").all<Row>()).results;
+    for (const row of processing) await refresh(env, row);
+  }
+  const failed = (await env.DB.prepare("SELECT * FROM user_avatars WHERE status='failed' AND (group_id IS NOT NULL OR updated_at<?) LIMIT 100")
+    .bind(now() - 7 * 86400).all<Row>()).results;
+  for (const row of failed) {
+    const expired = row.updated_at < now() - 7 * 86400;
+    await env.DB.batch([
+      ...(row.group_id ? [
+        env.DB.prepare("INSERT OR IGNORE INTO cleanup_tasks(prefix,created_at) VALUES (?,?)").bind(`heygen-avatar/${row.id}/${row.group_id}`, now()),
+        env.DB.prepare("UPDATE user_avatars SET group_id=NULL WHERE id=?").bind(row.id),
+      ] : []),
+      ...(expired ? [
+        env.DB.prepare("INSERT OR IGNORE INTO cleanup_tasks(prefix,created_at) VALUES (?,?)").bind(`avatars/${row.user_id}/${row.id}/`, now()),
+        env.DB.prepare("DELETE FROM user_avatars WHERE id=? AND status='failed'").bind(row.id),
+      ] : []),
+    ]);
+  }
+}
+
 export const userAvatars = new Hono<Bindings>();
 userAvatars.get("/", async (c) => {
   const user = c.get("user");
   const rows = (await c.env.DB.prepare("SELECT * FROM user_avatars WHERE user_id=? AND (status!='failed' OR updated_at>?) ORDER BY created_at DESC LIMIT 50")
     .bind(user.id, now() - 7 * 86400).all<Row>()).results;
-  const list = await Promise.all(rows.map((r, i) => i < 5 ? refresh(c.env, r) : r));
+  // Follow the avatars still being created (maintenance covers any beyond these).
+  let checks = 0;
+  const list = await Promise.all(rows.map((r) => r.status === "processing" && checks++ < 10 ? refresh(c.env, r) : r));
   return c.json({ avatars: list.map(publicAvatar), enabled: enabled(c.env), credits: AVATAR_CREDITS, max: MAX_USER_AVATARS });
 });
 userAvatars.post("/", async (c) => {

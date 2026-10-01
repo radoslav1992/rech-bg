@@ -11,6 +11,7 @@ import {
 } from "../server/media";
 import { MediaGeneration, failMedia } from "../server/media-workflow";
 import { maintainMedia } from "../server/media-maintenance";
+import { imageFits, imageSize } from "../shared/image-size";
 import { mediaCredits, MB } from "../shared/media";
 import { captionAss, renderDimensions } from "../server/caption-ass";
 import { captionPresets, defaultCaptions } from "../shared/captions";
@@ -509,4 +510,73 @@ it("atomically reserves ordinary generated recording storage before starting pai
   expect(
     sqlite.prepare("SELECT COUNT(*) n FROM media_job_history").get()!.n,
   ).toBe(1);
+});
+it("fails a lost or finished-but-open media task after two hours, refunds it and stops its render", async () => {
+  const usedNow = () => (sqlite.prepare("SELECT SUM(used) n FROM usage_windows WHERE user_id='u'").get() as any).n || 0;
+  const before = usedNow();
+  const a = asset(),
+    id = await task("export", a, 500);
+  expect(usedNow()).toBe(before + 500);
+  const renderer = { fetch: vi.fn().mockResolvedValue(Response.json({})) };
+  env.MEDIA_RENDERER.get = vi.fn(() => renderer);
+  sqlite.prepare("UPDATE media_tasks SET status='running',updated_at=?,created_at=? WHERE id=?").run(now() - 600, now() - 600, id);
+  // The workflow ended without recording its result.
+  env.MEDIA_GENERATION.get = vi.fn().mockResolvedValue({ status: async () => ({ status: "complete" }), terminate: vi.fn() });
+  await maintainMedia(env);
+  expect((sqlite.prepare("SELECT status FROM media_tasks WHERE id=?").get(id) as any).status).toBe("failed");
+  expect(usedNow()).toBe(before);
+  expect(renderer.fetch).toHaveBeenCalledWith(`http://renderer/jobs/${id}`, { method: "DELETE" });
+  // No workflow instance at all: failed once it is two hours old, so the user is never blocked.
+  const b = asset(),
+    lost = await task("transcribe", b, 1000);
+  sqlite.prepare("UPDATE media_tasks SET status='running',updated_at=?,created_at=? WHERE id=?").run(now() - 600, now() - 600, lost);
+  env.MEDIA_GENERATION.get = vi.fn().mockRejectedValue(new Error("not found"));
+  await maintainMedia(env);
+  expect((sqlite.prepare("SELECT status FROM media_tasks WHERE id=?").get(lost) as any).status).toBe("running");
+  sqlite.prepare("UPDATE media_tasks SET created_at=? WHERE id=?").run(now() - 7300, lost);
+  await maintainMedia(env);
+  expect((sqlite.prepare("SELECT status FROM media_tasks WHERE id=?").get(lost) as any).status).toBe("failed");
+  expect(usedNow()).toBe(before);
+});
+it("does not undo a task that completed while it was being failed", async () => {
+  const a = asset(),
+    id = await task("inspect", a, 0);
+  sqlite.prepare("UPDATE media_tasks SET status='completed' WHERE id=?").run(id);
+  await failMedia(env, id);
+  expect((sqlite.prepare("SELECT status FROM media_tasks WHERE id=?").get(id) as any).status).toBe("completed");
+  expect((sqlite.prepare("SELECT status FROM media_assets WHERE id=?").get(a) as any).status).toBe("ready");
+});
+it("reads image sizes from headers and refuses pictures too large to decode safely", async () => {
+  const pngHeader = (w: number, h: number) => {
+    const b = new Uint8Array(64);
+    b.set([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82]);
+    new DataView(b.buffer).setUint32(16, w); new DataView(b.buffer).setUint32(20, h);
+    return b;
+  };
+  // JPEG: SOI, an APP0 segment, then SOF0 with height 300, width 400.
+  const jpeg = new Uint8Array([255, 216, 255, 224, 0, 4, 1, 2, 255, 192, 0, 11, 8, 1, 44, 1, 144, 1, 1, 17, 0, 255, 217]);
+  expect(imageSize(pngHeader(300, 400))).toEqual({ width: 300, height: 400 });
+  expect(imageSize(jpeg)).toEqual({ width: 400, height: 300 });
+  expect(imageFits(imageSize(pngHeader(4096, 4096)))).toBe(true);
+  expect(imageFits(imageSize(pngHeader(30000, 30000)))).toBe(false);
+  expect(imageFits(imageSize(new Uint8Array([255, 216, 255, 218, 0, 2])))).toBe(false);
+  // Through the upload route: a 64-byte "portrait" declaring 30000×30000 pixels is refused.
+  const uploads = new Map<string, any>();
+  const create = env.AUDIO.createMultipartUpload;
+  env.AUDIO.createMultipartUpload = async (key: string, opts: any) => {
+    const u = await create(key, opts), uploadId = crypto.randomUUID();
+    uploads.set(uploadId, u);
+    return { ...u, uploadId };
+  };
+  env.AUDIO.resumeMultipartUpload = (_key: string, id: string) => uploads.get(id);
+  const send = async (bytes: Uint8Array) => {
+    const upload = (await (await request("/media/uploads", { name: "p.png", bytes: bytes.length, mime: "image/png", kind: "portrait" })).json()) as any;
+    const r = await worker.fetch(new Request(`https://rechbg.com/api/media/uploads/${upload.id}/parts/1`, {
+      method: "PUT", headers: { Origin: "https://rechbg.com", Cookie: "rech_session=media-session" }, body: new Blob([bytes as BlobPart]),
+    }), env, {} as any);
+    expect(r.status).toBe(200);
+    return request(`/media/uploads/${upload.id}/complete`, {});
+  };
+  expect((await send(pngHeader(30000, 30000))).status).toBe(400);
+  expect((await send(pngHeader(900, 1200))).status).toBe(200);
 });

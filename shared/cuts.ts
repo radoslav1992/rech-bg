@@ -13,6 +13,8 @@ export const defaultCutOptions: CutOptions = { maxPause: 0.6, fillers: true };
 export const MAX_KEEP_RANGES = 300;
 const PAD_BEFORE = 0.12, PAD_AFTER = 0.2;
 const round = (n: number) => Math.round(n * 1000) / 1000;
+const FPS = 30;
+const frame = (n: number) => Math.round((n / FPS) * 1e6) / 1e6;
 
 /**
  * Bulgarian and English hesitation sounds (the whole word, ignoring punctuation and case). Single vowels
@@ -57,7 +59,8 @@ export function normalizeKeep(ranges: KeepRange[], duration: number): KeepRange[
     if (last && a <= last[1] + 0.05) last[1] = Math.max(last[1], b);
     else merged.push([a, b]);
   }
-  return merged.slice(0, MAX_KEEP_RANGES).map(([a, b]) => [round(a), round(b)]);
+  // On the 1/30 s frame grid, so the render keeps exactly as much picture as sound in every part.
+  return merged.slice(0, MAX_KEEP_RANGES).map(([a, b]) => [frame(Math.floor(a * FPS + 1e-6)), Math.min(round(duration), frame(Math.ceil(b * FPS - 1e-6)))]);
 }
 
 export const keptDuration = (keep: KeepRange[] | null, duration: number) =>

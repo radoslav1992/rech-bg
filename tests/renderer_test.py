@@ -246,4 +246,70 @@ class RendererTest(unittest.TestCase):
             self.assertTrue(near(pixel(2.5), (0, 0, 255)), 'the scene follows the intro')
             self.assertTrue(near(pixel(3.8), (0, 255, 255)), 'outro clip, cut to its seconds')
 
+    def test_many_cuts_keep_picture_and_sound_the_same_length(self):
+        with tempfile.TemporaryDirectory() as directory:
+            d = Path(directory)
+            subprocess.run(['ffmpeg','-nostdin','-v','error','-f','lavfi','-i','testsrc=s=160x90:r=25:d=13','-f','lavfi','-i','sine=frequency=300:sample_rate=44100:duration=13',
+                            '-c:v','libx264','-threads','1','-c:a','aac',str(d/'film.mp4')],check=True)
+            # 40 kept parts of 0.2 s with 0.1 s cut between them, on the 1/30 s grid the server snaps cuts to.
+            keep = [[round(k * 0.3, 6), round(k * 0.3 + 0.2, 6)] for k in range(40)]
+            captured = []
+            def fake(args, timeout=90):
+                if args[0] == 'ffmpeg': captured.append(args); raise ValueError('stop')
+                return real(args, timeout)
+            real = renderer.command
+            class Opener:
+                def open(self, url, *args, **kwargs): return (d/'film.mp4').open('rb')
+            base = 'https://rechbg.com/api/media-inputs/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/'
+            work = d / 'job'; work.mkdir()
+            payload = {'operation': 'timeline', 'url': base + '0', 'urls': [base + '0', base + '0'], 'width': 720, 'height': 1280, 'ass': '', 'fit': 'contain',
+                       'timeline': {'scenes': [{'speech_start': 0, 'tail': 0, 'voice_volume': 1, 'speech_duration': 8.0, 'clip': {'keep': keep, 'clean': False}}], 'music': None}}
+            with patch.object(renderer.urllib.request, 'build_opener', return_value=Opener()), patch.object(renderer, 'command', fake):
+                renderer.process({'dir': str(work), 'status': 'running'}, payload)
+            graph = captured[0][captured[0].index('-filter_complex') + 1].split(';')
+            cut = ';'.join(g for g in graph if g.endswith('[cut0]') or g.endswith('[cuta0]')).replace('[0:', '[0:')
+            subprocess.run(['ffmpeg','-nostdin','-v','error','-i',str(d/'film.mp4'),'-filter_complex',cut,'-map','[cut0]','-c:v','libx264','-threads','1',str(d/'v.mp4'),
+                            '-map','[cuta0]',str(d/'a.wav')],check=True)
+            frames = int(json.loads(subprocess.check_output(['ffprobe','-v','error','-count_frames','-select_streams','v:0','-show_entries','stream=nb_read_frames','-of','json',str(d/'v.mp4')]))['streams'][0]['nb_read_frames'])
+            audio = float(json.loads(subprocess.check_output(['ffprobe','-v','error','-show_entries','format=duration','-of','json',str(d/'a.wav')]))['format']['duration'])
+            self.assertEqual(frames, 240)
+            self.assertAlmostEqual(audio, 8.0, delta=0.01)
+
+    def test_rejects_huge_images_before_decoding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            d = Path(directory)
+            def make(name, *args):
+                subprocess.run(['ffmpeg','-nostdin','-v','error',*args,str(d/name)],check=True)
+            make('v0.mp4','-f','lavfi','-i','color=c=blue:s=320x180:d=1','-c:v','libx264','-threads','1')
+            make('a0.wav','-f','lavfi','-i','sine=frequency=330:duration=1')
+            make('huge.png','-f','lavfi','-i','color=c=white:s=5000x16','-frames:v','1')
+            files = [d/'v0.mp4', d/'a0.wav', d/'huge.png']
+            class Opener:
+                def open(self, url, *args, **kwargs): return files[int(url.rsplit('/',1)[1])].open('rb')
+            base = 'https://rechbg.com/api/media-inputs/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/'
+            work = d / 'job'; work.mkdir(); job = {'dir': str(work), 'status': 'running'}
+            payload = {'operation': 'timeline', 'url': base + '0', 'urls': [base + str(i) for i in range(3)], 'width': 720, 'height': 1280, 'ass': '', 'fit': 'contain',
+                       'timeline': {'music': None, 'scenes': [{'speech_start': 0, 'tail': 0, 'voice_volume': 1, 'speech_duration': 1.0, 'background': {'input': 2}}]}}
+            with patch.object(renderer.urllib.request, 'build_opener', return_value=Opener()):
+                renderer.process(job, payload)
+            self.assertEqual(job['status'], 'failed')
+
+    def test_cancel_stops_the_running_command(self):
+        import threading, time
+        job, result = {'status': 'running'}, {}
+        def work():
+            renderer.CURRENT.job = job
+            try: renderer.command(['sleep', '30'], timeout=60)
+            except ValueError as e: result['error'] = str(e)
+        t = threading.Thread(target=work); t.start()
+        for _ in range(50):
+            if job.get('proc'): break
+            time.sleep(0.05)
+        started = time.time()
+        job['cancelled'] = True; job['proc'].kill()
+        t.join(5)
+        self.assertFalse(t.is_alive())
+        self.assertLess(time.time() - started, 3)
+        self.assertIn('failed', result['error'])
+
 if __name__ == '__main__': unittest.main()

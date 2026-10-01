@@ -22,7 +22,14 @@ export const paidPlans = ["starter", "creator", "studio"] as const;
 /** Subscriptions an administrator granted (testers, partners): no Stripe behind them, see plan-grants.ts. */
 export const GRANT_PREFIX = "grant_";
 /** Identifies a trial across account deletion without keeping the address itself. */
-export const trialKey = (email: string) => sha("trial:" + email.trim().toLowerCase());
+export const trialKey = (email: string) => sha("trial:" + mailbox(email));
+/** One mailbox, however it is written: "+tags" are ignored, and Gmail also ignores dots in the name. */
+export function mailbox(email: string) {
+  const [name, domain = ""] = email.trim().toLowerCase().split(/@(?=[^@]*$)/);
+  const gmail = domain === "gmail.com" || domain === "googlemail.com";
+  const base = name.replace(/\+.*$/, "");
+  return `${gmail ? base.replace(/\./g, "") : base}@${gmail ? "gmail.com" : domain}`;
+}
 function priceIds(e: Env): Record<(typeof paidPlans)[number], string | undefined> {
   return {
     starter: e.STRIPE_PRICE_STARTER,
@@ -60,11 +67,17 @@ export async function allowance(e: Env, u: DbUser) {
   // A new trial window starts from what a deleted account with the same email already used.
   const left = active && !granted && sub.period_end > sub.period_start
     ? Math.min(1, Math.max(0, (sub.period_end - now()) / (sub.period_end - sub.period_start))) : 1;
+  const trial = await trialKey(u.email);
+  const newTrial = !active && !(await e.DB.prepare("SELECT 1 FROM usage_windows WHERE id=?").bind(window).first());
   await e.DB.prepare(
     "INSERT INTO usage_windows(id,user_id,quota,plan,used) VALUES (?1,?2,?3,?4,CASE WHEN ?4='free' THEN COALESCE((SELECT used FROM trial_history WHERE email_hash=?5),0) ELSE 0 END) ON CONFLICT(id) DO UPDATE SET quota=CASE WHEN usage_windows.plan IS NULL THEN MAX(usage_windows.quota,excluded.quota) WHEN usage_windows.plan=excluded.plan THEN usage_windows.quota WHEN excluded.quota>usage_windows.quota THEN usage_windows.quota+CAST((excluded.quota-usage_windows.quota)*?6 AS INTEGER) ELSE excluded.quota END,plan=excluded.plan",
   )
-    .bind(window, u.id, plan.chars, plan.id, await trialKey(u.email), left)
+    .bind(window, u.id, plan.chars, plan.id, trial, left)
     .run();
+  // The free trial is once per mailbox: another account of the same address (user+1@…) starts with it used up.
+  if (newTrial)
+    await e.DB.prepare("INSERT INTO trial_history(email_hash,used) VALUES (?,?) ON CONFLICT(email_hash) DO UPDATE SET used=MAX(trial_history.used,excluded.used)")
+      .bind(trial, plan.chars).run();
   const usage = await e.DB.prepare(
     "SELECT used,quota FROM usage_windows WHERE id=?",
   )
@@ -234,6 +247,8 @@ billing.post("/portal", async (c) => {
     throw new HTTPException(400, {
       message: "Все още нямате платен абонамент.",
     });
+  // Each call creates a Stripe portal session; a loop must not run up Stripe API usage.
+  await rate(c, "billing-portal", 20, 3600, u.id);
   const body = await c.req.json().catch(() => ({}));
   const plan = z.object({ plan: z.enum(paidPlans) }).safeParse(body);
   return c.json({ url: await portalUrl(c.env, c.req.raw, u.stripe_customer, plan.success ? plan.data.plan : null) });

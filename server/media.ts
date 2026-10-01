@@ -14,6 +14,7 @@ import {
   uploadChunk,
 } from "../shared/media";
 import { defaultCaptions } from "../shared/captions";
+import { imageFits, imageSize } from "../shared/image-size";
 import { documentSchema } from "./studio";
 
 const musicMimes = ["audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/wave", "audio/mp4", "audio/x-m4a", "audio/aac", "audio/ogg"] as const;
@@ -468,6 +469,10 @@ media.post("/uploads/:id/complete", async (c) => {
     });
   if (!png && !jpg)
     throw new HTTPException(400, { message: "Изберете валиден JPG или PNG." });
+  // Images are at most a few MB: read the header in full (a JPEG's frame size can follow large metadata).
+  const whole = await c.env.AUDIO.get(a.object_key);
+  if (!imageFits(imageSize(new Uint8Array(await whole!.arrayBuffer()))))
+    throw new HTTPException(400, { message: "Изображението трябва да е до 4096 × 4096 пиксела." });
   const limits = await mediaAllowance(c.env, c.get("user"));
   await c.env.DB.prepare(
     "UPDATE media_assets SET status='ready',mime=?,expires_at=? WHERE id=?",

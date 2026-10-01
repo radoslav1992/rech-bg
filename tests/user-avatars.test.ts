@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../server/index";
 import { VideoGeneration } from "../server/video-workflow";
+import { maintenance } from "../server/maintenance";
 import { bucket, database } from "./helpers";
 import { now } from "../server/types";
 import { sha } from "../server/security";
@@ -115,6 +116,35 @@ describe("Моите аватари", () => {
     sqlite.prepare("UPDATE user_avatars SET created_at=? WHERE id=?").run(now() - 31 * 60, avatar.id);
     expect((await (await request("/my-avatars")).json() as any).avatars[0].status).toBe("failed");
     expect(used()).toBe(0);
+  });
+  it("maintenance follows every avatar being created, removes failed ones from HeyGen and deletes them after 7 days", async () => {
+    heygen("processing");
+    const ids: string[] = [];
+    for (let i = 0; i < 7; i++) ids.push(((await (await request("/my-avatars", { method: "POST", body: avatarForm() })).json()) as any).avatar.id);
+    expect(used()).toBe(7 * AVATAR_CREDITS);
+    // Never looked at in the list: maintenance still finishes them all (here, HeyGen refused them).
+    const calls = heygen("failed");
+    await maintenance(env);
+    expect(sqlite.prepare("SELECT COUNT(*) n FROM user_avatars WHERE status='failed'").get()!.n).toBe(7);
+    expect(used()).toBe(0);
+    // The HeyGen avatars of failed ones are deleted at once; the photos stay while the error is shown.
+    expect(calls.filter((c) => c.init?.method === "DELETE")).toHaveLength(7);
+    expect(sqlite.prepare("SELECT COUNT(*) n FROM user_avatars WHERE group_id IS NOT NULL").get()!.n).toBe(0);
+    const photo = (sqlite.prepare("SELECT image_key FROM user_avatars WHERE id=?").get(ids[0]) as any).image_key;
+    expect(await env.AUDIO.head(photo)).toBeTruthy();
+    sqlite.prepare("UPDATE user_avatars SET updated_at=?").run(now() - 8 * 86400);
+    await maintenance(env);
+    expect(sqlite.prepare("SELECT COUNT(*) n FROM user_avatars").get()!.n).toBe(0);
+    expect(await env.AUDIO.head(photo)).toBeNull();
+  });
+  it("maintenance logs one summary line when something is overdue", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    await maintenance(env);
+    expect(log.mock.calls.some((c) => c[0] === "Maintenance attention")).toBe(false);
+    sqlite.prepare("INSERT INTO cleanup_tasks(prefix,created_at) VALUES ('avatars/u/x/',?)").run(now() - 2 * 86400);
+    env.AUDIO.list = async () => { throw new Error("R2 down"); };
+    await maintenance(env);
+    expect(log.mock.calls.find((c) => c[0] === "Maintenance attention")?.[1]).toMatchObject({ cleanup: 1, jobs: 0 });
   });
   it("makes a Medium video with Avatar IV from the saved avatar, and deletes it only when no video uses it", async () => {
     heygen("completed");

@@ -4341,3 +4341,6 @@ main h1[tabindex="-1"]:focus {
 .grant-list li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border: 1px solid #e0e4db; border-radius: 10px; }
 .grant-list span { min-width: 0; overflow-wrap: anywhere; }
 .grant-actions { display: flex; gap: 6px; }
+/* A file picker styled as a button (a label around the input): the input stays reachable by keyboard. */
+.file-input { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; clip-path: inset(50%); }
+label:has(> .file-input:focus-visible) { outline: 3px solid #5667f5; outline-offset: 2px; }
