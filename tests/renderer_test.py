@@ -293,6 +293,7 @@ class RendererTest(unittest.TestCase):
             with patch.object(renderer.urllib.request, 'build_opener', return_value=Opener()):
                 renderer.process(job, payload)
             self.assertEqual(job['status'], 'failed')
+            self.assertEqual(job['error'], 'MEDIA_TOO_LARGE')
 
     def test_cancel_stops_the_running_command(self):
         import threading, time

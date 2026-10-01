@@ -151,9 +151,12 @@ export function ProjectTimeline({ doc, segments, total, media, captions, assets,
               const name = l.type === "text" ? l.text : assets.find((a) => a.id === l.assetId)?.name || layerNames[l.type];
               const open = () => onSelect({ kind: "layer", scene: seg.index, id: l.id });
               const selected = selection.kind === "layer" && selection.id === l.id;
-              return <button type="button" key={l.id} className={`tl-clip tl-layer tl-layer-${l.type}${selected ? " selected" : ""}`}
-                style={{ ...at(seg.start + l.start, Math.min(l.end, seg.length) - l.start), top: `${row * LAYER_ROW + 4}px`, bottom: "auto", height: `${LAYER_ROW - 6}px` }}
-                aria-label={`${layerNames[l.type]} „${name}“ в сцена ${seg.index + 1}, ${formatTime(l.start)} – ${formatTime(l.end)}`}
+              // A layer left past the scene's end (e.g. after a shorter re-recording) shows as a marker at the end.
+              const outside = l.start >= seg.length;
+              return <button type="button" key={l.id} className={`tl-clip tl-layer tl-layer-${l.type}${selected ? " selected" : ""}${outside ? " outside" : ""}`}
+                style={{ ...(outside ? at(seg.start + Math.max(0, seg.length - .8), .8) : at(seg.start + l.start, Math.min(l.end, seg.length) - l.start)), top: `${row * LAYER_ROW + 4}px`, bottom: "auto", height: `${LAYER_ROW - 6}px` }}
+                title={outside ? "След края на сцената — не се вижда във видеото" : undefined}
+                aria-label={`${layerNames[l.type]} „${name}“ в сцена ${seg.index + 1}, ${formatTime(l.start)} – ${formatTime(l.end)}${outside ? ", след края на сцената" : ""}`}
                 onPointerDown={(e) => { const start = l.start; drag(e, pxPerSecond, (d) => moveLayer(seg.index, seg.length, l.id, start, d), open); }}
                 onClick={(e) => { if (e.detail === 0) open(); }}
                 onKeyDown={(e) => { const d = nudge(e); if (d) { e.preventDefault(); moveLayer(seg.index, seg.length, l.id, l.start, d); } }}>

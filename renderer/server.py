@@ -1,5 +1,5 @@
 """Private, bounded FFmpeg service. Only the Worker binding can reach this port."""
-import json, math, os, re, shutil, subprocess, tempfile, threading, time, urllib.request
+import json, math, os, re, shutil, subprocess, tempfile, threading, time, urllib.error, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
@@ -7,6 +7,8 @@ JOBS = {}
 LOCK = threading.Lock()
 MAX_BYTES = 500 * 1024 * 1024
 MAX_PIXELS = 4096 * 4096
+# The caption fonts the browser preview also uses (public/fonts); libass loads them before system fonts.
+FONTS_DIR = os.environ.get('FONTS_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fonts'))
 DOWNLOAD_DEADLINE = 600
 CURRENT = threading.local()  # the job this worker thread processes, so a cancel can stop its FFmpeg
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -224,7 +226,7 @@ def timeline(job, payload, origin, width, height, scale, ass, output):
             else:
                 trim = number(layer.get('trim', 0), 0, 600)
                 graph.append(f'[{source}:v:0]trim=start={trim:.3f}:duration={end - start:.3f},setpts=PTS-STARTPTS+{start:.3f}/TB,fps=30,{cover},format=yuv420p[l{j}]')
-                graph.append(f'[{current}][l{j}]overlay=0:0:{enable}:eof_action=pass[c{j}]')
+                graph.append(f'[{current}][l{j}]overlay=0:0:{enable}:eof_action=repeat[c{j}]')
         elif layer.get('kind') == 'image':
             ax, ay = layer['anchor']
             if ax not in (0, 0.5, 1) or ay not in (0, 0.5, 1): raise ValueError('Invalid anchor')
@@ -236,7 +238,7 @@ def timeline(job, payload, origin, width, height, scale, ass, output):
         else:
             raise ValueError('Invalid layer')
         current = f'c{j}'
-    graph.append(f'[{current}]ass={ass},format=yuv420p[v]')
+    graph.append(f'[{current}]ass={ass}:fontsdir={FONTS_DIR},format=yuv420p[v]')
     graph.append(f'{voice_labels}concat=n={segments}:v=0:a=1[voice]')
     audio = '[voice]'
     if has_music:
@@ -259,6 +261,16 @@ def timeline(job, payload, origin, width, height, scale, ass, output):
              '-crf','23','-maxrate','4M','-bufsize','8M','-threads','1','-pix_fmt','yuv420p','-c:a','aac','-b:a','160k','-t',f'{total:.3f}',
              '-movflags','+faststart',output],timeout=3000)
     return total
+
+def failure_code(e):
+    """A short reason the Worker can explain to the user (never the raw message)."""
+    m = str(e).lower()
+    if isinstance(e, subprocess.TimeoutExpired) or 'timed out' in m: return 'MEDIA_TIMEOUT'
+    if 'resolution' in m or 'dimensions' in m: return 'MEDIA_TOO_LARGE'
+    if 'no audio' in m: return 'MEDIA_NO_AUDIO'
+    if '0–600' in m or 'too long' in m: return 'MEDIA_TOO_LONG'
+    if isinstance(e, (urllib.error.URLError, OSError)) or 'download' in m or 'file too large' in m: return 'MEDIA_INPUT'
+    return 'MEDIA_PROCESSING_FAILED'
 
 def process(job, payload, id=None):
     CURRENT.job = job
@@ -297,12 +309,12 @@ def process(job, payload, id=None):
             return
         width, height, scale, ass, output = export_settings(job, payload)
         command(['ffmpeg','-nostdin','-v','error','-threads','1','-protocol_whitelist','file,pipe','-i',source,'-map','0:v:0','-map','0:a:0?',
-                 '-vf',scale+f',setsar=1,ass={ass}', '-filter_threads','1','-r','30','-c:v','libx264','-preset','veryfast','-crf','23',
+                 '-vf',scale+f',setsar=1,ass={ass}:fontsdir={FONTS_DIR}', '-filter_threads','1','-r','30','-c:v','libx264','-preset','veryfast','-crf','23',
                  '-maxrate','4M','-bufsize','8M','-threads','1','-pix_fmt','yuv420p','-c:a','aac','-b:a','128k','-t','600','-movflags','+faststart',output],timeout=1500)
         if os.path.getsize(output)>400*1024*1024: raise ValueError('Output too large')
         job.update(status='completed',duration=duration,file=output)
-    except Exception:
-        job.update(status='failed',error='MEDIA_PROCESSING_FAILED')
+    except Exception as e:
+        job.update(status='failed',error=failure_code(e))
     finally:
         job['finished']=time.time()
         CURRENT.job = None

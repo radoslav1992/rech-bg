@@ -191,7 +191,7 @@ it("sends the timeline, every input and caption times shifted by the lead-in to 
   expect(requests[0].urls).toHaveLength(3);
   expect(requests[0].urls.every((u: string) => u.startsWith(`https://rechbg.com/api/media-inputs/${task.id}/`))).toBe(true);
   // 0.2 s into the voice + 1.5 s lead-in.
-  expect(requests[0].ass).toContain("Dialogue: 0,0:00:01.70,0:00:02.30,S0,");
+  expect(requests[0].ass).toMatch(/Dialogue: \d+,0:00:01\.70,0:00:02\.30,S0,/);
   expect(sqlite.prepare("SELECT status FROM media_tasks").get()).toEqual({ status: "completed" });
 });
 
@@ -259,7 +259,7 @@ describe("multi-scene projects", () => {
     const { captionAssScenes } = await import("../server/caption-ass");
     const ass = captionAssScenes(payload.document, payload.captions);
     expect(ass).toMatch(/Style: S0,/); expect(ass).toMatch(/Style: S1,/);
-    expect(ass).toContain("Dialogue: 0,0:00:14.00,");
+    expect(ass).toMatch(/Dialogue: \d+,0:00:14\.00,[^,]*,S1,/);
   });
   it("names the scene that is not ready and caps the final length", async () => {
     await save(twoScenes({ videoJobId: null }), 0);
@@ -377,11 +377,13 @@ describe("scene layers and backgrounds", () => {
     const { captionAss, withTextLayers } = await import("../server/caption-ass");
     const base = captionAss({ ...defaultCaptions, words: [{ text: "Здравей", start: 0, end: 1 }] });
     const ass = withTextLayers(base, [text({ position: "top-left", box: null, bold: false }) as any, text() as any], 720, 1280);
-    expect(ass).toContain("Style: T,"); expect(ass).toContain("Style: TB,");
-    expect(ass).toContain("{\\an7\\pos(36,64)\\fs77\\b0");
-    expect(ass).toContain("{\\an2\\pos(360,1216)\\fs77\\b1");
-    // Braces cannot inject override tags; line breaks become \N.
-    expect(ass).toContain("Ново: ｛лято｝\\NОферта");
+    expect(ass).toContain("Style: T,");
+    // Placed by the shared layout (as in the preview), in Noto Sans of the chosen weight, below the captions (layer 10+).
+    expect(ass).toMatch(/Dialogue: 1,[^,]*,[^,]*,T,,0,0,0,,\{\\an5\\pos\([\d.]+,[\d.]+\)\\fnNoto Sans\\b0/);
+    expect(ass).toMatch(/Dialogue: 0,[^,]*,[^,]*,T,,0,0,0,,\{\\an5\\pos[^}]*\\p1/); // the box
+    expect(ass).toMatch(/Dialogue: 1\d,[^\n]*Здравей/);
+    // Braces cannot inject override tags; each line is its own event.
+    expect(ass).toContain("}Ново: ｛лято｝\n"); expect(ass).toContain("}Оферта\n");
     // Text events come before the captions, so captions are drawn on top.
     expect(ass.indexOf("Ново")).toBeLessThan(ass.indexOf("Здравей"));
   });

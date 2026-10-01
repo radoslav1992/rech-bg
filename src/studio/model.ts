@@ -86,7 +86,8 @@ export function shownCaptions(doc: ProjectDoc, docs: Record<string, CaptionDocum
   const out = { ...docs };
   for (const s of doc.scenes) {
     const source = s.clip && docs[assetCaptionKey(s.clip.assetId)];
-    if (s.clip && source) out[`cut:${s.id}`] = { ...source, ...(doc.captionLook || {}), words: cutWords(source.words, s.clip.keep) };
+    // The project look applies, but the scene's own on/off switch (its transcript's `enabled`) still counts.
+    if (s.clip && source) out[`cut:${s.id}`] = { ...source, ...(doc.captionLook || {}), enabled: source.enabled && (doc.captionLook?.enabled ?? true), words: cutWords(source.words, s.clip.keep) };
   }
   return out;
 }

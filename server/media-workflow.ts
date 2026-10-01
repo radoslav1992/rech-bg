@@ -93,7 +93,15 @@ export async function stopRender(e: Env, id: string) {
   }
 }
 
-export async function failMedia(e: Env, id: string) {
+/** What the user reads when processing fails, by the renderer's reason. */
+const failureReasons: Record<string, string> = {
+  MEDIA_TOO_LARGE: "Изображение или видео в проекта е по-голямо от 4096 × 4096 пиксела. Използвайте по-малък файл.",
+  MEDIA_NO_AUDIO: "Видеото няма звук. Използвайте видео със звук.",
+  MEDIA_TOO_LONG: "Видеото е по-дълго от 10 минути.",
+  MEDIA_INPUT: "Някой от файловете не можа да се зареди (може да е изтрит или изтекъл). Проверете сцените и слоевете и опитайте отново.",
+  MEDIA_TIMEOUT: "Обработката отне твърде дълго. Опитайте с по-кратко видео или с 720p.",
+};
+export async function failMedia(e: Env, id: string, code?: string) {
   const row = await e.DB.prepare(
     "SELECT payload,kind,source_id,status FROM media_tasks WHERE id=?",
   )
@@ -105,8 +113,7 @@ export async function failMedia(e: Env, id: string) {
     "UPDATE media_tasks SET status='failed',phase='failed',error=?,updated_at=? WHERE id=? AND status IN ('queued','running')",
   )
     .bind(
-      "Обработката не завърши. Кредитите за тази заявка са върнати. Свържете се с info@rechbg.com. Номер: " +
-        id,
+      `${(code && failureReasons[code]) || "Обработката не завърши."} Кредитите за тази заявка са върнати. Ако проблемът се повтаря, пишете на info@rechbg.com. Номер: ${id}`,
       now(),
       id,
     )
@@ -233,7 +240,7 @@ export class MediaGeneration extends WorkflowEntrypoint<
               return s.json() as Promise<any>;
             },
           );
-          if (result.status === "failed") throw new Error("MEDIA_INVALID");
+          if (result.status === "failed") throw new Error(typeof result.error === "string" && /^MEDIA_[A-Z_]+$/.test(result.error) ? result.error : "MEDIA_INVALID");
           if (result.status === "completed") {
             duration = result.duration;
             finished = true;
@@ -530,7 +537,7 @@ export class MediaGeneration extends WorkflowEntrypoint<
       });
       if (task.kind === "inspect" || task.kind === "export")
         await step.do("stop-render", () => stopRender(e, id));
-      await step.do("refund", () => failMedia(e, id));
+      await step.do("refund", () => failMedia(e, id, code));
       throw new Error("MEDIA_PROCESSING_FAILED");
     }
   }

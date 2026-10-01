@@ -63,6 +63,13 @@ export function LayerInspector({ layer, length, assets, onChange, onRemove }: {
   return <>
     <h3>{layer.type === "text" ? <Type size={17} /> : layer.type === "image" ? <ImageIcon size={17} /> : <Film size={17} />} {layerNames[layer.type]}</h3>
     <p>{formatTime(layer.start)} – {formatTime(layer.end)} · плъзнете клипа по линията „Слоеве“, за да го преместите.</p>
+    {layer.start >= length && <div className="st-warning" role="status">
+      <p>Слоят е след края на сцената (тя вече е {formatTime(length)}) и няма да се вижда във видеото.</p>
+      <button type="button" className="btn" onClick={() => {
+        const span = Math.min(layer.end - layer.start, length), start = Math.max(0, length - span);
+        set({ start: Math.round(start * 10) / 10, end: Math.round(Math.max(start + 0.1, length) * 10) / 10 });
+      }}>Премести в края на сцената</button>
+    </div>}
     <div className="tl-layer-times">
       <label>Начало (сек.)<input type="number" min={0} max={length} step={0.1} value={layer.start}
         onChange={(e) => { const start = Math.min(Math.max(0, Number(e.target.value)), layer.end - 0.1); set({ start }); }} /></label>
@@ -71,6 +78,7 @@ export function LayerInspector({ layer, length, assets, onChange, onRemove }: {
     </div>
     {layer.type === "text" && <>
       <label>Текст<textarea rows={2} maxLength={200} value={layer.text} onChange={(e) => set({ text: e.target.value })} /></label>
+      {!layer.text.trim() && <p className="st-fine">Празен текст не се показва във видеото.</p>}
       <label>Размер · {Math.round(layer.size * 100)}%<input type="range" min={0.02} max={0.15} step={0.005} value={layer.size} onChange={(e) => set({ size: Number(e.target.value) })} /></label>
       <div className="tl-layer-colors">
         <label>Цвят<input type="color" value={layer.color} onChange={(e) => set({ color: e.target.value })} /></label>

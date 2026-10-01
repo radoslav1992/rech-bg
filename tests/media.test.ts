@@ -420,18 +420,20 @@ it("renders every caption preset to ASS with style-specific word emphasis", () =
     expect(ass.match(/^Dialogue:/gm)?.length).toBeGreaterThan(0);
     expect(ass).not.toContain("{}");
   }
+  // Every word is placed by the shared layout; the look comes from per-event tags.
   const outline = captionAss({ ...defaultCaptions, style: "outline", words });
-  expect(outline).toMatch(/Style: Default,Noto Sans,\d+,&HFF/);
-  expect(outline).toContain("\\1a&H00&");
+  expect(outline).toContain("\\1a&HFF&"); // hollow letters
+  expect(outline).toMatch(/\\fnNoto Sans\\b1/);
   const banner = captionAss({ ...defaultCaptions, style: "banner", accent: "#ffe16b", words });
-  expect(banner).toContain("&H006be1ff,&H006be1ff");
-  expect(banner).toContain("{\\1a&H70&}две");
-  expect(captionAss({ ...defaultCaptions, style: "retro", accent: "#ff5fa2", words })).toMatch(/,&H00a25fff,-1,/);
-  expect(captionAss({ ...defaultCaptions, style: "luxe", words })).toMatch(/Style: Default,Noto Serif,\d+,.*,0,-1,0,0,/);
+  expect(banner).toContain("\\p1\\1c&H6be1ff&"); // the full-width band
+  expect(banner).toContain("\\1a&H73&}две"); // other words at 55 %
+  const luxe = captionAss({ ...defaultCaptions, style: "luxe", words });
+  expect(luxe).toMatch(/\\fnNoto Serif\\b0\\i1/);
+  // A word fades and rises in over 0.25 s: one event with \move and \t.
   const fade = captionAss({ ...defaultCaptions, style: "fade", words });
-  expect(fade).toContain("Едно {\\1c");
-  expect(fade).toContain("\\t(0,220,\\alpha&H00&)}две");
-  expect(captionAss({ ...defaultCaptions, style: "impact", words }).match(/\\frz3/g)?.length).toBe(2);
+  expect(fade).toMatch(/\\move\([\d.]+,[\d.]+,[\d.]+,[\d.]+\).*\\t\(0,250,/);
+  // Bounce: the spoken word lifts and settles in keyframed steps.
+  expect(captionAss({ ...defaultCaptions, style: "bounce", words }).match(/\\move\(/g)!.length).toBeGreaterThan(3);
 });
 it("accepts chunked uploads beyond the ordinary API body limit and rejects missing parts", async () => {
   const uploads = new Map<string, any>();
@@ -579,4 +581,11 @@ it("reads image sizes from headers and refuses pictures too large to decode safe
   };
   expect((await send(pngHeader(30000, 30000))).status).toBe(400);
   expect((await send(pngHeader(900, 1200))).status).toBe(200);
+});
+it("tells the user why a render failed, by the renderer's reason", async () => {
+  const a = asset(), id = await task("export", a, 0);
+  await failMedia(env, id, "MEDIA_TOO_LARGE");
+  const row = sqlite.prepare("SELECT error FROM media_tasks WHERE id=?").get(id) as any;
+  expect(row.error).toContain("4096 × 4096");
+  expect(row.error).toContain("върнати");
 });

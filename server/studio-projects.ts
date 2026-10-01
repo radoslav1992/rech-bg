@@ -192,7 +192,8 @@ async function renderPlan(e: Env, user: DbUser, projectId: string) {
       audio = { audio_key: asset.object_key, duration: keptDuration(keep, asset.duration) };
       video = { key: asset.object_key };
       // The project's look (format, style, framing) wins over the one saved with the clip's transcript.
-      captions = { ...source, ...(stored.document.captionLook || {}), words: cutWords(source.words, keep) };
+      // The project look applies, but the scene's own on/off switch still counts (as in the preview).
+      captions = { ...source, ...(stored.document.captionLook || {}), enabled: source.enabled && (stored.document.captionLook?.enabled ?? true), words: cutWords(source.words, keep) };
     } else {
       if (!scene.audioJobId || !scene.videoJobId)
         throw new HTTPException(400, { message: `${label}Експортът се отключва, когато видео аватарът е готов.` });
@@ -219,7 +220,7 @@ async function renderPlan(e: Env, user: DbUser, projectId: string) {
     for (const layer of scene.layers) {
       if (layer.start >= length) continue;
       const start = offset + layer.start, end = offset + Math.min(layer.end, length);
-      if (layer.type === "text") { texts.push({ ...layer, start, end }); continue; }
+      if (layer.type === "text") { if (layer.text.trim()) texts.push({ ...layer, start, end }); continue; }
       const asset = await media(label, layer.assetId, layer.type === "image" ? imageAssetKinds : [...imageAssetKinds, ...videoAssetKinds]);
       const still = asset.mime.startsWith("image/");
       if (layer.type === "broll" && !still && layer.trim >= asset.duration)

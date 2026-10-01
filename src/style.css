@@ -1,3 +1,7 @@
+/* Caption and text-layer fonts: the same files the server renders with (renderer/fonts), so the preview matches the export. */
+@font-face { font-family: "Noto Sans"; font-weight: 700; font-style: normal; font-display: swap; src: url("/fonts/NotoSans-Bold.woff2") format("woff2"); }
+@font-face { font-family: "Noto Sans"; font-weight: 400; font-style: normal; font-display: swap; src: url("/fonts/NotoSans-Regular.woff2") format("woff2"); }
+@font-face { font-family: "Noto Serif"; font-weight: 400; font-style: italic; font-display: swap; src: url("/fonts/NotoSerif-Italic.woff2") format("woff2"); }
 :root {
   font-family: "Manrope Variable", Manrope, Arial, sans-serif;
   color: #202620;
