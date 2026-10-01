@@ -1,7 +1,7 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import Stripe from "stripe";
 import { database } from "./helpers";
-import { webhook, allowance, mailbox } from "../server/billing";
+import { webhook, allowance, mailbox, reconcileStripe } from "../server/billing";
 import { now } from "../server/types";
 const stripe = new Stripe("sk_test_local_only", {
   httpClient: Stripe.createFetchHttpClient(),
@@ -254,5 +254,18 @@ describe("free trial", () => {
     const alias = await allowance(env, user("g2"));
     expect(alias.used).toBe(alias.limit);
     expect((await allowance(env, user("g3"))).used).toBe(0);
+  });
+});
+describe("nightly Stripe check", () => {
+  it("re-reads a subscription whose renewal webhook was missed, and leaves healthy ones alone", async () => {
+    Object.assign(env, { BILLING_ENABLED: "true", COMPANY_NAME: "x", COMPANY_ID: "1", COMPANY_ADDRESS: "a", CONTACT_EMAIL: "c@x.bg", SITE_URL: "https://rechbg.com" });
+    sqlite.prepare("INSERT INTO subscriptions(id,user_id,plan,status,period_start,period_end,cancel_at_period_end,event_created) VALUES('sub_1','u','creator','active',1,?,0,1)").run(now() - 3600);
+    const fetchMock = vi.fn(async () => Response.json({ object: "list", data: [subscription({ items: { data: [{ id: "si_1", price: { id: "price_creator" }, current_period_start: now() - 60, current_period_end: now() + 30 * 86400 }] } })], has_more: false }));
+    vi.stubGlobal("fetch", fetchMock);
+    await reconcileStripe(env);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect((sqlite.prepare("SELECT period_end FROM subscriptions WHERE id='sub_1'").get() as any).period_end).toBeGreaterThan(now() + 29 * 86400);
+    await reconcileStripe(env);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

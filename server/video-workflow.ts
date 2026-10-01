@@ -5,7 +5,7 @@ import { now } from "./types";
 import { withDefaults } from "./config";
 import { avatarMap, failVideo, videoModels, jobVideoTier, type VideoMeta } from "./video";
 import { submitWaveVideo, getWaveVideo, type WaveTicket } from "./video-wavespeed";
-import { submitHeyGenVideo, getHeyGenVideo, getHeyGenAvatarStatus, type HeyGenTicket, type HeyGenAvatar } from "./video-heygen";
+import { submitHeyGenVideo, getHeyGenVideo, getHeyGenAvatarStatus, deleteHeyGenFile, queueHeyGenFile, type HeyGenTicket, type HeyGenAvatar } from "./video-heygen";
 import { prepareHeyGenAvatar, cleanupHeyGenAvatars } from "./video-heygen-avatar";
 import { hasVideoCredential, savedVideoProvider, type VideoProvider } from "./video-provider";
 import { providerFailure, VideoFailure, videoFailureMessage, type VideoStage } from "./video-errors";
@@ -52,6 +52,14 @@ async function fetchOutput(url: string, signal: AbortSignal) {
     next = outputUrl(new URL(location, next).href);
   }
   throw new VideoFailure("DOWNLOAD", "MEDIA");
+}
+/** Our copy at HeyGen is deleted once the video is saved here (or failed); maintenance retries. */
+async function forgetHeyGenVideo(env: Env, jobId: string, videoId: string) {
+  await queueHeyGenFile(env, "video", videoId);
+  try {
+    await deleteHeyGenFile(env, "video", videoId);
+    await env.DB.prepare("DELETE FROM cleanup_tasks WHERE prefix=?").bind(`heygen-file/video/${videoId}`).run();
+  } catch { console.error("HeyGen copy cleanup will retry", { jobId }); }
 }
 export async function storeVideo(env: Env, key: string, url: string, maxBytes = 300 * 1024 * 1024) {
   const r = await fetchOutput(url, AbortSignal.timeout(240000));
@@ -222,6 +230,7 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId?: string; t
         await this.env.DB.prepare("UPDATE jobs SET status='completed',video_key=?,updated_at=? WHERE id=? AND status IN ('queued','running')").bind(key, now(), id).run();
       });
       stage = "CLEANUP";
+      if (ticket?.provider === "heygen") { const t = ticket; await step.do("forget-heygen-video", () => forgetHeyGenVideo(this.env, id, t.request_id)); }
       await step.do("clean-video-input", async () => {
         const meta: VideoMeta = JSON.parse(job.video_meta);
         if (meta.imageKey) await this.env.AUDIO.delete(meta.imageKey);
@@ -234,6 +243,7 @@ export class VideoGeneration extends WorkflowEntrypoint<Env, { jobId?: string; t
         await this.env.DB.prepare("INSERT OR IGNORE INTO cleanup_tasks(prefix,created_at) SELECT 'segments/'||user_id||'/'||id||'/',? FROM jobs WHERE id=?").bind(now(), id).run();
         await failVideo(this.env, id, failure.message);
       });
+      if (ticket?.provider === "heygen") { const t = ticket; await step.do("forget-failed-heygen-video", () => forgetHeyGenVideo(this.env, id, t.request_id)).catch(() => {}); }
       if (ticket?.cancel_url && (ticket.provider == null || ticket.provider === "fal")) {
         try { await videoFetch(queueUrl(ticket.cancel_url), { method: "PUT", headers: { Authorization: `Key ${this.env.FAL_KEY?.trim()}` }, signal: AbortSignal.timeout(15000) }); } catch { /* Best effort cancellation; never resubmit. */ }
       }

@@ -176,7 +176,8 @@ describe("Моите аватари", () => {
     expect(JSON.parse(submit.init!.body as string)).toMatchObject({ type: "avatar", avatar_id: "look_u1", engine: { type: "avatar_iv" } });
     // No per-video avatar was created or removed.
     expect(calls.some((c) => c.url === "https://api.heygen.com/v3/avatars")).toBe(false);
-    expect(calls.some((c) => c.init?.method === "DELETE")).toBe(false);
+    // Only HeyGen's copy of the finished video is deleted; the avatar stays.
+    expect(calls.filter((c) => c.init?.method === "DELETE").map((c) => c.url)).toEqual(["https://api.heygen.com/v3/videos/v_1"]);
     expect(sqlite.prepare("SELECT status FROM jobs WHERE id=?").get(id)!.status).toBe("completed");
     const cleanup = heygen();
     expect((await request(`/my-avatars/${avatar.id}`, { method: "DELETE" })).status).toBe(200);

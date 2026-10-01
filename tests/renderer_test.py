@@ -312,4 +312,24 @@ class RendererTest(unittest.TestCase):
         self.assertLess(time.time() - started, 3)
         self.assertIn('failed', result['error'])
 
+    def test_voice_sample_from_a_tool_input(self):
+        with tempfile.TemporaryDirectory() as directory:
+            d = Path(directory)
+            subprocess.run(['ffmpeg','-nostdin','-v','error','-f','lavfi','-i','color=c=red:s=160x90:d=3','-f','lavfi','-i','sine=frequency=200:duration=3',
+                            '-c:v','libx264','-threads','1','-c:a','aac',str(d/'film.mp4')],check=True)
+            class Opener:
+                def open(self, url, *args, **kwargs): return (d/'film.mp4').open('rb')
+            work = d / 'job'; work.mkdir(); job = {'dir': str(work), 'status': 'running'}
+            with patch.object(renderer.urllib.request, 'build_opener', return_value=Opener()):
+                renderer.process(job, {'operation': 'sample', 'url': 'https://rechbg.com/api/tool-inputs/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'})
+            self.assertEqual(job['status'], 'completed', job)
+            self.assertTrue(job['file'].endswith('.mp3'))
+            info = json.loads(subprocess.check_output(['ffprobe','-v','error','-show_streams','-of','json',job['file']]))
+            self.assertEqual([s['codec_type'] for s in info['streams']], ['audio'])
+            self.assertEqual(info['streams'][0]['channels'], 1)
+            # Other paths on the site stay refused.
+            bad = {'dir': str(work), 'status': 'running'}
+            renderer.process(bad, {'operation': 'sample', 'url': 'https://rechbg.com/api/media/assets/x/file'})
+            self.assertEqual(bad['status'], 'failed')
+
 if __name__ == '__main__': unittest.main()

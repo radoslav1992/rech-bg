@@ -23,23 +23,28 @@ export function JobActivity({ children }: { children: ReactNode }) {
   const refreshRef = useRef(refresh);
   refreshRef.current = refresh;
   useEffect(() => {
-    let stopped = false, running = false;
+    let stopped = false, running = false, active = false, last = 0;
     let previous = new Map<string, string>();
-    const load = async () => {
+    const load = async (event?: Event) => {
       if (running || document.hidden) return;
-      running = true;
+      // The 10-second poll runs only while something is being made; focus and job changes always refresh,
+      // but focus and visibility arriving together load once.
+      if (!event && !active) return;
+      if (event && event.type !== "rech:jobs-changed" && Date.now() - last < 2000) return;
+      running = true; last = Date.now();
       try {
         const data = await api<{ jobs: Job[] }>("/jobs");
         if (stopped) return;
         const completed = data.jobs.find(j => ["queued", "running"].includes(previous.get(j.id) || "") && ["completed", "failed"].includes(j.status));
         if (completed) { setFinished(completed); void refreshRef.current(); }
         previous = new Map(data.jobs.map(j => [j.id, j.status]));
+        active = data.jobs.some(j => ["queued", "running"].includes(j.status));
         setJobs(data.jobs); setError("");
       } catch { if (!stopped) setError("Не успяхме да обновим записите. Генерирането продължава във фонов режим."); }
       finally { running = false; }
     };
-    void load();
-    const timer = window.setInterval(load, 10000);
+    void load(new Event("rech:jobs-changed"));
+    const timer = window.setInterval(() => void load(), 10000);
     window.addEventListener("focus", load);
     window.addEventListener("rech:jobs-changed", load);
     document.addEventListener("visibilitychange", load);

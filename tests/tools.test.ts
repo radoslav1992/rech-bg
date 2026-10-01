@@ -4,7 +4,8 @@ import { VideoGeneration } from "../server/video-workflow";
 import { bucket, database } from "./helpers";
 import { now } from "../server/types";
 import { sha } from "../server/security";
-import { translateCredits } from "../shared/tools";
+import { CLONE_VOICE, revoiceCredits, translateCredits } from "../shared/tools";
+import { maintenance } from "../server/maintenance";
 
 const mp4 = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112, 105, 115, 111, 109, 0, 0, 0, 0, 105, 115, 111, 109, 109, 112, 52, 50]);
 const step = { do: async (_: string, options: any, fn?: any) => (fn || options)(), sleep: async () => {} };
@@ -128,5 +129,99 @@ describe("Превод с дублаж", () => {
     expect((await order()).status).toBe(202);
     expect((await order()).status).toBe(202);
     expect((await order()).status).toBe(409);
+  });
+});
+
+describe("Преозвучаване", () => {
+  const text = "Здравейте, днес говорим за новата ни услуга.";
+  const revoice = (changes: Record<string, unknown> = {}) => request("/tools/revoice", { method: "POST", body: JSON.stringify({
+    assetId: source, text, voice: "studio-mila", mode: "speed", idempotencyKey: crypto.randomUUID(), credits: revoiceCredits(12.4, text, "speed"), consent: true, ...changes }) });
+  /** ElevenLabs (clone, speech, delete) and HeyGen Lipsync; records every call. */
+  function providers(statuses: string[] = ["processing", "completed"]) {
+    const calls: { url: string; init?: RequestInit }[] = [];
+    let checks = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: string | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.url;
+      const method = init?.method || (typeof input === "string" ? "GET" : input.method);
+      calls.push({ url, init: { ...init, method } });
+      if (url.startsWith("https://api.elevenlabs.io/v1/voices/add")) return Response.json({ voice_id: "clone1", requires_verification: false });
+      if (url.startsWith("https://api.elevenlabs.io/v1/voices/clone1") && method === "DELETE") return Response.json({ status: "ok" });
+      if (url.startsWith("https://api.elevenlabs.io/v1/text-to-speech/")) return new Response(new Uint8Array([73, 68, 51, 4, 0, 0, 1, 2, 3]), { headers: { "Content-Type": "audio/mpeg" } });
+      if (url === "https://api.heygen.com/v3/lipsyncs" && method === "POST") return Response.json({ data: { lipsync_id: "ls_1" } });
+      if (url === "https://api.heygen.com/v3/lipsyncs/ls_1" && method === "DELETE") return Response.json({ data: { id: "ls_1", deleted: true } });
+      if (url === "https://api.heygen.com/v3/lipsyncs/ls_1") return Response.json({ data: { id: "ls_1", status: statuses[Math.min(checks++, statuses.length - 1)], video_url: "https://files.heygen.ai/ls.mp4", duration: 14.2, failure_message: "private" } });
+      if (url === "https://files.heygen.ai/ls.mp4") return new Response(mp4);
+      throw new Error("unexpected " + url);
+    }));
+    return calls;
+  }
+  beforeEach(() => { env.ELEVENLABS_API_KEY = "eleven-secret"; });
+
+  it("prices the longer of video and speech plus the voice, and checks consent, voice and length", async () => {
+    expect(revoiceCredits(12.4, text, "speed")).toBe(13 * 150 + text.length * 3);
+    expect(revoiceCredits(12.4, text, "precision")).toBe(13 * 350 + text.length * 3);
+    expect(() => revoiceCredits(12.4, "дума ".repeat(80), "speed")).toThrow("по-дълъг");
+    providers();
+    expect((await revoice({ credits: 1 })).status).toBe(409);
+    expect((await revoice({ voice: CLONE_VOICE })).status).toBe(400);
+    expect((await revoice({ voice: "studio-nobody" })).status).toBe(400);
+    expect((await revoice({ consent: false })).status).toBe(400);
+    expect(sqlite.prepare("SELECT COUNT(*) n FROM ai_tasks").get()!.n).toBe(0);
+    const config = await (await request("/tools/config")).json() as any;
+    expect(config.revoice.enabled).toBe(true);
+    expect(config.revoice.voices.map((v: any) => v.id)).toContain("studio-mila");
+  });
+  it("speaks the new text in a studio voice, lip-syncs the video, saves it and deletes HeyGen's copy and the working files", async () => {
+    providers();
+    const res = await revoice();
+    expect(res.status).toBe(202);
+    const { id } = await res.json() as any;
+    expect(used()).toBe(revoiceCredits(12.4, text, "speed"));
+    const calls = providers(["pending", "processing", "completed"]);
+    await new (VideoGeneration as any)({}, env).run({ payload: { toolTaskId: id } }, step);
+    const tts = calls.find((c) => c.url.startsWith("https://api.elevenlabs.io/v1/text-to-speech/"))!;
+    expect(tts.url).toContain("/EXAVITQu4vr4xnSDxMaL");
+    expect(JSON.parse(tts.init!.body as string)).toMatchObject({ text, model_id: "eleven_v3", language_code: "bg" });
+    expect(calls.some((c) => c.url.includes("/voices/add"))).toBe(false);
+    const submit = JSON.parse(calls.find((c) => c.url === "https://api.heygen.com/v3/lipsyncs")!.init!.body as string);
+    expect(submit).toMatchObject({ mode: "speed", video: { type: "url" }, audio: { type: "url" } });
+    expect(new URL(submit.audio.url).pathname).toBe(`/api/tool-inputs/${id}/speech`);
+    const task = sqlite.prepare("SELECT * FROM ai_tasks WHERE id=?").get(id) as any;
+    expect(task.status).toBe("completed");
+    expect(sqlite.prepare("SELECT status,duration FROM media_assets WHERE id=?").get(task.output_asset_id)).toEqual({ status: "ready", duration: 14.2 });
+    expect(calls.some((c) => c.url === "https://api.heygen.com/v3/lipsyncs/ls_1" && c.init?.method === "DELETE")).toBe(true);
+    expect(sqlite.prepare("SELECT prefix FROM cleanup_tasks").all()).toEqual([{ prefix: `tools/u/${id}/` }]);
+    await maintenance(env);
+    expect(await env.AUDIO.head(`tools/u/${id}/speech.mp3`)).toBeNull();
+    expect(sqlite.prepare("SELECT COUNT(*) n FROM cleanup_tasks").get()!.n).toBe(0);
+    expect(used()).toBe(revoiceCredits(12.4, text, "speed"));
+  });
+  it("clones the speaker's voice from the video for this task only, and deletes the clone", async () => {
+    providers();
+    const { id } = await (await revoice({ voice: CLONE_VOICE, voiceConsent: true, mode: "precision", credits: revoiceCredits(12.4, text, "precision") })).json() as any;
+    const rendered: string[] = [];
+    env.MEDIA_RENDERER = { idFromName: (s: string) => s, get: () => ({ fetch: async (url: string, init?: RequestInit) => {
+      rendered.push(`${init?.method || "GET"} ${url}`);
+      if (url.endsWith("/file")) return new Response(new Uint8Array([73, 68, 51, 9]));
+      if (init?.method === "POST") { expect(JSON.parse(init.body as string)).toMatchObject({ id, operation: "sample" }); return Response.json({ status: "running" }, { status: 202 }); }
+      return Response.json({ status: "completed", duration: 12 });
+    } }) };
+    const calls = providers();
+    await new (VideoGeneration as any)({}, env).run({ payload: { toolTaskId: id } }, step);
+    expect(rendered).toContain(`DELETE http://renderer/jobs/${id}`);
+    expect(calls.some((c) => c.url.includes("/v1/voices/add"))).toBe(true);
+    expect(calls.find((c) => c.url.startsWith("https://api.elevenlabs.io/v1/text-to-speech/"))!.url).toContain("/clone1");
+    expect(calls.some((c) => c.url.includes("/v1/voices/clone1") && c.init?.method === "DELETE")).toBe(true);
+    expect(sqlite.prepare("SELECT status FROM ai_tasks WHERE id=?").get(id)!.status).toBe("completed");
+    expect(sqlite.prepare("SELECT COUNT(*) n FROM cleanup_tasks WHERE prefix LIKE 'elevenlabs-voice/%'").get()!.n).toBe(0);
+  });
+  it("refunds when lipsync fails, without showing the provider's message", async () => {
+    providers();
+    const { id } = await (await revoice()).json() as any;
+    providers(["failed"]);
+    await expect(new (VideoGeneration as any)({}, env).run({ payload: { toolTaskId: id } }, step)).rejects.toThrow();
+    const task = sqlite.prepare("SELECT status,error FROM ai_tasks WHERE id=?").get(id) as any;
+    expect(task.status).toBe("failed"); expect(task.error).not.toContain("private");
+    expect(used()).toBe(0);
   });
 });

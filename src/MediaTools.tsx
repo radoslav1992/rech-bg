@@ -15,6 +15,7 @@ import type { CaptionDocument } from "../shared/captions";
 import { CaptionEditor } from "./CaptionEditor";
 import { DubbingTool } from "./DubbingTool";
 import { ShortsTool } from "./ShortsTool";
+import { RevoiceTool } from "./RevoiceTool";
 import { Modal } from "./studio/Modal";
 import "./studio/studio.css";
 import "./media-tools.css";
@@ -26,43 +27,42 @@ type Library = {
   storage: { used: number; limit: number; days: number };
 };
 const fileUrl = (id: string) => `/api/media/assets/${id}/file`;
+// One media library for the whole page: every component using it shares one request, one answer and one poll
+// (the studio editor, its avatar dialog and the brand panel used to load and poll it separately).
+const library = {
+  data: null as Library | null, error: "", enabled: null as boolean | null, at: 0,
+  pending: null as Promise<void> | null, config: null as Promise<void> | null,
+  listeners: new Set<() => void>(),
+};
+const notify = () => library.listeners.forEach((l) => l());
+function loadLibrary(force = false): Promise<void> {
+  if (library.pending) return library.pending;
+  // Several components asking at once (or right after) get the same fresh answer.
+  if (!force && Date.now() - library.at < 2000) return Promise.resolve();
+  library.pending = api<Library>("/media")
+    .then((d) => { library.data = d; library.error = ""; })
+    .catch((e) => { library.error = (e as Error).message; })
+    .finally(() => { library.at = Date.now(); library.pending = null; notify(); });
+  return library.pending;
+}
+function loadConfig() {
+  library.config ??= api<{ enabled: boolean }>("/media/config")
+    .then((c) => { library.enabled = c.enabled; notify(); if (c.enabled) return loadLibrary(true); })
+    .catch((e) => { library.error = (e as Error).message; library.config = null; notify(); });
+  return library.config;
+}
 export function useMediaLibrary() {
-  const [data, setData] = useState<Library | null>(null),
-    [error, setError] = useState(""),
-    [enabled, setEnabled] = useState<boolean | null>(null);
-  const live = useRef(true),
-    inflight = useRef(false);
-  const reload = useCallback(async () => {
-    if (inflight.current) return;
-    inflight.current = true;
-    try {
-      const d = await api<Library>("/media");
-      if (live.current) {
-        setData(d);
-        setError("");
-      }
-    } catch (e) {
-      if (live.current) setError((e as Error).message);
-    } finally {
-      inflight.current = false;
-    }
-  }, []);
+  const [, render] = useState(0);
   useEffect(() => {
-    live.current = true;
-    api("/media/config")
-      .then((c) => {
-        if (live.current) {
-          setEnabled(c.enabled);
-          if (c.enabled) void reload();
-        }
-      })
-      .catch((e) => {
-        if (live.current) setError(e.message);
-      });
-    return () => {
-      live.current = false;
-    };
-  }, [reload]);
+    const listener = () => render((n) => n + 1);
+    library.listeners.add(listener);
+    void loadConfig();
+    // A page opened later still starts from a fresh list.
+    if (library.enabled) void loadLibrary();
+    return () => { library.listeners.delete(listener); };
+  }, []);
+  const reload = useCallback(() => loadLibrary(true), []);
+  const { data, error, enabled } = library;
   // Poll only while something is processing and the tab is visible; otherwise refresh on return or job changes.
   const busy =
     !!data &&
@@ -71,7 +71,7 @@ export function useMediaLibrary() {
   useEffect(() => {
     if (!enabled) return;
     const tick = () => {
-      if (!document.hidden) void reload();
+      if (!document.hidden) void loadLibrary();
     };
     const id = busy ? setInterval(tick, 6000) : undefined;
     document.addEventListener("visibilitychange", tick);
@@ -81,7 +81,7 @@ export function useMediaLibrary() {
       document.removeEventListener("visibilitychange", tick);
       window.removeEventListener("rech:jobs-changed", tick);
     };
-  }, [enabled, busy, reload]);
+  }, [enabled, busy]);
   return { data, error, enabled, reload };
 }
 export async function uploadMedia(
@@ -552,7 +552,7 @@ const toolCards: ToolCard[] = [
   { id: "dubbing", icon: Languages, title: "Превод с дублаж", text: "Видеото на друг език — със същите гласове и движение на устните.", price: "от 100 кредита / секунда" },
   { id: "product", icon: Package, title: "Аватар с продукт", text: "Лице и продукт в една композиция за говорещо видео.", price: "Цена според броя варианти" },
   { id: "shorts", icon: Scissors, title: "Кратки клипове", text: "Най-силните моменти от дълго видео — вертикално и със субтитри.", price: "Търсене без заплащане · 500 кредита / минута клип" },
-  { id: "revoice", icon: Mic, title: "Преозвучаване", text: "Сменете думите в заснето видео — нов глас и движение на устните.", price: "", soon: true },
+  { id: "revoice", icon: Mic, title: "Преозвучаване", text: "Сменете думите в заснето видео — нов глас и движение на устните.", price: "от 150 кредита / секунда" },
 ];
 export function MediaTools() {
   const { data, error: loadError, enabled, reload } = useMediaLibrary(),
@@ -569,17 +569,18 @@ export function MediaTools() {
   const tool = (params.get("tool") as Tool | null) || (params.get("asset") ? "captions" : null);
   const openTool = (id: Tool) => setParams({ tool: id });
   const closeTool = () => setParams({});
-  const [toolTasks, setToolTasks] = useState(0);
+  const [toolTasks, setToolTasks] = useState({ translate: 0, lipsync: 0 });
   useEffect(() => {
-    api<{ tasks: { status: string }[] }>("/tools/tasks")
-      .then((d) => setToolTasks(d.tasks.filter((t) => t.status === "queued" || t.status === "running").length))
-      .catch(() => {});
+    api<{ tasks: { kind: string; status: string }[] }>("/tools/tasks").then((d) => {
+      const open = d.tasks.filter((t) => t.status === "queued" || t.status === "running");
+      setToolTasks({ translate: open.filter((t) => t.kind === "translate").length, lipsync: open.filter((t) => t.kind === "lipsync").length });
+    }).catch(() => {});
   }, [tool]);
   const running: Record<Tool, number> = {
     captions: (data?.tasks || []).filter((t) => ["inspect", "transcribe"].includes(t.kind) && ["queued", "running"].includes(t.status)).length,
-    dubbing: toolTasks,
+    dubbing: toolTasks.translate,
     product: (data?.tasks || []).filter((t) => t.kind === "product" && ["queued", "running"].includes(t.status)).length,
-    shorts: 0, revoice: 0,
+    shorts: 0, revoice: toolTasks.lipsync,
   };
   useEffect(() => {
     if (!busy) return;
@@ -751,6 +752,9 @@ export function MediaTools() {
           </Modal>
           <Modal open={tool === "dubbing"} title="Превод с дублаж" onClose={closeTool} wide>
             <DubbingTool assets={data?.assets || []} onDone={reload} initialAsset={params.get("asset") || ""} />
+          </Modal>
+          <Modal open={tool === "revoice"} title="Преозвучаване" onClose={closeTool} wide>
+            <RevoiceTool assets={data?.assets || []} onDone={reload} />
           </Modal>
           <Modal open={tool === "shorts"} title="Кратки клипове" onClose={closeTool} wide>
             <ShortsTool assets={data?.assets || []} onChange={reload} />
