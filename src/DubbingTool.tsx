@@ -5,7 +5,10 @@ import { api, Button, Notice, number, useAuth } from "./lib";
 import { canCreateVideo, VIDEO_PLAN_MESSAGE } from "../shared/catalog";
 import { translateCredits, translateModes, type AiTask, type TranslateMode } from "../shared/tools";
 import type { MediaAsset } from "../shared/media";
+import { VideoSource } from "./VideoSource";
 
+// Uploads, studio exports and avatar videos made in the studio, up to 10 minutes.
+const dubbable = (a: MediaAsset) => ["upload", "export", "video"].includes(a.kind) && a.status === "ready" && a.mime.startsWith("video/") && a.duration > 0 && a.duration <= 600;
 const phases: Record<string, string> = { queued: "На опашка", processing: "Превежда се", saving: "Запазване", completed: "Готово" };
 
 /**
@@ -45,9 +48,7 @@ export function DubbingTool({ assets, onDone, initialAsset = "" }: { assets: Med
   }, [tasks, onDone, refresh]);
 
   if (enabled === false) return <Notice>Преводът на видео ще бъде достъпен скоро.</Notice>;
-  // Uploads, studio exports and avatar videos made in the studio.
-  const videos = assets.filter((a) => ["upload", "export", "video"].includes(a.kind) && a.status === "ready" && a.mime.startsWith("video/") && a.duration > 0);
-  const source = videos.find((a) => a.id === assetId);
+  const source = assets.find((a) => a.id === assetId && dubbable(a));
   let cost = 0, costError = "";
   if (source) { try { cost = translateCredits(source.duration, mode); } catch (e) { costError = (e as Error).message; } }
   const remaining = Math.max(0, (user?.limit || 0) - (user?.used || 0));
@@ -72,13 +73,8 @@ export function DubbingTool({ assets, onDone, initialAsset = "" }: { assets: Med
     {!allowed && <Notice>{VIDEO_PLAN_MESSAGE} <Link to="/app/billing">Вижте плановете</Link></Notice>}
     {error && <Notice error>{error}</Notice>}
     {done && <Notice good>{done}</Notice>}
-    <label>Видео
-      <select value={assetId} onChange={(e) => setAssetId(e.target.value)}>
-        <option value="">Изберете видео от библиотеката</option>
-        {videos.map((a) => <option key={a.id} value={a.id}>{a.name} · {Math.ceil(a.duration)} сек.</option>)}
-      </select>
-    </label>
-    {!videos.length && <p className="vs-fine">Още нямате готово видео. Качете такова в „Субтитри“ или създайте видео във видео студиото.</p>}
+    <VideoSource assets={assets} eligible={dubbable} value={assetId} onChange={setAssetId} onUploaded={onDone}
+      describe={(a) => `${a.name} · ${Math.ceil(a.duration)} сек.`} requirement="е по-дълго от 10 минути." />
     <label>Език на превода
       <select value={language} onChange={(e) => setLanguage(e.target.value)}>
         {!languages.length && <option value="English">English</option>}
