@@ -126,7 +126,8 @@ function Editor({ projectId }: { projectId: string }) {
   const first0 = doc?.scenes[0];
   const firstSource = first0?.clip ? assetCaptionKey(first0.clip.assetId) : media[0]?.audio?.status === "completed" ? media[0].audio.id : null;
   // Frame size and fit follow the first scene, as in the server render.
-  const look: CaptionDocument = (firstSource && captions.docs[firstSource]) || { ...defaultCaptions, ...(doc?.captionLook || {}) };
+  // The project's look applies on top (a filmed clip's transcript keeps the look it was transcribed with).
+  const look: CaptionDocument = { ...((firstSource && captions.docs[firstSource]) || defaultCaptions), ...(doc?.captionLook || {}) };
   const { segments, total } = useMemo(() => doc ? projectLayout(doc, media, assets) : { segments: [], total: 0 }, [doc, media, assets]);
   const sceneSegments = segments.filter((s): s is SceneSegment => s.kind === "scene");
   const ranges = useMemo(() => doc ? projectSpeech(doc, segments, shown, media) : [], [doc, segments, shown, media]);
