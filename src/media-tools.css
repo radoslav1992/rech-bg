@@ -222,3 +222,14 @@
 .shorts-actions .btn { display: inline-flex; align-items: center; gap: 6px; }
 .shorts-status { font-size: 13px; font-weight: 600; color: #3d5a26; }
 @media (max-width: 600px) { .shorts-clip { grid-template-columns: 1fr; } .shorts-clip video { width: 100%; max-width: 220px; justify-self: center; } }
+.video-source { display: grid; gap: 10px; margin-bottom: 12px; }
+.video-source label { margin-bottom: 0; }
+.video-source > label { display: grid; gap: 6px; font-weight: 600; }
+.video-source select { width: 100%; min-width: 0; }
+.video-source-upload { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 12px; border: 1px dashed #cfd5e4; border-radius: 12px; }
+.video-source-upload .checkbox-label { flex-basis: 100%; display: flex; align-items: flex-start; gap: 8px; font-weight: 500; }
+.video-source-upload .checkbox-label input { flex: 0 0 auto; margin-top: 3px; }
+.video-source-upload > .btn { display: inline-flex; font-weight: 600; align-items: center; gap: 6px; cursor: pointer; }
+.video-source-upload > .btn.disabled { opacity: .5; cursor: not-allowed; }
+.video-source-upload small { flex: 1 1 220px; min-width: 0; }
+.video-source-status { margin: 0; padding: 10px 12px; border-radius: 10px; background: #eef1fe; color: #3c4790; font-size: 14px; }

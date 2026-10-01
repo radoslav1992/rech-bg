@@ -66,6 +66,8 @@ Automated coverage includes migration triggers, storage/credit rollback, exactly
 
 Медийни инструменти shows one card per tool (Субтитри, Превод с дублаж, Аватар с продукт; Кратки клипове and Преозвучаване are marked "Скоро"); a card opens the tool in a dialog. `?tool=captions|dubbing|product` opens one directly (`?asset=` alone keeps opening Субтитри for that video, e.g. from the studio), and each ready video in "Вашите файлове" has a translate shortcut.
 
+The video pickers in Превод с дублаж and Кратки клипове (`src/VideoSource.tsx`) also take a **new upload right in the tool**: after the consent checkbox, the file goes through the usual media upload (MP4, MOV or WebM up to 500 MB, kind `upload`, free) and the automatic check; once the video is ready it is selected automatically, or the tool says why it does not fit (e.g. shorter than 20 seconds for Кратки клипове, longer than 10 minutes for dubbing). The upload stays in "Вашите файлове".
+
 **Превод с дублаж** translates a video from the library (an upload, a studio export or an avatar video made in the studio, up to 10 minutes) into another language, cloning the speakers' voices and, except in "Само глас", matching the lips to the new text. The result is a **new video in the library** (kind `upload`), so it can be downloaded, subtitled, used in the studio or translated again.
 
 - **Modes and prices** (`shared/tools.ts`, per started second of the source): Бързо (HeyGen `mode: speed`) 150 credits, Прецизно (`mode: precision`) 300, Само глас (`translate_audio_only: true`) 100. HeyGen API: $0.0135 / $0.025 / $0.0095 per second. Video plans only (Създател, Студио), verified email, consent to process the video and its voices.

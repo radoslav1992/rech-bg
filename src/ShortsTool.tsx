@@ -3,9 +3,11 @@ import { Link, useNavigate } from "react-router-dom";
 import { Captions, Clapperboard, Scissors, Sparkles } from "lucide-react";
 import { api, Button, Notice, number, post, useAuth } from "./lib";
 import { mediaCredits, type MediaAsset } from "../shared/media";
+import { VideoSource } from "./VideoSource";
 
 type Clip = { title: string; hook: string; start: number; end: number; text: string };
 type Made = { projectId: string; credits?: number; state: "quoted" | "rendering" | "error"; error?: string };
+const shortable = (a: MediaAsset) => ["upload", "export"].includes(a.kind) && a.status === "ready" && a.mime.startsWith("video/") && a.duration >= 20;
 const time = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 
 /**
@@ -18,8 +20,7 @@ export function ShortsTool({ assets, onChange }: { assets: MediaAsset[]; onChang
   const [assetId, setAssetId] = useState(""), [clips, setClips] = useState<Clip[] | null>(null);
   const [busy, setBusy] = useState(""), [error, setError] = useState(""), [made, setMade] = useState<Record<number, Made>>({});
   const keys = useRef(new Map<string, string>());
-  const videos = assets.filter((a) => ["upload", "export"].includes(a.kind) && a.status === "ready" && a.mime.startsWith("video/") && a.duration >= 20);
-  const source = videos.find((a) => a.id === assetId);
+  const source = assets.find((a) => a.id === assetId && shortable(a));
   const remaining = Math.max(0, (user?.limit || 0) - (user?.used || 0));
   const key = (name: string) => { const k = keys.current.get(name) || crypto.randomUUID(); keys.current.set(name, k); return k; };
   const choose = (id: string) => { setAssetId(id); setClips(null); setMade({}); setError(""); };
@@ -76,15 +77,10 @@ export function ShortsTool({ assets, onChange }: { assets: MediaAsset[]; onChang
 
   const transcribeCost = source ? mediaCredits("transcribe", source.duration) : 0;
   return <div className="shorts-tool">
-    <p>Изберете дълго видео с реч — ИИ предлага най-силните самостоятелни моменти от 15 до 60 секунди. Всеки става вертикално видео 9:16 със субтитри и изчистен звук, или проект във видео студиото за довършване.</p>
+    <p>Изберете или качете дълго видео с реч — ИИ предлага най-силните самостоятелни моменти от 15 до 60 секунди. Всеки става вертикално видео 9:16 със субтитри и изчистен звук, или проект във видео студиото за довършване.</p>
     {error && <Notice error>{error}</Notice>}
-    <label>Видео
-      <select value={assetId} onChange={(e) => choose(e.target.value)}>
-        <option value="">Изберете видео от библиотеката</option>
-        {videos.map((a) => <option key={a.id} value={a.id}>{a.name} · {time(a.duration)}{a.hasCaptions ? "" : " · без субтитри"}</option>)}
-      </select>
-    </label>
-    {!videos.length && <p className="vs-fine">Нужно е качено видео с реч, поне 20 секунди. Качете такова в „Субтитри“.</p>}
+    <VideoSource assets={assets} eligible={shortable} value={assetId} onChange={choose} onUploaded={onChange}
+      describe={(a) => `${a.name} · ${time(a.duration)}${a.hasCaptions ? "" : " · без субтитри"}`} requirement="е по-кратко от 20 секунди — за кратки клипове е нужно по-дълго видео с реч." />
     {source && !source.hasCaptions && <div className="shorts-step">
       <p><Captions size={16} /> Първо разпознаваме речта във видеото — по нея ИИ намира моментите, а клиповете получават субтитри.</p>
       {source.kind === "upload"
