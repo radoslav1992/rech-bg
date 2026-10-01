@@ -15,7 +15,8 @@ export const textLayerSchema = z.object({
   ...timed,
   type: z.literal("text"),
   /** Plain text; line breaks allowed. */
-  text: z.string().trim().min(1).max(200),
+  // May be empty while the user retypes it; an empty title is simply not drawn (an invalid document would stop saving).
+  text: z.string().max(200),
   position: z.enum(layerPositions),
   /** Letter height as a share of the frame height. */
   size: z.number().finite().min(0.02).max(0.15),

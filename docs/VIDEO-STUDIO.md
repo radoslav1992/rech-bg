@@ -155,6 +155,18 @@ Open **Проект → Бранд, интро, финал и шаблони** i
 
 Migration `0006_brand_templates.sql` adds the `brand_kits` and `studio_templates` tables. The renderer image changes (intro/outro segments), so deploy with a full `wrangler deploy`.
 
+## Captions and titles: preview = export
+
+The browser preview and the server render draw captions and text layers from **one description** (`shared/caption-scene.ts`), so the export looks like what the user designed:
+
+- **Same fonts:** Noto Sans Bold/Regular and Noto Serif Italic. The renderer loads them from `renderer/fonts` (`ass=…:fontsdir=`), the browser from `public/fonts` (subset WOFF2, self-hosted for the `font-src 'self'` policy).
+- **Same layout:** wrapping (at most two lines), shrinking and every word's position come from one table of letter widths (`shared/caption-fonts.ts`, generated from the font files; regenerate it if the fonts change). The ASS size is the em × 1.362 and the baseline sits 0.388 em below the centre, measured against libass.
+- **Same look:** each style is a list of items (text, rounded boxes, the bubble's tail, glows and shadows as blurred copies). The canvas draws them; `server/caption-ass.ts` turns each item into an ASS event with `\pos`, `\fn`, `\fs`, `\bord`, `\blur`, `\frz`, and drawings (`\p1`) for boxes.
+- **Same motion:** pop, bounce, wave, fade, sticker and the underline bar are keyframes on the video clock, interpolated linearly in the preview and written as `\move`/`\t` per keyframe stretch.
+- **Titles** (text layers) use the same items, below the captions (caption events use ASS layers 10+). An empty title is allowed while typing and is not drawn.
+
+A comparison of all 20 styles (9:16 and 16:9, at rest and mid-animation) between libass and Chrome's canvas showed the same text block to within 1–3 px. Also aligned with the render: intro/outro fill the frame in the preview (cover); a video B-roll shorter than its layer holds its last frame in the render, as in the preview. The preview corrects small audio/video drift by adjusting the playback rate rather than seeking. A failed render now names the reason (an oversized image, a video without sound, a missing file, a timeout) in the task's error.
+
 ## Timeline
 
 The timeline is edited in the browser (`src/studio/`) and saved on the server as part of the project document (`project_documents`, migration `0005`; format in `shared/project.ts`). The document is small JSON: scenes (the voice recording and video job IDs, a portrait reference, voice offset, end hold and voice volume) and the project music (a media asset ID plus start, volume, ducking and fades). It only references media; nothing heavy is stored in it. Edits save automatically after a short pause. A revision number protects against two tabs or devices overwriting each other: the later save gets the newer version and a notice instead of silently replacing it.

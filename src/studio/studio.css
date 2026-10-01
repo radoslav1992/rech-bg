@@ -175,3 +175,5 @@
 .st-create-avatar .tl-upload, .st-clip-picker .tl-upload { display: inline-flex; align-items: center; gap: 6px; justify-self: start; cursor: pointer; font-weight: 600; }
 .st-create-avatar-photo > div { display: grid; gap: 8px; min-width: 0; flex: 1 1 220px; }
 .st-create-avatar-photo label { margin: 0; }
+.st-warning { display: grid; gap: 8px; justify-items: start; margin: 8px 0 12px; padding: 10px 12px; border-radius: 10px; background: #fff6dc; color: #5b4a12; font-size: 14px; }
+.st-warning p { margin: 0; }

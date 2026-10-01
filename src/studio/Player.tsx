@@ -20,10 +20,14 @@ function sync(el: HTMLMediaElement | null | undefined, local: number, duration: 
   if (!el) return;
   el.volume = Math.min(1, Math.max(0, volume));
   if (active && local >= 0 && local < duration) {
-    if (el.paused) { el.currentTime = local; void el.play().catch(() => {}); }
-    else if (Math.abs(el.currentTime - local) > .25) el.currentTime = local;
+    if (el.paused) { el.currentTime = local; el.playbackRate = 1; void el.play().catch(() => {}); return; }
+    // Small drift is corrected by playing a little faster or slower (no audible jump); a large one by seeking.
+    const drift = el.currentTime - local;
+    if (Math.abs(drift) > .4) { el.currentTime = local; el.playbackRate = 1; }
+    else el.playbackRate = Math.abs(drift) < .03 ? 1 : drift > 0 ? .95 : 1.05;
   } else {
     if (!el.paused) el.pause();
+    if (el.playbackRate !== 1) el.playbackRate = 1;
     const target = Math.min(Math.max(0, local), Math.max(0, duration - .05));
     if (!el.seeking && Number.isFinite(target) && Math.abs(el.currentTime - target) > .04) el.currentTime = target;
   }
@@ -140,7 +144,8 @@ export function usePlayer(input: PlayerInput) {
         else if (current.kind === "bumper") {
           ctx.fillStyle = "#000"; ctx.fillRect(0, 0, w, h);
           const v = visual(current.assetId);
-          if (v) fitSource(ctx, v.source, v.width, v.height, w, h, "contain");
+          // Intro and outro fill the frame, as in the render.
+          if (v) fitSource(ctx, v.source, v.width, v.height, w, h, "cover");
         } else {
           const scene = doc.scenes[current.index], m = media[current.index], local = t - current.start;
           const bg = scene.background;

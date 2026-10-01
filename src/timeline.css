@@ -80,3 +80,4 @@
 .tl-upload{align-self:flex-start;cursor:pointer}
 .tl-background{border:1px solid #e0e5f6;border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:8px}
 .tl-background legend{font-weight:600;padding:0 4px}
+.tl-layer.outside { opacity: .55; background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.25) 0 4px, transparent 4px 8px); border-style: dashed; }

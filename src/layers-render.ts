@@ -1,4 +1,6 @@
-import { anchor, LAYER_MARGIN, layerActive, placeBox, type Layer, type SceneBackground, type TextLayer } from "../shared/layers";
+import { layerActive, placeBox, type Layer, type SceneBackground, type TextLayer } from "../shared/layers";
+import { textLayerItems } from "../shared/caption-scene";
+import { drawCaptionItem } from "./caption-render";
 
 // Canvas drawing of scene backgrounds and layers for the timeline preview and the browser export.
 // The server render draws the same things with FFmpeg/libass (renderer/server.py, server/caption-ass.ts).
@@ -16,30 +18,8 @@ export function drawBackground(ctx: CanvasRenderingContext2D, W: number, H: numb
   if (background?.type === "image" && image) cover(ctx, image, W, H);
 }
 function drawText(ctx: CanvasRenderingContext2D, W: number, H: number, layer: TextLayer) {
-  const size = layer.size * H, lines = layer.text.split(/\r?\n/);
-  ctx.save();
-  ctx.font = `${layer.bold ? 700 : 400} ${size}px "Noto Sans", Arial, sans-serif`;
-  ctx.textBaseline = "alphabetic";
-  const widths = lines.map((l) => ctx.measureText(l).width), lineHeight = size * 1.2;
-  const blockW = Math.max(...widths), blockH = lineHeight * lines.length;
-  const [ax, ay] = anchor(layer.position);
-  // Same anchor point as the ASS \pos in the server render.
-  const px = W * LAYER_MARGIN + ax * W * (1 - 2 * LAYER_MARGIN), py = H * LAYER_MARGIN + ay * H * (1 - 2 * LAYER_MARGIN);
-  const left = px - ax * blockW, top = py - ay * blockH;
-  if (layer.box) {
-    const pad = size * 0.3;
-    ctx.fillStyle = layer.box;
-    ctx.fillRect(left - pad, top - pad, blockW + pad * 2, blockH + pad * 2);
-  } else {
-    ctx.lineWidth = Math.max(1, size * 0.12); ctx.strokeStyle = "#000000"; ctx.lineJoin = "round";
-  }
-  ctx.fillStyle = layer.color;
-  lines.forEach((line, i) => {
-    const x = left + ax * (blockW - widths[i]), y = top + lineHeight * i + size * 0.95;
-    if (!layer.box) ctx.strokeText(line, x, y);
-    ctx.fillText(line, x, y);
-  });
-  ctx.restore();
+  // The same items the server turns into ASS (shared/caption-scene.ts).
+  for (const item of textLayerItems(layer, W, H)) drawCaptionItem(ctx, item, 0);
 }
 /**
  * Draws the layers active at scene time `t`, in render order: B-roll cutaways, image overlays, then text.

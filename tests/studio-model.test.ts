@@ -23,3 +23,20 @@ describe("studio scenes follow their jobs", () => {
     expect(adoptedMedia(d2, 0, sceneMedia(d2, 0, withVideo))).toEqual({ audioJobId: "a2", videoJobId: "v2" });
   });
 });
+
+import { shownCaptions } from "../src/studio/model";
+import { textLayerItems } from "../shared/caption-scene";
+import { textLayerSchema } from "../shared/layers";
+describe("studio captions and titles", () => {
+  it("keeps a filmed scene's own captions switch when the project has a caption look", () => {
+    const d = { ...doc({ clip: { assetId: "film", keep: null, clean: false } }), captionLook: { style: "bold", format: "9:16", position: "bottom", enabled: true } } as any;
+    const source = { words: [{ text: "Здравей", start: 0, end: 1 }], style: "karaoke", format: "9:16", position: "bottom", enabled: false };
+    const shown = shownCaptions(d, { "asset:film": source } as any);
+    expect(Object.values(shown).every((c: any) => c.enabled === false)).toBe(true);
+  });
+  it("accepts an emptied title (so saving never stops) and draws nothing for it", () => {
+    const layer = { id: crypto.randomUUID(), type: "text", text: "", start: 0, end: 2, position: "bottom", size: .06, color: "#ffffff", box: null, bold: true };
+    expect(textLayerSchema.safeParse(layer).success).toBe(true);
+    expect(textLayerItems(layer as any, 720, 1280)).toEqual([]);
+  });
+});
